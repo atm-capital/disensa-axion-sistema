@@ -206,7 +206,8 @@ function guardarConfig(){
 let sesion = null, perfil = null;
 const $ = id => document.getElementById(id);
 const fmt = n => '$' + Number(n||0).toLocaleString('es-MX',{minimumFractionDigits:2,maximumFractionDigits:2});
-const fecha = d => new Date(d).toLocaleDateString('es-MX',{day:'2-digit',month:'short',year:'numeric'});
+const aDate = d => (typeof d === 'string' && d.length === 10) ? new Date(d + 'T00:00:00') : new Date(d);
+const fecha = d => aDate(d).toLocaleDateString('es-MX',{day:'2-digit',month:'short',year:'numeric'});
 const fechaHora = d => new Date(d).toLocaleString('es-MX',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'});
 const esc = s => String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function toast(msg, err=false){
@@ -336,7 +337,7 @@ async function vResumen(){
       <div class="card"><h3>Cuentas por pagar próximas</h3>
         <div class="tbl-scroll"><table><thead><tr><th>Proveedor</th><th>Concepto</th><th>Vence</th><th class="num">Saldo</th></tr></thead>
         <tbody>${cxp.data.slice(0,6).map(c=>{
-          const dias = Math.ceil((new Date(c.fecha_vencimiento)-hoy)/864e5);
+          const dias = Math.ceil((aDate(c.fecha_vencimiento)-hoy)/864e5);
           const b = dias<0?'b-rojo':(dias<=7?'b-ambar':'b-verde');
           return `<tr><td>${esc(c.proveedores?.nombre)}</td><td>${esc(c.concepto)}</td>
             <td><span class="badge ${b}">${fecha(c.fecha_vencimiento)} (${dias<0?Math.abs(dias)+' d vencida':dias+' d'})</span></td>
@@ -700,7 +701,7 @@ async function vFinanzas(){
   cxpData = cxp.data; window._provs = provs.data;
   const pend = cxp.data.filter(c=>c.estado!=='pagada');
   const total = pend.reduce((s,c)=>s+ +c.saldo,0);
-  const vencido = pend.filter(c=>new Date(c.fecha_vencimiento)<hoy).reduce((s,c)=>s+ +c.saldo,0);
+  const vencido = pend.filter(c=>aDate(c.fecha_vencimiento)<hoy).reduce((s,c)=>s+ +c.saldo,0);
   const pagadoMes = pagos.data.reduce((s,p)=>s+ +p.monto,0);
   const gastoMes = gastos.data.reduce((s,g)=>s+ +g.monto,0);
   $('v-finanzas').innerHTML = `
@@ -713,7 +714,7 @@ async function vFinanzas(){
     <div class="card"><h3>Cuentas por pagar</h3><div class="tbl-scroll"><table>
       <thead><tr><th>Proveedor</th><th>Concepto</th><th>Referencia</th><th>Vence</th><th class="num">Monto</th><th class="num">Saldo</th><th>Estado</th><th></th></tr></thead>
       <tbody>${cxp.data.map(c=>{
-        const dias = Math.ceil((new Date(c.fecha_vencimiento)-hoy)/864e5);
+        const dias = Math.ceil((aDate(c.fecha_vencimiento)-hoy)/864e5);
         const b = c.estado==='pagada'?'b-verde':(dias<0?'b-rojo':(dias<=7?'b-ambar':'b-gris'));
         return `<tr><td><b>${esc(c.proveedores?.nombre)}</b></td><td>${esc(c.concepto)}</td>
         <td class="small muted">${esc(c.referencia)}</td>
