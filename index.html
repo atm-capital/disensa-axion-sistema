@@ -3,12 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Disensa Axion · Sistema</title>
+<title>Axion Tools · Sistema</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <style>
-:root{--rojo:#E1251B;--rojo-d:#b51c14;--tinta:#1f2937;--tinta-2:#111827;--gris:#6b7280;
---linea:#e5e7eb;--fondo:#f3f4f6;--blanco:#fff;--verde:#16a34a;--ambar:#d97706;--azul:#2563eb}
+:root{--rojo:#E8790F;--rojo-d:#c76408;--tinta:#33383b;--tinta-2:#26292b;--gris:#6b7280;
+--linea:#e7e2d8;--fondo:#f5f1e8;--blanco:#fff;--verde:#16a34a;--ambar:#d97706;--azul:#2563eb}
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:var(--fondo);color:var(--tinta);font-size:14px}
 .hidden{display:none!important}
@@ -20,7 +20,7 @@ body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:var(--
 .field{margin-bottom:14px}
 .field label{display:block;font-size:12px;font-weight:600;color:var(--gris);margin-bottom:5px;text-transform:uppercase;letter-spacing:.4px}
 .field input,.field select,.field textarea{width:100%;padding:10px 12px;border:1px solid var(--linea);border-radius:8px;font-size:14px;font-family:inherit;background:#fff}
-.field input:focus,.field select:focus,.field textarea:focus{outline:2px solid #fca5a5;border-color:var(--rojo)}
+.field input:focus,.field select:focus,.field textarea:focus{outline:2px solid #f6c990;border-color:var(--rojo)}
 .btn{background:var(--rojo);color:#fff;border:none;padding:10px 16px;border-radius:8px;cursor:pointer;font-size:14px;font-weight:600;font-family:inherit}
 .btn:hover{background:var(--rojo-d)}
 .btn.sec{background:#fff;color:var(--tinta);border:1px solid var(--linea)}
@@ -88,7 +88,7 @@ tr:hover td{background:#f9fafb}
 @media(max-width:950px){.pos{grid-template-columns:1fr}}
 .prod-res{max-height:340px;overflow-y:auto;border:1px solid var(--linea);border-radius:8px;margin-top:8px}
 .prod-res .it{padding:9px 12px;border-bottom:1px solid var(--linea);cursor:pointer;display:flex;justify-content:space-between;gap:8px;font-size:13px}
-.prod-res .it:hover{background:#fef2f2}
+.prod-res .it:hover{background:#fdf1e2}
 .carrito td{padding:6px 8px}
 .carrito input{width:64px;padding:5px;border:1px solid var(--linea);border-radius:6px;text-align:right;font-family:inherit}
 .tot-line{display:flex;justify-content:space-between;padding:5px 0;font-size:14px}
@@ -107,7 +107,7 @@ tr:hover td{background:#f9fafb}
 <!-- CONFIGURACIÓN INICIAL -->
 <div id="scr-config" class="login-bg hidden">
   <div class="login-card">
-    <h1>Disensa <span>Axion</span></h1>
+    <h1>AXI<svg viewBox="0 0 24 24" width="21" height="21" style="vertical-align:-2px;margin:0 1px"><path d="M12 1.5l9.1 5.25v10.5L12 22.5l-9.1-5.25V6.75z" fill="#E8790F"/><circle cx="12" cy="12" r="4.2" fill="#fff"/></svg>N <span>TOOLS</span></h1>
     <div class="sub">Configuración inicial — conectar con la base de datos</div>
     <div id="config-err"></div>
     <div class="field"><label>URL del proyecto Supabase</label><input id="cfg-url" placeholder="https://xxxx.supabase.co"></div>
@@ -120,7 +120,7 @@ tr:hover td{background:#f9fafb}
 <!-- LOGIN -->
 <div id="scr-login" class="login-bg hidden">
   <div class="login-card">
-    <h1>Disensa <span>Axion</span></h1>
+    <h1>AXI<svg viewBox="0 0 24 24" width="21" height="21" style="vertical-align:-2px;margin:0 1px"><path d="M12 1.5l9.1 5.25v10.5L12 22.5l-9.1-5.25V6.75z" fill="#E8790F"/><circle cx="12" cy="12" r="4.2" fill="#fff"/></svg>N <span>TOOLS</span></h1>
     <div class="sub">Sistema de gestión del negocio</div>
     <div id="login-err"></div>
     <div id="f-login">
@@ -142,7 +142,7 @@ tr:hover td{background:#f9fafb}
 <!-- SIN ROL ASIGNADO -->
 <div id="scr-pendiente" class="login-bg hidden">
   <div class="login-card" style="text-align:center">
-    <h1>Disensa <span>Axion</span></h1>
+    <h1>AXI<svg viewBox="0 0 24 24" width="21" height="21" style="vertical-align:-2px;margin:0 1px"><path d="M12 1.5l9.1 5.25v10.5L12 22.5l-9.1-5.25V6.75z" fill="#E8790F"/><circle cx="12" cy="12" r="4.2" fill="#fff"/></svg>N <span>TOOLS</span></h1>
     <p style="margin:18px 0;font-size:15px">Tu cuenta fue creada, pero <b>un administrador debe asignarte un rol</b> antes de que puedas entrar.</p>
     <p class="muted small" id="pend-quien"></p>
     <button class="btn sec full" style="margin-top:16px" onclick="logout()">Cerrar sesión</button>
@@ -152,7 +152,7 @@ tr:hover td{background:#f9fafb}
 <!-- APP -->
 <div id="scr-app" class="app hidden">
   <aside class="side" id="sidebar">
-    <div class="brand"><h1>Disensa <span>Axion</span></h1><div class="tag">Sistema de gestión</div></div>
+    <div class="brand"><h1>AXI<svg viewBox="0 0 24 24" width="17" height="17" style="vertical-align:-2px;margin:0 1px"><path d="M12 1.5l9.1 5.25v10.5L12 22.5l-9.1-5.25V6.75z" fill="#E8790F"/><circle cx="12" cy="12" r="4.2" fill="#26292b"/></svg>N <span>TOOLS</span></h1><div class="tag">Sistema de gestión · Disensa</div></div>
     <nav class="nav" id="nav"></nav>
     <div class="foot"><b id="foot-nombre"></b><span id="foot-rol"></span><br>
       <button class="link" style="padding:0;margin-top:6px" onclick="logout()">Cerrar sesión</button>
