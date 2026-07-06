@@ -173,6 +173,7 @@ tr:hover td{background:#f9fafb}
       <div id="v-clientes" class="view"></div>
       <div id="v-pedidos" class="view"></div>
       <div id="v-finanzas" class="view"></div>
+      <div id="v-importar" class="view"></div>
       <div id="v-usuarios" class="view"></div>
     </div>
   </div>
@@ -219,6 +220,10 @@ function errMsg(e){ return (e && (e.message||e.error_description)) || 'Error ine
 
 /* ================= ARRANQUE ================= */
 window.addEventListener('DOMContentLoaded', async () => {
+  if(location.hash.startsWith('#import=')){
+    try{ localStorage.setItem('ax_import', location.hash.slice(8)); }catch(e){}
+    history.replaceState(null, '', location.pathname);
+  }
   const {url, key} = getCfg();
   if(!url || !key){ $('scr-config').classList.remove('hidden'); return; }
   sb = supabase.createClient(url, key);
@@ -242,7 +247,7 @@ async function cargarPerfil(){
   $('foot-nombre').textContent = perfil.nombre || perfil.correo;
   $('foot-rol').textContent = 'Rol: ' + perfil.rol;
   montarNav();
-  irA('resumen');
+  irA(localStorage.getItem('ax_import') && perfil.rol === 'admin' ? 'importar' : 'resumen');
 }
 
 /* ================= AUTH ================= */
@@ -275,6 +280,7 @@ const VISTAS = [
   {id:'clientes',   icono:'👥', titulo:'Clientes',   roles:['admin','vendedor','consulta']},
   {id:'pedidos',    icono:'🚚', titulo:'Pedidos a proveedor', roles:['admin','vendedor','consulta']},
   {id:'finanzas',   icono:'💰', titulo:'Finanzas',   roles:['admin','consulta']},
+  {id:'importar',   icono:'📥', titulo:'Importar',   roles:['admin']},
   {id:'usuarios',   icono:'🔑', titulo:'Usuarios',   roles:['admin']},
 ];
 const esAdmin = () => perfil.rol === 'admin';
@@ -292,7 +298,7 @@ async function irA(id){
   $('vtools').innerHTML = '';
   $('sidebar').classList.remove('open');
   try { await ({resumen:vResumen, ventas:vVentas, inventario:vInventario, clientes:vClientes,
-    pedidos:vPedidos, finanzas:vFinanzas, usuarios:vUsuarios})[id](); }
+    pedidos:vPedidos, finanzas:vFinanzas, usuarios:vUsuarios, importar:vImportar})[id](); }
   catch(e){ toast(errMsg(e), true); }
 }
 
@@ -790,6 +796,127 @@ async function guardarGasto(){
     categoria:$('gs-cat').value, monto, usuario_id:sesion.user.id});
   if(error){ toast(errMsg(error), true); return; }
   cerrarModal(); toast('Gasto registrado'); vFinanzas();
+}
+
+/* ============================================================
+   VISTA: IMPORTAR (pedidos Indar vía botón "Enviar a Axion")
+============================================================ */
+const BOOKMARKLET = "javascript:(function(){var s=document.createElement('script');s.src='https://atm-capital.github.io/disensa-axion-sistema/importador-indar.js?x='+Date.now();document.body.appendChild(s);})();";
+let impData = null;
+function deB64(s){ s = s.replace(/-/g,'+').replace(/_/g,'/'); return decodeURIComponent(escape(atob(s))); }
+async function vImportar(){
+  const raw = localStorage.getItem('ax_import');
+  impData = null;
+  if(raw){ try{ impData = JSON.parse(deB64(raw)); }catch(e){ localStorage.removeItem('ax_import'); } }
+  if(!impData){
+    $('v-importar').innerHTML = `
+      <div class="card"><h3>📥 Importar pedidos desde el portal Indar</h3>
+        <p style="margin-bottom:10px">Con el botón <b>"Enviar a Axion"</b> puedes traer cualquier cotización del portal de Indar
+        con todas sus partidas y precios, sin capturar nada a mano.</p>
+        <p style="margin-bottom:6px"><b>Instalación (una sola vez):</b> arrastra este botón a tu barra de marcadores de Chrome
+        (si no la ves, presiona Ctrl+Shift+B):</p>
+        <p style="margin:14px 0"><a href="${BOOKMARKLET.replace(/"/g,'&quot;')}" class="btn" style="text-decoration:none"
+          onclick="toast('Arrástralo a la barra de marcadores, no le des clic aquí', true); return false;">🔧 Enviar a Axion</a></p>
+        <p class="small muted"><b>Cómo se usa:</b> 1) Entra a indar.mx con tu usuario → Pedidos → Pedidos Anteriores.
+        2) Da clic en el marcador "Enviar a Axion". 3) Elige la cotización. 4) Se abre esta pantalla con todo precargado y confirmas.</p>
+      </div>
+      <div class="card"><h3>O pega los datos manualmente</h3>
+        <div class="field"><textarea id="imp-manual" rows="3" placeholder="Pega aquí el texto que genera el botón (por si no se abre solo)"></textarea></div>
+        <button class="btn sec" onclick="impManual()">Cargar</button>
+      </div>`;
+    return;
+  }
+  // hay datos: previsualizar
+  const codigos = impData.items.map(i=>i.c);
+  const [ex, ped] = await Promise.all([
+    sb.from('productos').select('id,codigo,precio').in('codigo', codigos),
+    sb.from('pedidos_compra').select('id').eq('folio_externo', impData.folio),
+  ]);
+  if(ex.error){ toast(errMsg(ex.error), true); return; }
+  const existentes = new Map((ex.data||[]).map(p=>[p.codigo, p]));
+  const yaImportado = (ped.data||[]).length > 0;
+  const nuevos = impData.items.filter(i=>!existentes.has(i.c));
+  const sub = impData.items.reduce((s,i)=>s + i.q * (i.l||0), 0);
+  $('v-importar').innerHTML = `
+    <div class="card">
+      <h3>📥 Pedido Indar #${esc(impData.folio)} · ${impData.items.length} partidas</h3>
+      ${yaImportado ? `<div class="error-box">⚠️ Este folio YA está registrado en el sistema. Si lo importas de nuevo se duplicará.</div>` : ''}
+      <div class="kpis">
+        <div class="kpi"><div class="l">Partidas</div><div class="v">${impData.items.length}</div><div class="s">${nuevos.length} producto(s) nuevo(s)</div></div>
+        <div class="kpi"><div class="l">Subtotal (precio lista)</div><div class="v">${fmt(sub)}</div><div class="s">+ IVA ${fmt(sub*0.16)} = ${fmt(sub*1.16)}</div></div>
+        <div class="kpi"><div class="l">Partes del portal</div><div class="v">${(impData.sos||[]).length}</div><div class="s">serie /${impData.serie||'?'}</div></div>
+      </div>
+      <div class="field"><label><input type="checkbox" id="imp-precios" checked> Actualizar el precio de venta de productos existentes al sugerido de Indar</label></div>
+      <div class="field"><label><input type="checkbox" id="imp-cxp"> Crear cuenta por pagar (plazo 30 días) — márcala solo si ya está confirmado/facturado</label></div>
+      <div style="display:flex;gap:10px;margin:8px 0 16px">
+        <button class="btn" id="imp-btn" onclick="ejecutarImport()" ${yaImportado?'disabled':''}>Importar al sistema</button>
+        <button class="btn sec" onclick="localStorage.removeItem('ax_import'); vImportar();">Descartar</button>
+      </div>
+      <div class="tbl-scroll" style="max-height:400px;overflow-y:auto"><table>
+        <thead><tr><th>Código</th><th>Descripción</th><th class="num">Cant</th><th class="num">Costo lista</th><th class="num">Precio sug.</th><th></th></tr></thead>
+        <tbody>${impData.items.map(i=>`<tr>
+          <td><b>${esc(i.c)}</b></td><td>${esc((i.d||'').slice(0,55))}</td>
+          <td class="num">${i.q}</td><td class="num">${fmt(i.l)}</td><td class="num">${fmt(i.s)}</td>
+          <td>${existentes.has(i.c) ? '<span class="badge b-gris">existente</span>' : '<span class="badge b-azul">nuevo</span>'}</td>
+        </tr>`).join('')}</tbody></table></div>
+    </div>`;
+}
+function impManual(){
+  const v = $('imp-manual').value.trim();
+  if(!v) return;
+  localStorage.setItem('ax_import', v.replace(/^.*#import=/,''));
+  vImportar();
+}
+async function ejecutarImport(){
+  if(!impData) return;
+  $('imp-btn').disabled = true;
+  try{
+    const codigos = impData.items.map(i=>i.c);
+    const {data:exis, error:e0} = await sb.from('productos').select('id,codigo').in('codigo', codigos);
+    if(e0) throw e0;
+    const mapa = new Map((exis||[]).map(p=>[p.codigo, p.id]));
+    // 1. productos nuevos
+    const nuevos = impData.items.filter(i=>!mapa.has(i.c)).map(i=>({
+      codigo:i.c, descripcion:i.d||i.c, categoria:'General',
+      costo:i.l||0, precio:i.s||i.l||0, stock:0, stock_min:3 }));
+    if(nuevos.length){
+      const {error} = await sb.from('productos').insert(nuevos);
+      if(error) throw error;
+      const {data:re} = await sb.from('productos').select('id,codigo').in('codigo', codigos);
+      (re||[]).forEach(p=>mapa.set(p.codigo, p.id));
+    }
+    // 2. actualizar precios de existentes al sugerido
+    if($('imp-precios').checked){
+      for(const i of impData.items){
+        if(mapa.has(i.c) && i.s) await sb.from('productos').update({precio:i.s, costo:i.l||undefined}).eq('id', mapa.get(i.c));
+      }
+    }
+    // 3. pedido + partidas
+    const sub = Math.round(impData.items.reduce((s,i)=>s + i.q*(i.l||0),0)*100)/100;
+    const iva = Math.round(sub*16)/100, tot = Math.round((sub+iva)*100)/100;
+    const {data:prov} = await sb.from('proveedores').select('id').eq('nombre','Indar').single();
+    const {data:pc, error:e1} = await sb.from('pedidos_compra').insert({
+      proveedor_id: prov.id, folio_externo: impData.folio, fecha: impData.fecha,
+      estado:'enviado', plazo_dias:30, subtotal:sub, iva, total:tot,
+      notas:'Importado del portal Indar con el botón Enviar a Axion. Partes: '+(impData.sos||[]).join(', ')+' (serie /'+(impData.serie||'?')+'). Capturado a precio de lista; ajustar contra factura.'
+    }).select('id').single();
+    if(e1) throw e1;
+    const items = impData.items.map(i=>({ pedido_id: pc.id, producto_id: mapa.get(i.c),
+      cantidad: i.q, costo_unit: i.l||0, importe: Math.round(i.q*(i.l||0)*100)/100 }));
+    const {error:e2} = await sb.from('pedido_compra_items').insert(items);
+    if(e2) throw e2;
+    // 4. cuenta por pagar opcional
+    if($('imp-cxp').checked){
+      const vence = new Date(impData.fecha+'T00:00:00'); vence.setDate(vence.getDate()+30);
+      await sb.from('cuentas_pagar').insert({ proveedor_id: prov.id,
+        concepto:'Pedido Web #'+impData.folio, referencia:'Plazo 30 días',
+        fecha_emision: impData.fecha, fecha_vencimiento: vence.toISOString().slice(0,10),
+        monto: tot, saldo: tot });
+    }
+    localStorage.removeItem('ax_import');
+    toast('Pedido #'+impData.folio+' importado: '+items.length+' partidas'+(nuevos.length?', '+nuevos.length+' productos nuevos':''));
+    irA('pedidos');
+  }catch(e){ toast(errMsg(e), true); $('imp-btn').disabled = false; }
 }
 
 /* ============================================================
