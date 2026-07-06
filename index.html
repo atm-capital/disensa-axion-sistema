@@ -494,6 +494,7 @@ async function guardarVenta(){
 let invData = [];
 async function vInventario(){
   if(esAdmin()) $('vtools').innerHTML = `<button class="btn" onclick="editarProducto(null)">+ Producto</button>
+    <button class="btn sec" onclick="verResurtido()">🛒 Resurtido</button>
     <button class="btn sec" onclick="exportarInv()">Exportar CSV</button>`;
   const {data, error} = await sb.from('productos').select('*').order('descripcion');
   if(error) throw error;
@@ -508,7 +509,7 @@ async function vInventario(){
     </div>
     <div class="card"><div class="tbl-scroll"><table>
       <thead><tr><th>Código</th><th>Descripción</th><th>Categoría</th>
-      ${esAdmin()?'<th class="num">Costo</th>':''}<th class="num">Precio</th><th class="num">Stock</th><th></th></tr></thead>
+      ${esAdmin()?'<th class="num">Costo</th>':''}<th class="num">Precio</th>${esAdmin()?'<th class="num">Margen</th>':''}<th class="num">Stock</th><th></th></tr></thead>
       <tbody id="inv-body"></tbody></table></div>
       <p class="small muted" id="inv-pie" style="margin-top:10px"></p></div>`;
   pintarInv();
@@ -522,17 +523,21 @@ function pintarInv(){
     (!cat || p.categoria === cat) && (!soloBajo || +p.stock <= +p.stock_min));
   $('inv-body').innerHTML = rows.slice(0,400).map(p=>{
     const bajo = +p.stock <= +p.stock_min;
+    const neto = +p.precio/1.16, marg = neto - +p.costo;
+    const pct = +p.costo>0 ? marg/ +p.costo*100 : 0;
+    const bm = pct>=30?'b-verde':(pct>=15?'b-ambar':'b-rojo');
     return `<tr style="${p.activo?'':'opacity:.45'}">
       <td><b>${esc(p.codigo)}</b></td><td>${esc(p.descripcion)}</td>
       <td><span class="badge b-gris">${esc(p.categoria)}</span></td>
       ${esAdmin()?`<td class="num">${fmt(p.costo)}</td>`:''}
       <td class="num"><b>${fmt(p.precio)}</b></td>
+      ${esAdmin()?`<td class="num"><span class="badge ${bm}">${pct.toFixed(0)}%</span> <span class="small muted">${fmt(marg)}</span></td>`:''}
       <td class="num"><span class="badge ${bajo?'b-rojo':'b-verde'}">${+p.stock}</span></td>
       <td>${esAdmin()?`<button class="btn sec sm" onclick="editarProducto(${p.id})">Editar</button>`:''}</td></tr>`;
-  }).join('') || '<tr><td colspan="7" class="muted">Sin resultados.</td></tr>';
+  }).join('') || '<tr><td colspan="8" class="muted">Sin resultados.</td></tr>';
   const valorC = rows.reduce((s,p)=>s+ +p.costo * +p.stock,0);
   const valorV = rows.reduce((s,p)=>s+ +p.precio * +p.stock,0);
-  $('inv-pie').textContent = `${rows.length} producto(s) · valor a costo ${fmt(valorC)} · valor a precio de venta ${fmt(valorV)}`;
+  $('inv-pie').textContent = `${rows.length} producto(s) · valor a costo ${fmt(valorC)} · valor a precio de venta ${fmt(valorV)} · Margen = (precio ÷ 1.16 − costo) ÷ costo, porque el precio de venta incluye IVA y el costo no`;
 }
 function editarProducto(id){
   const p = id ? invData.find(x=>x.id===id) : {codigo:'',descripcion:'',categoria:'General',costo:0,precio:0,stock:0,stock_min:3,activo:true};
@@ -543,14 +548,45 @@ function editarProducto(id){
     </div>
     <div class="field"><label>Descripción</label><input id="pr-desc" value="${esc(p.descripcion)}"></div>
     <div class="frow">
-      <div class="field"><label>Costo</label><input id="pr-costo" type="number" step="0.01" value="${p.costo}"></div>
-      <div class="field"><label>Precio de venta</label><input id="pr-precio" type="number" step="0.01" value="${p.precio}"></div>
+      <div class="field"><label>Costo (sin IVA)</label><input id="pr-costo" type="number" step="0.01" value="${p.costo}" oninput="calcMargen()"></div>
+      <div class="field"><label>Precio de venta (con IVA)</label><input id="pr-precio" type="number" step="0.01" value="${p.precio}" oninput="calcMargen()"></div>
       <div class="field"><label>Stock actual</label><input id="pr-stock" type="number" step="1" value="${+p.stock}"></div>
       <div class="field"><label>Stock mínimo (alerta)</label><input id="pr-min" type="number" step="1" value="${+p.stock_min}"></div>
     </div>
+    <p id="pr-margen" class="small" style="margin:2px 0 10px"></p>
     <div class="field"><label><input type="checkbox" id="pr-activo" ${p.activo?'checked':''}> Activo (aparece en ventas)</label></div>
     <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cancelar</button>
       <button class="btn" onclick="guardarProducto(${id||'null'})">Guardar</button></div>`);
+  calcMargen();
+}
+function calcMargen(){
+  const c = +($('pr-costo')?.value||0), v = +($('pr-precio')?.value||0);
+  const el = $('pr-margen'); if(!el) return;
+  if(c<=0 || v<=0){ el.textContent = ''; return; }
+  const neto = v/1.16, marg = neto - c, pct = marg/c*100;
+  el.innerHTML = `Margen: <b style="color:${pct>=30?'var(--verde)':(pct>=15?'var(--ambar)':'var(--rojo)')}">${pct.toFixed(1)}%</b>
+    — ganas ${fmt(marg)} por pieza (precio sin IVA ${fmt(neto)} − costo ${fmt(c)})`;
+}
+async function verResurtido(){
+  const bajos = invData.filter(p=>p.activo && +p.stock <= +p.stock_min);
+  if(!bajos.length){ toast('Ningún producto está en o bajo su stock mínimo 🎉'); return; }
+  const filas = bajos.map(p=>({...p, sugerido: Math.max(1, Math.ceil(+p.stock_min*3 - +p.stock))}));
+  const costoTot = filas.reduce((s,p)=>s+p.sugerido * +p.costo,0);
+  abrirModal(`<h3>🛒 Resurtido sugerido · ${filas.length} producto(s)</h3>
+    <p class="small muted" style="margin-bottom:8px">Cantidad sugerida = 3 veces el stock mínimo menos lo que queda. Ajusta el stock mínimo de cada producto para afinar. Costo estimado del resurtido: <b>${fmt(costoTot)}</b> + IVA.</p>
+    <div class="tbl-scroll" style="max-height:380px;overflow-y:auto"><table>
+      <thead><tr><th>Código</th><th>Descripción</th><th class="num">Stock</th><th class="num">Mín</th><th class="num">Pedir</th><th class="num">Costo est.</th></tr></thead>
+      <tbody>${filas.map(p=>`<tr><td><b>${esc(p.codigo)}</b></td><td>${esc(p.descripcion.slice(0,45))}</td>
+        <td class="num">${+p.stock}</td><td class="num">${+p.stock_min}</td>
+        <td class="num"><b>${p.sugerido}</b></td><td class="num">${fmt(p.sugerido * +p.costo)}</td></tr>`).join('')}</tbody></table></div>
+    <div class="acciones">
+      <button class="btn sec" onclick="copiarResurtido()">Copiar lista (para el carrito de Indar)</button>
+      <button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
+  window._resurtido = filas;
+}
+function copiarResurtido(){
+  const txt = window._resurtido.map(p=>p.codigo + '\t' + p.sugerido).join('\n');
+  navigator.clipboard.writeText(txt).then(()=>toast('Lista copiada: código y cantidad por renglón'));
 }
 async function guardarProducto(id){
   const obj = {
@@ -697,13 +733,17 @@ async function vFinanzas(){
     <button class="btn sec" onclick="nuevoGasto()">+ Gasto</button>`;
   const hoy = new Date(); hoy.setHours(0,0,0,0);
   const mes = new Date(hoy.getFullYear(), hoy.getMonth(), 1).toISOString().slice(0,10);
-  const [cxp, pagos, gastos, provs] = await Promise.all([
+  const [cxp, pagos, gastos, provs, compras] = await Promise.all([
     sb.from('cuentas_pagar').select('*, proveedores(nombre)').order('fecha_vencimiento'),
     sb.from('pagos_cxp').select('*').gte('fecha', mes),
     sb.from('gastos').select('*').gte('fecha', mes).order('fecha',{ascending:false}),
     sb.from('proveedores').select('id,nombre').order('nombre'),
+    sb.from('pedidos_compra').select('total, estado, proveedores(nombre)').gte('fecha', mes).neq('estado','cancelado'),
   ]);
-  for(const r of [cxp,pagos,gastos,provs]) if(r.error) throw r.error;
+  for(const r of [cxp,pagos,gastos,provs,compras]) if(r.error) throw r.error;
+  const META_HOLCIM = 36185.27, INTERES_HOLCIM = 3256.67;
+  const compraHolcim = compras.data.filter(c=>/holcim/i.test(c.proveedores?.nombre||'')).reduce((s,c)=>s+ +c.total,0);
+  const faltaMeta = Math.max(0, META_HOLCIM - compraHolcim);
   cxpData = cxp.data; window._provs = provs.data;
   const pend = cxp.data.filter(c=>c.estado!=='pagada');
   const total = pend.reduce((s,c)=>s+ +c.saldo,0);
@@ -716,6 +756,13 @@ async function vFinanzas(){
       <div class="kpi"><div class="l">Vencido</div><div class="v" style="color:${vencido>0?'var(--rojo)':'inherit'}">${fmt(vencido)}</div></div>
       <div class="kpi"><div class="l">Pagado este mes</div><div class="v">${fmt(pagadoMes)}</div></div>
       <div class="kpi"><div class="l">Gastos este mes</div><div class="v">${fmt(gastoMes)}</div></div>
+      <div class="kpi" style="border-top-color:${faltaMeta>0?'var(--ambar)':'var(--verde)'}">
+        <div class="l">Compra Holcim del mes</div>
+        <div class="v">${fmt(compraHolcim)}</div>
+        <div class="s">${faltaMeta>0
+          ? `⚠️ faltan ${fmt(faltaMeta)} para la meta de ${fmt(META_HOLCIM)} — si no se llega, cobran ${fmt(INTERES_HOLCIM)} de interés`
+          : `✓ meta de ${fmt(META_HOLCIM)} cumplida: sin intereses este mes`}</div>
+      </div>
     </div>
     <div class="card"><h3>Cuentas por pagar</h3><div class="tbl-scroll"><table>
       <thead><tr><th>Proveedor</th><th>Concepto</th><th>Referencia</th><th>Vence</th><th class="num">Monto</th><th class="num">Saldo</th><th>Estado</th><th></th></tr></thead>
