@@ -525,7 +525,8 @@ async function vCotizaciones(){
       <tbody>${(sols||[]).map(s=>`<tr>
         <td>${fechaHora(s.creado)}</td><td><b>${esc(s.nombre)}</b>${s.notas?`<br><span class="small muted">${esc(s.notas.slice(0,70))}</span>`:''}</td>
         <td class="small">${esc(s.contacto)}</td><td class="small">${esc(s.entrega||'—')}</td>
-        <td class="num">${(s.items||[]).length}</td>
+        <td class="num">${s.tipo==='proyecto' ? '<span class="badge b-azul">🏗 proyecto</span>' : (s.items||[]).length + ((s.items||[]).some(i=>i.ficha) ? ' <span class="badge b-ambar" title="Pide fichas técnicas">📎</span>' : '')}
+          ${(s.adjuntos||[]).length ? `<button class="btn sec sm" onclick="verAdjuntos(${s.id})">📁 ${(s.adjuntos||[]).length}</button>` : ''}</td>
         <td><span class="badge ${s.estado==='nueva'?'b-ambar':s.estado==='atendida'?'b-verde':'b-gris'}">${s.estado}</span></td>
         <td style="white-space:nowrap">${puedeVender()?`<button class="btn sm" onclick="cotizarSolicitud(${s.id})">💰 Cotizar</button>
           ${s.estado!=='descartada'?`<button class="btn sec sm" title="Descartar" onclick="estadoSolicitud(${s.id},'descartada')">🗑</button>`:''}`:''}</td>
@@ -557,6 +558,19 @@ async function borrarCot(id, folio){
   if(error){ toast(errMsg(error), true); return; }
   toast('Cotización C-'+folio+' borrada'); vCotizaciones();
 }
+async function verAdjuntos(id){
+  const s = (window._sols||[]).find(x=>x.id===id);
+  if(!s || !(s.adjuntos||[]).length) return;
+  const links = [];
+  for(const a of s.adjuntos){
+    const {data} = await sb.storage.from('proyectos').createSignedUrl(a.ruta, 600);
+    if(data?.signedUrl) links.push(`<p style="margin:7px 0"><a href="${data.signedUrl}" target="_blank">📄 ${esc(a.nombre||a.ruta)}</a></p>`);
+  }
+  abrirModal(`<h3>📁 Archivos de ${esc(s.nombre)}</h3>
+    <p class="small muted" style="margin-bottom:8px">${esc(s.notas||'')}</p>
+    ${links.join('') || '<p class="muted">No se pudieron abrir los archivos.</p>'}
+    <div class="acciones"><button class="btn" onclick="cerrarModal()">Cerrar</button></div>`);
+}
 async function estadoSolicitud(id, estado){
   const {error} = await sb.from('solicitudes').update({estado}).eq('id', id);
   toast(error ? errMsg(error) : 'Solicitud '+estado, !!error);
@@ -579,7 +593,8 @@ async function cotizarSolicitud(id){
       precio: x ? +x.precio_sugerido||0 : 0, costo, sugerido: x ? +x.precio_sugerido||0 : 0, producto_id:null};
   });
   await sb.from('solicitudes').update({estado:'atendida'}).eq('id', id);
-  toast('Solicitud de '+s.nombre+' cargada al cotizador ('+s.contacto+')');
+  const nF = items.filter(i=>i.ficha).length;
+  toast('Solicitud de '+s.nombre+' cargada al cotizador ('+s.contacto+')'+(nF?' · PIDE '+nF+' FICHA(S) TÉCNICA(S) 📎':'')+(s.tipo==='proyecto'?' · es PROYECTO: revisa sus archivos 📁':''));
   nuevaCot();
 }
 let cotEditId = null;

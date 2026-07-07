@@ -21,6 +21,11 @@ header{background:var(--oscuro); color:#fff; padding:14px 20px; display:flex; al
 .carrito-btn{position:relative}
 .carrito-btn .n{position:absolute; top:-7px; right:-7px; background:#d9534f; border-radius:50%; min-width:20px; height:20px; font-size:12px; display:flex; align-items:center; justify-content:center; padding:0 4px}
 main{max-width:1200px; margin:0 auto; padding:16px}
+.aviso{background:#fff7ee; border:1px solid #f3d9bb; border-radius:10px; padding:10px 14px; font-size:13px; color:#8a5a22; margin-bottom:12px}
+.aviso a{color:#8a5a22; font-weight:700}
+.chips{display:flex; gap:8px; overflow-x:auto; padding:2px 0 10px; -webkit-overflow-scrolling:touch}
+.chip{white-space:nowrap; border:1px solid var(--linea); background:#fff; border-radius:20px; padding:8px 14px; font-size:13px; font-weight:600; cursor:pointer; color:var(--texto)}
+.chip.on{background:var(--oscuro); color:#fff; border-color:var(--oscuro)}
 .filtros{display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px; align-items:center}
 .filtros select{padding:9px 12px; border-radius:8px; border:1px solid var(--linea); background:#fff; font-size:14px; max-width:46vw}
 .total-res{color:var(--muted); font-size:13px}
@@ -34,7 +39,7 @@ main{max-width:1200px; margin:0 auto; padding:16px}
 .addrow{display:flex; gap:6px}
 .addrow input{width:56px; padding:8px; border:1px solid var(--linea); border-radius:8px; text-align:center}
 .addrow .btn{flex:1; padding:8px}
-.cargar{display:block; margin:18px auto; }
+.cargar{display:block; margin:18px auto}
 .panel{position:fixed; inset:0; background:rgba(20,22,28,.55); display:none; align-items:flex-start; justify-content:center; padding:20px; z-index:50; overflow:auto}
 .panel.open{display:flex}
 .hoja{background:#fff; border-radius:14px; max-width:640px; width:100%; padding:22px; margin-top:2vh}
@@ -43,16 +48,20 @@ main{max-width:1200px; margin:0 auto; padding:16px}
 .item{display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid var(--linea); font-size:13px}
 .item img{width:38px; height:38px; object-fit:contain}
 .item .d{flex:1}
-.item input{width:58px; padding:7px; border:1px solid var(--linea); border-radius:7px; text-align:center}
+.item input[type=number]{width:58px; padding:7px; border:1px solid var(--linea); border-radius:7px; text-align:center}
 .item .x{background:none; border:none; color:#d9534f; font-size:17px; cursor:pointer}
+.ficha-chk{font-size:11px; color:var(--muted); display:flex; align-items:center; gap:4px; white-space:nowrap}
 .f{margin-top:12px}
 .f label{display:block; font-size:12px; font-weight:700; margin-bottom:4px; color:var(--muted)}
 .f input,.f textarea{width:100%; padding:10px; border:1px solid var(--linea); border-radius:8px; font-size:14px; font-family:inherit}
-.acciones{display:flex; gap:10px; margin-top:16px; justify-content:flex-end}
+.acciones{display:flex; gap:10px; margin-top:16px; justify-content:flex-end; flex-wrap:wrap}
 .ok-box{text-align:center; padding:30px 10px}
 .ok-box .ico{font-size:52px}
+.obra-banner{background:linear-gradient(100deg, var(--oscuro), #39404f); color:#fff; border-radius:12px; padding:18px 20px; margin:18px 0; display:flex; align-items:center; gap:16px; flex-wrap:wrap}
+.obra-banner .t{flex:1; min-width:220px}
+.obra-banner h3{margin-bottom:4px}
+.obra-banner p{font-size:13px; color:#c4cad6}
 footer{max-width:1200px; margin:26px auto 40px; padding:0 16px; color:var(--muted); font-size:12.5px; line-height:1.6}
-.aviso{background:#fff7ee; border:1px solid #f3d9bb; border-radius:10px; padding:10px 14px; font-size:13px; color:#8a5a22; margin-bottom:14px}
 @media (max-width:600px){ .grid{grid-template-columns:repeat(2,1fr)} .prod img,.prod .noimg{height:84px} }
 </style>
 </head>
@@ -66,14 +75,21 @@ footer{max-width:1200px; margin:26px auto 40px; padding:0 16px; color:var(--mute
   <button class="btn sec carrito-btn" onclick="abrirCarrito()">🛒 Mi solicitud <span class="n" id="cart-n" style="display:none">0</span></button>
 </header>
 <main>
-  <div class="aviso">Elige tus productos y <b>solicita tu cotización sin compromiso</b> — te respondemos el mismo día con precios y disponibilidad. Entregas en obra o recoge en tienda (Guadalajara).</div>
+  <div class="aviso">Elige tus productos y <b>solicita tu cotización sin compromiso</b> — te respondemos el mismo día con precios y disponibilidad. Entregas en obra o recoge en tienda (Guadalajara). ¿Tienes un proyecto u obra completa? <a href="#" onclick="abrirObra(); return false;">Cotízala aquí</a>.</div>
+  <div class="chips" id="chips"></div>
   <div class="filtros">
-    <select id="f-rubro" onchange="buscar(true)"><option value="">Todas las categorías</option></select>
     <select id="f-marca" onchange="buscar(true)"><option value="">Todas las marcas</option></select>
     <span class="total-res" id="total-res"></span>
   </div>
   <div class="grid" id="grid"></div>
   <button class="btn sec cargar" id="mas" style="display:none" onclick="buscar(false)">Cargar más resultados</button>
+  <div class="obra-banner">
+    <div class="t">
+      <h3>🏗 ¿Remodelación, obra o proyecto completo?</h3>
+      <p>Mándanos fotos, planos o tu lista y te cotizamos <b>todo el material completo</b> — y si necesitas, también te conectamos la mano de obra.</p>
+    </div>
+    <button class="btn" onclick="abrirObra()">Cotizar mi proyecto</button>
+  </div>
 </main>
 <div class="panel" id="panel">
   <div class="hoja" id="hoja"></div>
@@ -88,20 +104,29 @@ const sb = supabase.createClient('https://ypdnzbuvlgkicvbulopk.supabase.co', 'sb
 const $ = id => document.getElementById(id);
 const esc = s => String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const img = c => 'https://storage.googleapis.com/indararticulos/' + encodeURIComponent(String(c).replace(/ /g,'_')) + '_MD.webp';
-let off = 0, cart = [];
+let off = 0, cart = [], rubroSel = '';
 try{ cart = JSON.parse(localStorage.getItem('axp_cart')||'[]'); }catch(e){ cart = []; }
 
+const ICONO = {'Plomería':'🚰','Eléctrico e iluminación':'💡','Construcción':'🧱','Herramienta manual':'🔧','Herramienta eléctrica':'🛠','Pintura y acabados':'🎨','Cerrajería y herrajes':'🔐','Fijación y tornillería':'🔩','Seguridad':'🦺','Jardinería y campo':'🌱','Otros':'📦'};
 async function filtros(){
   const {data, error} = await sb.rpc('portal_filtros');
   if(error || !data) return;
-  const rub = data.filter(x=>x.tipo==='rubro').sort((a,b)=>b.n-a.n);
+  const rub = data.filter(x=>x.tipo==='rubro' && x.valor!=='Otros').sort((a,b)=>b.n-a.n);
+  const otros = data.find(x=>x.tipo==='rubro' && x.valor==='Otros');
+  if(otros) rub.push(otros);
+  $('chips').innerHTML = `<button class="chip on" data-r="" onclick="setRubro('')">Todo el catálogo</button>` +
+    rub.map(x=>`<button class="chip" data-r="${esc(x.valor)}" onclick="setRubro('${esc(x.valor).replace(/'/g,"\\'")}')">${ICONO[x.valor]||''} ${esc(x.valor)}</button>`).join('');
   const mar = data.filter(x=>x.tipo==='marca').sort((a,b)=>b.n-a.n).slice(0,120).sort((a,b)=>a.valor.localeCompare(b.valor));
-  $('f-rubro').innerHTML = '<option value="">Todas las categorías</option>' + rub.map(x=>`<option value="${esc(x.valor)}">${esc(x.valor)} (${x.n})</option>`).join('');
   $('f-marca').innerHTML = '<option value="">Todas las marcas</option>' + mar.map(x=>`<option value="${esc(x.valor)}">${esc(x.valor)}</option>`).join('');
+}
+function setRubro(r){
+  rubroSel = r;
+  document.querySelectorAll('.chip').forEach(c=>c.classList.toggle('on', c.dataset.r===r));
+  buscar(true);
 }
 async function buscar(reinicia){
   if(reinicia){ off = 0; $('grid').innerHTML = '<p style="color:var(--muted)">Buscando...</p>'; }
-  const {data, error} = await sb.rpc('portal_busca', {q:$('q').value.trim(), r:$('f-rubro').value, m:$('f-marca').value, lim:48, off});
+  const {data, error} = await sb.rpc('portal_busca', {q:$('q').value.trim(), r:rubroSel, m:$('f-marca').value, lim:48, off});
   if(error){ $('grid').innerHTML = '<p>No se pudo cargar el catálogo. Intenta de nuevo.</p>'; return; }
   const total = data.length ? +data[0].total : 0;
   $('total-res').textContent = total ? total.toLocaleString('es-MX') + ' producto(s)' : 'Sin resultados — prueba con otra palabra';
@@ -112,7 +137,7 @@ async function buscar(reinicia){
       <div class="desc">${esc(p.descripcion)}</div>
       <div class="cod">${esc(p.codigo)}</div>
       <div class="addrow">
-        <input type="number" min="1" value="1" id="c-${esc(p.codigo).replace(/[^A-Za-z0-9]/g,'')}">
+        <input type="number" min="1" value="1">
         <button class="btn" onclick='agregar(${JSON.stringify(p.codigo)}, ${JSON.stringify(p.descripcion)}, this)'>Agregar</button>
       </div>
     </div>`).join('');
@@ -124,7 +149,7 @@ function agregar(codigo, desc, btn){
   const inp = btn.parentElement.querySelector('input');
   const n = Math.max(1, +inp.value||1);
   const ex = cart.find(i=>i.codigo===codigo);
-  if(ex) ex.cantidad += n; else cart.push({codigo, desc, cantidad:n});
+  if(ex) ex.cantidad += n; else cart.push({codigo, desc, cantidad:n, ficha:false});
   guardar(); btn.textContent = '✓ Agregado'; setTimeout(()=>btn.textContent='Agregar', 900);
 }
 function guardar(){
@@ -132,22 +157,20 @@ function guardar(){
   $('cart-n').style.display = cart.length ? 'flex' : 'none';
   $('cart-n').textContent = cart.reduce((s,i)=>s+i.cantidad,0);
 }
-function abrirCarrito(){
-  $('panel').classList.add('open');
-  render();
-}
+function abrirCarrito(){ $('panel').classList.add('open'); render(); }
 function render(){
   if(!cart.length){
     $('hoja').innerHTML = `<h2>Mi solicitud</h2><p class="sub">Aún no agregas productos. Busca en el catálogo y presiona "Agregar".</p>
-      <div class="acciones"><button class="btn" onclick="cerrar()">Ir al catálogo</button></div>`;
+      <div class="acciones"><button class="btn sec" onclick="abrirObra()">🏗 Cotizar un proyecto</button><button class="btn" onclick="cerrar()">Ir al catálogo</button></div>`;
     return;
   }
   $('hoja').innerHTML = `
     <h2>Mi solicitud de cotización</h2>
-    <p class="sub">${cart.length} producto(s). Ajusta cantidades y mándanos tus datos — te cotizamos sin compromiso.</p>
+    <p class="sub">${cart.length} producto(s). Ajusta cantidades — si necesitas la <b>ficha técnica</b> de algo, márcalo y te la mandamos junto con la cotización.</p>
     ${cart.map((i,x)=>`<div class="item">
       <img src="${img(i.codigo)}" onerror="this.style.visibility='hidden'">
-      <div class="d">${esc(i.desc)}<br><span style="color:var(--muted)">${esc(i.codigo)}</span></div>
+      <div class="d">${esc(i.desc)}<br><span style="color:var(--muted)">${esc(i.codigo)}</span>
+        <label class="ficha-chk"><input type="checkbox" ${i.ficha?'checked':''} onchange="cart[${x}].ficha=this.checked;guardar()"> 📎 Quiero ficha técnica</label></div>
       <input type="number" min="1" value="${i.cantidad}" onchange="cart[${x}].cantidad=Math.max(1,+this.value||1);guardar()">
       <button class="x" onclick="cart.splice(${x},1);guardar();render()">✕</button>
     </div>`).join('')}
@@ -169,7 +192,7 @@ async function enviar(){
     nombre, contacto,
     entrega: $('s-entrega').value.trim(),
     notas: $('s-notas').value.trim(),
-    items: cart.map(i=>({codigo:i.codigo, desc:i.desc, cantidad:i.cantidad})),
+    items: cart.map(i=>({codigo:i.codigo, desc:i.desc, cantidad:i.cantidad, ficha:!!i.ficha})),
   });
   if(error){
     $('enviar').disabled = false; $('enviar').textContent = 'Enviar solicitud 📨';
@@ -177,10 +200,62 @@ async function enviar(){
     return;
   }
   cart = []; guardar();
+  exito(nombre);
+}
+function exito(nombre){
   $('hoja').innerHTML = `<div class="ok-box"><div class="ico">✅</div>
     <h2>¡Solicitud recibida!</h2>
     <p class="sub" style="margin-top:8px">Gracias, <b>${esc(nombre)}</b>. Te contactamos hoy mismo con tu cotización.</p>
     <button class="btn" onclick="cerrar()">Volver al catálogo</button></div>`;
+}
+/* ===== Proyecto / obra completa ===== */
+function abrirObra(){
+  $('panel').classList.add('open');
+  $('hoja').innerHTML = `
+    <h2>🏗 Cotiza tu obra o proyecto</h2>
+    <p class="sub">Cuéntanos qué vas a hacer y adjunta fotos, planos o tu lista de materiales (PDF o imágenes, hasta 5 archivos). Te armamos la cotización completa del material.</p>
+    <div class="f"><label>Tu nombre o empresa *</label><input id="o-nombre" maxlength="120"></div>
+    <div class="f"><label>Teléfono o correo *</label><input id="o-contacto" maxlength="160" placeholder="33 1234 5678 / correo@ejemplo.com"></div>
+    <div class="f"><label>Ubicación de la obra</label><input id="o-entrega" maxlength="300" placeholder="Colonia / ciudad"></div>
+    <div class="f"><label>Descripción del proyecto *</label><textarea id="o-notas" rows="4" maxlength="2000" placeholder="Ej. Remodelación de baño completo: cambiar WC, lavabo, regadera, azulejo de 3x2m, instalación eléctrica de 2 lámparas..."></textarea></div>
+    <div class="f"><label>Fotos, planos o lista (opcional, máx. 5 archivos de 8MB)</label><input id="o-files" type="file" accept="image/*,.pdf" multiple></div>
+    <p class="small" id="o-status" style="margin-top:8px;font-size:12px;color:var(--muted)"></p>
+    <div class="acciones">
+      <button class="btn sec" onclick="cerrar()">Cancelar</button>
+      <button class="btn" id="o-enviar" onclick="enviarObra()">Enviar proyecto 📨</button>
+    </div>`;
+}
+async function enviarObra(){
+  const nombre = $('o-nombre').value.trim(), contacto = $('o-contacto').value.trim(), notas = $('o-notas').value.trim();
+  if(nombre.length < 2){ alert('Escribe tu nombre o empresa.'); return; }
+  if(contacto.length < 5){ alert('Déjanos un teléfono o correo para responderte.'); return; }
+  if(notas.length < 10){ alert('Cuéntanos un poco más de tu proyecto.'); return; }
+  const files = [...($('o-files').files||[])].slice(0,5);
+  if(files.some(f=>f.size > 8*1024*1024)){ alert('Cada archivo debe pesar máximo 8MB.'); return; }
+  $('o-enviar').disabled = true; $('o-enviar').textContent = 'Enviando...';
+  const st = m => $('o-status').textContent = m;
+  const adjuntos = [];
+  for(let i=0;i<files.length;i++){
+    st(`Subiendo archivo ${i+1} de ${files.length}...`);
+    const f = files[i];
+    const ruta = Date.now() + '-' + Math.random().toString(36).slice(2,8) + '-' + f.name.replace(/[^A-Za-z0-9._-]/g,'_').slice(-60);
+    const {error:eS} = await sb.storage.from('proyectos').upload(ruta, f, {contentType: f.type || 'application/octet-stream'});
+    if(eS){ st(''); $('o-enviar').disabled = false; $('o-enviar').textContent = 'Enviar proyecto 📨'; alert('No se pudo subir "'+f.name+'". Intenta con archivos más ligeros.'); return; }
+    adjuntos.push({ruta, nombre: f.name});
+  }
+  st('Enviando solicitud...');
+  const {error} = await sb.from('solicitudes').insert({
+    nombre, contacto, tipo:'proyecto',
+    entrega: $('o-entrega').value.trim(),
+    notas, items: [], adjuntos,
+  });
+  st('');
+  if(error){
+    $('o-enviar').disabled = false; $('o-enviar').textContent = 'Enviar proyecto 📨';
+    alert('No se pudo enviar. Intenta de nuevo.');
+    return;
+  }
+  exito(nombre);
 }
 function cerrar(){ $('panel').classList.remove('open'); }
 $('panel').addEventListener('click', e=>{ if(e.target.id==='panel') cerrar(); });
