@@ -79,8 +79,8 @@ footer{max-width:1200px; margin:26px auto 40px; padding:0 16px; color:var(--mute
 <main>
   <div class="hero">
     <div class="t">
-      <h2>Cotiza sin compromiso — te respondemos hoy mismo</h2>
-      <p>Arma tu lista y recibe precios y disponibilidad el mismo día. Entrega en obra o recoge en tienda (Guadalajara).</p>
+      <h2>Cotiza sin compromiso — te respondemos en menos de 24 horas</h2>
+      <p>Arma tu lista y recibe precios y disponibilidad. Entrega en obra o recoge en tienda (Guadalajara).</p>
     </div>
     <button class="btn" onclick="abrirObra()">🏗 Cotizar obra completa</button>
   </div>
@@ -213,7 +213,7 @@ async function enviar(){
 function exito(nombre){
   $('hoja').innerHTML = `<div class="ok-box"><div class="ico">✅</div>
     <h2>¡Solicitud recibida!</h2>
-    <p class="sub" style="margin-top:8px">Gracias, <b>${esc(nombre)}</b>. Te contactamos hoy mismo con tu cotización.</p>
+    <p class="sub" style="margin-top:8px">Gracias, <b>${esc(nombre)}</b>. Te contactamos en menos de 24 horas con tu cotización.</p>
     <button class="btn" onclick="cerrar()">Volver al catálogo</button></div>`;
 }
 /* ===== Proyecto / obra completa ===== */
