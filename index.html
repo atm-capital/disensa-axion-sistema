@@ -1306,7 +1306,7 @@ async function subirListaPrecios(){
     const fch = v => { if(!v) return null;
       if(v instanceof Date) return v.toISOString().slice(0,10);
       const m = String(v).match(/(\d{2})\/(\d{2})\/(\d{4})/); return m ? `${m[3]}-${m[2]}-${m[1]}` : null; };
-    const regs = [];
+    let regs = [];
     for(let i=h+1;i<rows.length;i++){
       const r = rows[i]; if(!r || !r[0]) continue;
       regs.push({ codigo:String(r[0]).trim(), descripcion:String(r[1]||'').trim(), marca:String(r[2]||'').trim(),
@@ -1316,7 +1316,9 @@ async function subirListaPrecios(){
         actualizado:new Date().toISOString() });
     }
     if(!regs.length) throw new Error('No encontré productos en el archivo.');
-    st(`Subiendo ${regs.length.toLocaleString('es-MX')} productos en bloques...`);
+    const antes = regs.length;
+    regs = [...new Map(regs.map(r=>[r.codigo, r])).values()]; // quitar renglones duplicados del archivo
+    st(`Subiendo ${regs.length.toLocaleString('es-MX')} productos${antes>regs.length?` (${antes-regs.length} duplicados del archivo ignorados)`:''}...`);
     for(let i=0;i<regs.length;i+=500){
       const {error} = await sb.from('lista_indar').upsert(regs.slice(i,i+500), {onConflict:'codigo'});
       if(error) throw error;
