@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Axion Tools · Catálogo y cotizaciones</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<style>
+:root{ --naranja:#e8862d; --oscuro:#20242e; --fondo:#f5f6f8; --linea:#e3e5ea; --texto:#252a33; --muted:#7b8494; }
+*{box-sizing:border-box; margin:0}
+body{font-family:'Segoe UI',system-ui,sans-serif; background:var(--fondo); color:var(--texto)}
+header{background:var(--oscuro); color:#fff; padding:14px 20px; display:flex; align-items:center; gap:14px; flex-wrap:wrap; position:sticky; top:0; z-index:20}
+.logo{font-weight:800; font-size:22px; letter-spacing:1px}
+.logo span{color:var(--naranja)}
+.logo small{display:block; font-size:10px; letter-spacing:2px; color:#aeb6c4; font-weight:600}
+.buscador{flex:1; min-width:220px; display:flex; gap:8px}
+.buscador input{flex:1; padding:10px 14px; border-radius:8px; border:none; font-size:15px}
+.btn{background:var(--naranja); color:#fff; border:none; border-radius:8px; padding:10px 16px; font-weight:700; cursor:pointer; font-size:14px}
+.btn.sec{background:#fff; color:var(--oscuro); border:1px solid var(--linea)}
+.btn:disabled{opacity:.5; cursor:default}
+.carrito-btn{position:relative}
+.carrito-btn .n{position:absolute; top:-7px; right:-7px; background:#d9534f; border-radius:50%; min-width:20px; height:20px; font-size:12px; display:flex; align-items:center; justify-content:center; padding:0 4px}
+main{max-width:1200px; margin:0 auto; padding:16px}
+.filtros{display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px; align-items:center}
+.filtros select{padding:9px 12px; border-radius:8px; border:1px solid var(--linea); background:#fff; font-size:14px; max-width:46vw}
+.total-res{color:var(--muted); font-size:13px}
+.grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:12px}
+.prod{background:#fff; border:1px solid var(--linea); border-radius:12px; padding:12px; display:flex; flex-direction:column; gap:8px}
+.prod img{width:100%; height:110px; object-fit:contain}
+.prod .noimg{width:100%; height:110px; display:flex; align-items:center; justify-content:center; color:#cfd4dd; font-size:38px}
+.prod .marca{font-size:11px; color:var(--naranja); font-weight:700; text-transform:uppercase}
+.prod .desc{font-size:13px; line-height:1.35; flex:1}
+.prod .cod{font-size:11px; color:var(--muted)}
+.addrow{display:flex; gap:6px}
+.addrow input{width:56px; padding:8px; border:1px solid var(--linea); border-radius:8px; text-align:center}
+.addrow .btn{flex:1; padding:8px}
+.cargar{display:block; margin:18px auto; }
+.panel{position:fixed; inset:0; background:rgba(20,22,28,.55); display:none; align-items:flex-start; justify-content:center; padding:20px; z-index:50; overflow:auto}
+.panel.open{display:flex}
+.hoja{background:#fff; border-radius:14px; max-width:640px; width:100%; padding:22px; margin-top:2vh}
+.hoja h2{margin-bottom:4px}
+.hoja .sub{color:var(--muted); font-size:13px; margin-bottom:14px}
+.item{display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid var(--linea); font-size:13px}
+.item img{width:38px; height:38px; object-fit:contain}
+.item .d{flex:1}
+.item input{width:58px; padding:7px; border:1px solid var(--linea); border-radius:7px; text-align:center}
+.item .x{background:none; border:none; color:#d9534f; font-size:17px; cursor:pointer}
+.f{margin-top:12px}
+.f label{display:block; font-size:12px; font-weight:700; margin-bottom:4px; color:var(--muted)}
+.f input,.f textarea{width:100%; padding:10px; border:1px solid var(--linea); border-radius:8px; font-size:14px; font-family:inherit}
+.acciones{display:flex; gap:10px; margin-top:16px; justify-content:flex-end}
+.ok-box{text-align:center; padding:30px 10px}
+.ok-box .ico{font-size:52px}
+footer{max-width:1200px; margin:26px auto 40px; padding:0 16px; color:var(--muted); font-size:12.5px; line-height:1.6}
+.aviso{background:#fff7ee; border:1px solid #f3d9bb; border-radius:10px; padding:10px 14px; font-size:13px; color:#8a5a22; margin-bottom:14px}
+@media (max-width:600px){ .grid{grid-template-columns:repeat(2,1fr)} .prod img,.prod .noimg{height:84px} }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">AXI<span>O</span>N TOOLS<small>MATERIALES · FERRETERÍA · DISENSA</small></div>
+  <div class="buscador">
+    <input id="q" placeholder="Busca: taladro, cemento, cable, grapas..." onkeydown="if(event.key==='Enter')buscar(true)">
+    <button class="btn" onclick="buscar(true)">Buscar</button>
+  </div>
+  <button class="btn sec carrito-btn" onclick="abrirCarrito()">🛒 Mi solicitud <span class="n" id="cart-n" style="display:none">0</span></button>
+</header>
+<main>
+  <div class="aviso">Elige tus productos y <b>solicita tu cotización sin compromiso</b> — te respondemos el mismo día con precios y disponibilidad. Entregas en obra o recoge en tienda (Guadalajara).</div>
+  <div class="filtros">
+    <select id="f-rubro" onchange="buscar(true)"><option value="">Todas las categorías</option></select>
+    <select id="f-marca" onchange="buscar(true)"><option value="">Todas las marcas</option></select>
+    <span class="total-res" id="total-res"></span>
+  </div>
+  <div class="grid" id="grid"></div>
+  <button class="btn sec cargar" id="mas" style="display:none" onclick="buscar(false)">Cargar más resultados</button>
+</main>
+<div class="panel" id="panel">
+  <div class="hoja" id="hoja"></div>
+</div>
+<footer>
+  <b>Axion Tools — Distribuidora Axion</b> · Red Disensa<br>
+  Av. Fidel Velázquez Sánchez 788, Santa Elena Estadio, Guadalajara, Jal.<br>
+  Catálogo con más de 29,000 productos de ferretería y materiales para construcción.
+</footer>
+<script>
+const sb = supabase.createClient('https://ypdnzbuvlgkicvbulopk.supabase.co', 'sb_publishable_6L-Mb-JGXVJ36ccpyX6Zjg_5uxDHPvS');
+const $ = id => document.getElementById(id);
+const esc = s => String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const img = c => 'https://storage.googleapis.com/indararticulos/' + encodeURIComponent(String(c).replace(/ /g,'_')) + '_MD.webp';
+let off = 0, cart = [];
+try{ cart = JSON.parse(localStorage.getItem('axp_cart')||'[]'); }catch(e){ cart = []; }
+
+async function filtros(){
+  const {data, error} = await sb.rpc('portal_filtros');
+  if(error || !data) return;
+  const rub = data.filter(x=>x.tipo==='rubro').sort((a,b)=>b.n-a.n);
+  const mar = data.filter(x=>x.tipo==='marca').sort((a,b)=>b.n-a.n).slice(0,120).sort((a,b)=>a.valor.localeCompare(b.valor));
+  $('f-rubro').innerHTML = '<option value="">Todas las categorías</option>' + rub.map(x=>`<option value="${esc(x.valor)}">${esc(x.valor)} (${x.n})</option>`).join('');
+  $('f-marca').innerHTML = '<option value="">Todas las marcas</option>' + mar.map(x=>`<option value="${esc(x.valor)}">${esc(x.valor)}</option>`).join('');
+}
+async function buscar(reinicia){
+  if(reinicia){ off = 0; $('grid').innerHTML = '<p style="color:var(--muted)">Buscando...</p>'; }
+  const {data, error} = await sb.rpc('portal_busca', {q:$('q').value.trim(), r:$('f-rubro').value, m:$('f-marca').value, lim:48, off});
+  if(error){ $('grid').innerHTML = '<p>No se pudo cargar el catálogo. Intenta de nuevo.</p>'; return; }
+  const total = data.length ? +data[0].total : 0;
+  $('total-res').textContent = total ? total.toLocaleString('es-MX') + ' producto(s)' : 'Sin resultados — prueba con otra palabra';
+  const html = data.map(p=>`
+    <div class="prod">
+      <img src="${img(p.codigo)}" loading="lazy" onerror="this.outerHTML='<div class=noimg>🔧</div>'">
+      <div class="marca">${esc(p.marca||'')}</div>
+      <div class="desc">${esc(p.descripcion)}</div>
+      <div class="cod">${esc(p.codigo)}</div>
+      <div class="addrow">
+        <input type="number" min="1" value="1" id="c-${esc(p.codigo).replace(/[^A-Za-z0-9]/g,'')}">
+        <button class="btn" onclick='agregar(${JSON.stringify(p.codigo)}, ${JSON.stringify(p.descripcion)}, this)'>Agregar</button>
+      </div>
+    </div>`).join('');
+  if(reinicia) $('grid').innerHTML = html; else $('grid').insertAdjacentHTML('beforeend', html);
+  off += data.length;
+  $('mas').style.display = off < total ? 'block' : 'none';
+}
+function agregar(codigo, desc, btn){
+  const inp = btn.parentElement.querySelector('input');
+  const n = Math.max(1, +inp.value||1);
+  const ex = cart.find(i=>i.codigo===codigo);
+  if(ex) ex.cantidad += n; else cart.push({codigo, desc, cantidad:n});
+  guardar(); btn.textContent = '✓ Agregado'; setTimeout(()=>btn.textContent='Agregar', 900);
+}
+function guardar(){
+  localStorage.setItem('axp_cart', JSON.stringify(cart));
+  $('cart-n').style.display = cart.length ? 'flex' : 'none';
+  $('cart-n').textContent = cart.reduce((s,i)=>s+i.cantidad,0);
+}
+function abrirCarrito(){
+  $('panel').classList.add('open');
+  render();
+}
+function render(){
+  if(!cart.length){
+    $('hoja').innerHTML = `<h2>Mi solicitud</h2><p class="sub">Aún no agregas productos. Busca en el catálogo y presiona "Agregar".</p>
+      <div class="acciones"><button class="btn" onclick="cerrar()">Ir al catálogo</button></div>`;
+    return;
+  }
+  $('hoja').innerHTML = `
+    <h2>Mi solicitud de cotización</h2>
+    <p class="sub">${cart.length} producto(s). Ajusta cantidades y mándanos tus datos — te cotizamos sin compromiso.</p>
+    ${cart.map((i,x)=>`<div class="item">
+      <img src="${img(i.codigo)}" onerror="this.style.visibility='hidden'">
+      <div class="d">${esc(i.desc)}<br><span style="color:var(--muted)">${esc(i.codigo)}</span></div>
+      <input type="number" min="1" value="${i.cantidad}" onchange="cart[${x}].cantidad=Math.max(1,+this.value||1);guardar()">
+      <button class="x" onclick="cart.splice(${x},1);guardar();render()">✕</button>
+    </div>`).join('')}
+    <div class="f"><label>Tu nombre o empresa *</label><input id="s-nombre" maxlength="120"></div>
+    <div class="f"><label>Teléfono o correo *</label><input id="s-contacto" maxlength="160" placeholder="33 1234 5678 / correo@ejemplo.com"></div>
+    <div class="f"><label>Lugar de entrega (o "recojo en tienda")</label><input id="s-entrega" maxlength="300"></div>
+    <div class="f"><label>Notas (urgencia, especificaciones...)</label><textarea id="s-notas" rows="2" maxlength="1000"></textarea></div>
+    <div class="acciones">
+      <button class="btn sec" onclick="cerrar()">Seguir viendo</button>
+      <button class="btn" id="enviar" onclick="enviar()">Enviar solicitud 📨</button>
+    </div>`;
+}
+async function enviar(){
+  const nombre = $('s-nombre').value.trim(), contacto = $('s-contacto').value.trim();
+  if(nombre.length < 2){ alert('Escribe tu nombre o empresa.'); return; }
+  if(contacto.length < 5){ alert('Déjanos un teléfono o correo para responderte.'); return; }
+  $('enviar').disabled = true; $('enviar').textContent = 'Enviando...';
+  const {error} = await sb.from('solicitudes').insert({
+    nombre, contacto,
+    entrega: $('s-entrega').value.trim(),
+    notas: $('s-notas').value.trim(),
+    items: cart.map(i=>({codigo:i.codigo, desc:i.desc, cantidad:i.cantidad})),
+  });
+  if(error){
+    $('enviar').disabled = false; $('enviar').textContent = 'Enviar solicitud 📨';
+    alert('No se pudo enviar. Revisa tu conexión e intenta de nuevo.');
+    return;
+  }
+  cart = []; guardar();
+  $('hoja').innerHTML = `<div class="ok-box"><div class="ico">✅</div>
+    <h2>¡Solicitud recibida!</h2>
+    <p class="sub" style="margin-top:8px">Gracias, <b>${esc(nombre)}</b>. Te contactamos hoy mismo con tu cotización.</p>
+    <button class="btn" onclick="cerrar()">Volver al catálogo</button></div>`;
+}
+function cerrar(){ $('panel').classList.remove('open'); }
+$('panel').addEventListener('click', e=>{ if(e.target.id==='panel') cerrar(); });
+guardar(); filtros(); buscar(true);
+</script>
+</body>
+</html>
