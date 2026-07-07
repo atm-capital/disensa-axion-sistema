@@ -529,7 +529,7 @@ async function vCotizaciones(){
         <td class="num">${s.tipo==='proyecto' ? '<span class="badge b-azul">🏗 proyecto</span>' : (s.items||[]).length + ((s.items||[]).some(i=>i.ficha) ? ' <span class="badge b-ambar" title="Pide fichas técnicas">📎</span>' : '')}
           ${(s.adjuntos||[]).length ? `<button class="btn sec sm" onclick="verAdjuntos(${s.id})">📁 ${(s.adjuntos||[]).length}</button>` : ''}</td>
         <td><span class="badge ${s.estado==='nueva'?'b-ambar':s.estado==='atendida'?'b-verde':'b-gris'}">${s.estado}</span></td>
-        <td style="white-space:nowrap">${puedeVender()?`<button class="btn sm" onclick="cotizarSolicitud(${s.id})">💰 Cotizar</button>
+        <td style="white-space:nowrap">${puedeVender()?`${s.tipo==='proyecto'?`<button class="btn sm" onclick="analizarIA(${s.id})">🤖 IA</button> `:''}<button class="btn sm" onclick="cotizarSolicitud(${s.id})">💰 Cotizar</button>
           ${s.estado!=='descartada'?`<button class="btn sec sm" title="Descartar" onclick="estadoSolicitud(${s.id},'descartada')">🗑</button>`:''}`:''}</td>
       </tr>`).join('') || '<tr><td colspan="7" class="muted">Sin solicitudes aún. Comparte el link del portal con tus clientes.</td></tr>'}</tbody></table></div></div>`}
     ${nLista===0?`<div class="card" style="border-left:4px solid var(--ambar)"><b>Aún no has cargado la lista de precios Indar.</b>
@@ -580,6 +580,27 @@ async function verAdjuntos(id){
       <button class="btn sec" onclick="compartirProyecto()">💬 WhatsApp</button>
       <button class="btn" onclick="cerrarModal()">Cerrar</button>
     </div>`);
+}
+async function analizarIA(id){
+  const s = (window._sols||[]).find(x=>x.id===id);
+  if(!s) return;
+  abrirModal(`<h3>🤖 Análisis del proyecto de ${esc(s.nombre)}</h3>
+    <p class="small" id="ia-status" style="font-weight:600;margin:10px 0">Analizando descripción y archivos con IA — dame 20-60 segundos...</p>
+    <div id="ia-res"></div>
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`);
+  try{
+    const {data, error} = await sb.functions.invoke('analizar-proyecto', {body:{id}});
+    if(error) throw error;
+    if(data && data.error) throw new Error(data.error);
+    const mats = (data && data.materiales) || [];
+    if(!mats.length){ $('ia-status').textContent = '🤷 La IA no pudo proponer materiales' + (data?.notas ? ': '+data.notas : '. Pide al cliente más detalle o medidas.'); return; }
+    $('ia-status').textContent = 'Cruzando '+mats.length+' materiales propuestos contra el catálogo...';
+    const partidas = mats.map(m=>({desc: String(m.desc||'') + (m.unidad ? ' ('+m.unidad+')' : ''), cant: +m.cantidad||1, pu: 0}));
+    reqParsed = await matchPartidas(partidas, m=>{ if($('ia-status')) $('ia-status').textContent = m; });
+    window._mxObra = 'Proyecto ' + s.nombre;
+    if($('ia-status')) $('ia-status').innerHTML = (data.notas ? '📝 <i>'+esc(data.notas)+'</i><br>' : '') + '✓ Propuesta lista — revisa los matches y crea la cotización. <b>Valida las cantidades</b>: son estimaciones de la IA.';
+    if($('ia-res')) mxRender('ia-res', reqParsed, 'Proyecto '+s.nombre);
+  }catch(e){ if($('ia-status')) $('ia-status').textContent = '❌ Error: '+errMsg(e)+' — ¿ya está configurada la función analizar-proyecto y la API key?'; }
 }
 function compartirProyecto(){ window.open('https://wa.me/?text='+encodeURIComponent(window._compartirMsj||''), '_blank'); }
 async function copiarProyecto(){
