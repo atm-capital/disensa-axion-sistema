@@ -899,7 +899,15 @@ async function vCatalogo(){
 async function pintarCatalogo(agregar){
   const q = ($('cat-q')?.value||'').trim(), marca = $('cat-marca')?.value, fam = $('cat-fam')?.value, rubro = $('cat-rubro')?.value;
   let con = sb.from('lista_indar').select('codigo,descripcion,marca,categoria,precio_lista,promo_pct,precio_sugerido').order('descripcion');
-  if(q.length>=2){ const like = `%${q.replace(/[%,]/g,' ')}%`; con = con.or(`codigo.ilike.${like},descripcion.ilike.${like}`); }
+  if(q.length>=2){
+    // búsqueda por palabras: cada palabra debe aparecer en código, descripción O marca (sin acentos)
+    for(const t of q.split(/\s+/).slice(0,6)){
+      const tt = normTxt(t).replace(/[%,()]/g,' ').trim();
+      if(tt.length < 2) continue;
+      const like = `%${tt}%`;
+      con = con.or(`codigo.ilike.${like},descripcion.ilike.${like},marca.ilike.${like}`);
+    }
+  }
   if(marca) con = marca==='(sin marca)' ? con.or('marca.is.null,marca.eq.') : con.eq('marca', marca);
   if(fam) con = fam==='(sin familia)' ? con.or('categoria.is.null,categoria.eq.') : con.eq('categoria', fam);
   if(rubro) con = con.eq('rubro', rubro);
@@ -913,7 +921,7 @@ async function pintarCatalogo(agregar){
     return `<div class="card" style="margin:0;padding:12px;${sel?'outline:2px solid var(--rojo)':''}">
       <img src="https://storage.googleapis.com/indararticulos/${encodeURIComponent(p.codigo.replace(/ /g,'_'))}_MD.webp"
         style="width:100%;height:110px;object-fit:contain" onerror="this.style.display='none'" loading="lazy">
-      <div class="small" style="min-height:48px"><b>${esc(p.codigo)}</b> <span class="badge b-gris">${esc(p.marca||'')}</span><br>${esc((p.descripcion||'').slice(0,60))}</div>
+      <div class="small" style="min-height:48px"><b>${esc(p.codigo)}</b> <span class="badge b-gris">${esc(p.marca||'')}</span> <a href="https://indar.mx/portal/detallesProducto/${encodeURIComponent(p.codigo.replace(/ /g,'_'))}" target="_blank" class="link" title="Ver producto y ficha técnica en Indar (con tu sesión iniciada)">📎ficha</a><br>${esc((p.descripcion||'').slice(0,60))}</div>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">
         <div><b>${fmt(p.precio_sugerido)}</b>${pz?`<br><span class="small muted">${fmt(p.precio_sugerido/pz)}/pza</span>`:''}
           ${esAdmin()?`<br><span class="small muted">costo −5%: ${fmt(costoD)}</span>`:''}</div>
