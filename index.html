@@ -1335,6 +1335,13 @@ async function vImportar(){
         <p class="small muted"><b>Cómo se usa:</b> 1) Entra a indar.mx con tu usuario → Pedidos → Pedidos Anteriores.
         2) Da clic en el marcador "Enviar a Axion". 3) Elige la cotización. 4) Se abre esta pantalla con todo precargado y confirmas.</p>
       </div>
+      <div class="card"><h3>🏗 Cotizar requisición de obra</h3>
+        <p class="small muted" style="margin-bottom:10px">Sube el Excel de la requisición (formato constructora). El sistema lee las partidas, las cruza contra el catálogo de ${'23 mil'} y te arma la cotización: lo que hay con su precio, y lo que no como partida libre.</p>
+        <div class="field"><input type="file" id="rq-file" accept=".xlsx,.xls"></div>
+        <button class="btn" id="rq-btn" onclick="leerRequisicion()">Leer y cruzar contra catálogo</button>
+        <p class="small muted" id="rq-status" style="margin-top:8px"></p>
+        <div id="rq-res"></div>
+      </div>
       <div class="card"><h3>📄 Actualizar lista de precios Indar (${'los 11 mil'})</h3>
         <p class="small muted" style="margin-bottom:10px">1) En el portal Indar → Catálogo → <b>descarga la ListaPrecios.xlsx</b>. 2) Súbela aquí.
         Se actualizan precios, promociones y vigencias de TODA la lista (lo que usa el cotizador), y opcionalmente los costos/precios de tus productos.</p>
@@ -1397,7 +1404,7 @@ async function vImportar(){
         <div class="kpi"><div class="l">Partes del portal</div><div class="v">${(impData.sos||[]).length}</div><div class="s">serie /${impData.serie||'?'}</div></div>
       </div>
       <div class="field"><label><input type="checkbox" id="imp-precios" checked> Actualizar el precio de venta de productos existentes al sugerido de Indar</label></div>
-      <div class="field"><label><input type="checkbox" id="imp-cxp"> Crear cuenta por pagar (plazo 30 días) — márcala solo si ya está confirmado/facturado</label></div>
+      <div class="field"><label><input type="checkbox" id="imp-cxp" checked> Crear cuenta por pagar (plazo 30 días) — todo pedido se factura; desmárcala solo en casos especiales</label></div>
       <div style="display:flex;gap:10px;margin:8px 0 16px">
         <button class="btn" id="imp-btn" onclick="ejecutarImport()" ${yaImportado?'disabled':''}>Importar al sistema</button>
         <button class="btn sec" onclick="localStorage.removeItem('ax_import'); vImportar();">Descartar</button>
@@ -1410,6 +1417,78 @@ async function vImportar(){
           <td>${existentes.has(i.c) ? '<span class="badge b-gris">existente</span>' : '<span class="badge b-azul">nuevo</span>'}</td>
         </tr>`).join('')}</tbody></table></div>
     </div>`;
+}
+let reqParsed = [];
+function normTxt(s){
+  return String(s||'').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^A-Z0-9\/ .#"]/g,' ');
+}
+async function leerRequisicion(){
+  const f = $('rq-file').files[0];
+  if(!f){ toast('Elige el archivo de la requisición', true); return; }
+  $('rq-btn').disabled = true;
+  const st = m => $('rq-status').textContent = m;
+  try{
+    st('Leyendo archivo...');
+    const wb = XLSX.read(await f.arrayBuffer(), {type:'array'});
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {header:1, defval:''});
+    const partidas = []; let obra = '';
+    for(const r of rows){
+      const v = r.map(x=>String(x??'').trim());
+      if(v.length < 8) continue;
+      const req = v.slice(0,3).find(c=>/^\d{4}$/.test(c));
+      if(!req) continue;
+      let idxC = -1;
+      for(let i=3;i<Math.min(v.length,9);i++){ if(v[i] && !isNaN(parseFloat(v[i].replace(',',''))) && isFinite(v[i].replace(',',''))){ idxC = i; break; } }
+      if(idxC < 0) continue;
+      let desc = '';
+      for(const c of v.slice(idxC+1, idxC+5)){ if(c.length > desc.length && isNaN(parseFloat(c))) desc = c; }
+      if(desc.length < 5) continue;
+      obra = obra || v.slice(2, idxC).find(c=>c.length>4 && isNaN(parseFloat(c))) || '';
+      const colas = v.slice(idxC+1).filter(c=>c && !isNaN(parseFloat(c.replace(',',''))));
+      const pu = colas.length>=2 ? parseFloat(colas[colas.length-2].replace(',','')) : null;
+      partidas.push({req, cant: parseFloat(v[idxC].replace(',','')), desc, pu});
+    }
+    if(!partidas.length) throw new Error('No encontré partidas — ¿es el formato de requisición de la constructora?');
+    st(`Cruzando ${partidas.length} partidas contra el catálogo...`);
+    const STOP = new Set(['DE','LA','EL','CON','PARA','DEL','LOS','LAS','EN','POR','SIN','KG','MTS','MM','LTRS','CAL']);
+    for(let i=0;i<partidas.length;i++){
+      const p = partidas[i];
+      const toks = normTxt(p.desc).split(/\s+/).filter(t=>t.length>2 && !STOP.has(t)).sort((a,b)=>b.length-a.length).slice(0,2);
+      p.match = null;
+      if(toks.length){
+        const intentos = toks.length>1 ? [`%${toks[0]}%${toks[1]}%`, `%${toks[1]}%${toks[0]}%`, `%${toks[0]}%`] : [`%${toks[0]}%`];
+        for(const pat of intentos){
+          const {data} = await sb.from('lista_indar').select('codigo,descripcion,precio_lista,promo_pct,precio_sugerido').ilike('descripcion', pat).limit(1);
+          if(data && data.length){ p.match = data[0]; break; }
+        }
+      }
+      st(`Cruzando ${i+1}/${partidas.length}...`);
+    }
+    reqParsed = partidas;
+    const con = partidas.filter(p=>p.match).length;
+    st('');
+    $('rq-res').innerHTML = `
+      <p style="margin:10px 0"><b>Obra:</b> ${esc(obra||'—')} · <b>${partidas.length} partidas</b> · <span class="badge b-verde">${con} con match</span> <span class="badge b-ambar">${partidas.length-con} como partida libre</span></p>
+      <div class="tbl-scroll" style="max-height:340px;overflow-y:auto"><table>
+      <thead><tr><th>Piden</th><th class="num">Cant</th><th class="num">Pagan</th><th>Match catálogo</th><th class="num">Nuestro precio</th></tr></thead>
+      <tbody>${partidas.map(p=>`<tr>
+        <td>${esc(p.desc.slice(0,42))}</td><td class="num">${p.cant}</td>
+        <td class="num">${p.pu?fmt(p.pu):'—'}</td>
+        <td>${p.match?`<b>${esc(p.match.codigo)}</b> ${esc(p.match.descripcion.slice(0,36))}`:'<span class="badge b-ambar">partida libre</span>'}</td>
+        <td class="num">${p.match?fmt(p.match.precio_sugerido):(p.pu?fmt(p.pu):'—')}</td></tr>`).join('')}</tbody></table></div>
+      <div style="margin-top:12px"><button class="btn" onclick="cotizarRequisicion('${esc(obra).replace(/'/g,'')}')">📋 Crear cotización con esto</button></div>`;
+  }catch(e){ st(''); toast(errMsg(e), true); }
+  $('rq-btn').disabled = false;
+}
+function cotizarRequisicion(obra){
+  window._preCot = reqParsed.map(p=>{
+    if(p.match){
+      const costo = Math.round(+p.match.precio_lista*(1-(+p.match.promo_pct||0))*100)/100;
+      return {codigo:p.match.codigo, desc:p.match.descripcion, cantidad:p.cant, precio:+p.match.precio_sugerido, costo, sugerido:+p.match.precio_sugerido, producto_id:null};
+    }
+    return {codigo:'', desc:p.desc, cantidad:p.cant, precio:p.pu||0, costo:0, sugerido:p.pu||0, producto_id:null};
+  });
+  irA('cotizaciones').then(()=>{ nuevaCot(); setTimeout(()=>{ const el=$('ct-cliente-txt'); if(el && obra) el.value = 'Constructora · '+obra; }, 600); });
 }
 async function subirListaPrecios(){
   const f = $('lp-file').files[0];
