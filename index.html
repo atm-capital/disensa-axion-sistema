@@ -1342,6 +1342,14 @@ async function vImportar(){
         <p class="small muted" id="rq-status" style="margin-top:8px"></p>
         <div id="rq-res"></div>
       </div>
+      <div class="card"><h3>📥 Pedido de cliente — cualquier formato</h3>
+        <p class="small muted" style="margin-bottom:10px">Para Excel de otros clientes: súbelo, te muestro las primeras filas, y con 2 clics me dices cuál columna es la <b>cantidad</b> y cuál la <b>descripción</b>. El sistema recuerda el formato de cada cliente para la próxima.</p>
+        <div class="field"><input type="file" id="pl-file" accept=".xlsx,.xls,.csv"></div>
+        <button class="btn" onclick="leerPedidoLibre()">Leer archivo</button>
+        <p class="small" id="pl-status" style="margin-top:8px;font-weight:600"></p>
+        <div id="pl-prev" class="tbl-scroll" style="max-height:260px;overflow:auto"></div>
+        <div id="pl-res"></div>
+      </div>
       <div class="card"><h3>📄 Actualizar lista de precios Indar (${'los 11 mil'})</h3>
         <p class="small muted" style="margin-bottom:10px">1) En el portal Indar → Catálogo → <b>descarga la ListaPrecios.xlsx</b>. 2) Súbela aquí.
         Se actualizan precios, promociones y vigencias de TODA la lista (lo que usa el cotizador), y opcionalmente los costos/precios de tus productos.</p>
@@ -1419,6 +1427,73 @@ async function vImportar(){
     </div>`;
 }
 let reqParsed = [];
+let plRows = [], plPick = {c:null, d:null}, plSig = '';
+async function leerPedidoLibre(){
+  const f = $('pl-file').files[0];
+  if(!f){ toast('Elige el archivo del cliente', true); return; }
+  const wb = XLSX.read(await f.arrayBuffer(), {type:'array'});
+  plRows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {header:1, defval:''});
+  if(!plRows.length){ toast('El archivo está vacío', true); return; }
+  const nCols = Math.min(14, Math.max(...plRows.slice(0,15).map(r=>r.length)));
+  plSig = 'axmap_' + normTxt(plRows.slice(0,3).flat().join('|')).replace(/\s+/g,'').slice(0,60);
+  const guardado = localStorage.getItem(plSig);
+  plPick = guardado ? JSON.parse(guardado) : {c:null, d:null};
+  $('pl-status').textContent = plPick.c!==null ? '✓ Formato conocido: cantidad y descripción ya asignadas — revisa y dale Cruzar.' : 'Paso 1: da CLIC en el encabezado de la columna de CANTIDAD.';
+  const letras = i => String.fromCharCode(65 + (i%26));
+  $('pl-prev').innerHTML = `<table><thead><tr>${Array.from({length:nCols},(_,i)=>
+    `<th id="pl-col-${i}" style="cursor:pointer;background:${plPick.c===i?'#dcfce7':plPick.d===i?'#dbeafe':''}" onclick="plElegir(${i})">${letras(i)}${plPick.c===i?' =CANT':plPick.d===i?' =DESC':''}</th>`).join('')}</tr></thead>
+    <tbody>${plRows.slice(0,10).map(r=>`<tr>${Array.from({length:nCols},(_,i)=>`<td class="small">${esc(String(r[i]??'').slice(0,22))}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+  $('pl-res').innerHTML = plPick.c!==null&&plPick.d!==null ? `<button class="btn" style="margin-top:10px" onclick="cruzarPedidoLibre()">Cruzar contra catálogo</button>` : '';
+}
+function plElegir(i){
+  if(plPick.c===null || (plPick.c!==null && plPick.d!==null)){ plPick = {c:i, d:null}; $('pl-status').textContent = 'Paso 2: ahora da CLIC en la columna de DESCRIPCIÓN.'; }
+  else if(plPick.d===null && i!==plPick.c){ plPick.d = i; $('pl-status').textContent = '✓ Listo — dale "Cruzar contra catálogo".'; localStorage.setItem(plSig, JSON.stringify(plPick)); }
+  leerPedidoLibreRefresca();
+}
+function leerPedidoLibreRefresca(){
+  const nCols = Math.min(14, Math.max(...plRows.slice(0,15).map(r=>r.length)));
+  const letras = i => String.fromCharCode(65 + (i%26));
+  document.querySelectorAll('[id^=pl-col-]').forEach((th,i)=>{
+    th.style.background = plPick.c===i?'#dcfce7':plPick.d===i?'#dbeafe':'';
+    th.textContent = letras(i) + (plPick.c===i?' =CANT':plPick.d===i?' =DESC':'');
+  });
+  $('pl-res').innerHTML = (plPick.c!==null&&plPick.d!==null) ? `<button class="btn" style="margin-top:10px" onclick="cruzarPedidoLibre()">Cruzar contra catálogo</button>` : '';
+}
+async function cruzarPedidoLibre(){
+  const partidas = [];
+  for(const r of plRows){
+    const cant = parseFloat(String(r[plPick.c]??'').replace(/[$,]/g,''));
+    const desc = String(r[plPick.d]??'').trim();
+    if(!isFinite(cant) || cant<=0 || desc.length<4 || !isNaN(parseFloat(desc))) continue;
+    partidas.push({cant, desc, pu:null});
+  }
+  if(!partidas.length){ toast('No encontré renglones válidos con ese mapeo — revisa las columnas', true); return; }
+  const st = m => $('pl-status').textContent = m;
+  const STOP = new Set(['DE','LA','EL','CON','PARA','DEL','LOS','LAS','EN','POR','SIN','KG','MTS','MM','LTRS','CAL']);
+  for(let i=0;i<partidas.length;i++){
+    const p = partidas[i];
+    const toks = normTxt(p.desc).split(/\s+/).filter(t=>t.length>2 && !STOP.has(t)).sort((a,b)=>b.length-a.length).slice(0,2);
+    p.match = null;
+    if(toks.length){
+      const intentos = toks.length>1 ? [`%${toks[0]}%${toks[1]}%`, `%${toks[1]}%${toks[0]}%`, `%${toks[0]}%`] : [`%${toks[0]}%`];
+      for(const pat of intentos){
+        const {data} = await sb.from('lista_indar').select('codigo,descripcion,precio_lista,promo_pct,precio_sugerido').ilike('descripcion', pat).limit(1);
+        if(data && data.length){ p.match = data[0]; break; }
+      }
+    }
+    st(`Cruzando ${i+1}/${partidas.length}...`);
+  }
+  reqParsed = partidas;
+  const con = partidas.filter(p=>p.match).length;
+  st(`✓ ${partidas.length} partidas: ${con} con match, ${partidas.length-con} libres.`);
+  $('pl-res').innerHTML = `
+    <div class="tbl-scroll" style="max-height:300px;overflow-y:auto;margin-top:10px"><table>
+    <thead><tr><th>Piden</th><th class="num">Cant</th><th>Match catálogo</th><th class="num">Precio</th></tr></thead>
+    <tbody>${partidas.map(p=>`<tr><td>${esc(p.desc.slice(0,44))}</td><td class="num">${p.cant}</td>
+      <td>${p.match?`<b>${esc(p.match.codigo)}</b> ${esc(p.match.descripcion.slice(0,36))}`:'<span class="badge b-ambar">libre</span>'}</td>
+      <td class="num">${p.match?fmt(p.match.precio_sugerido):'—'}</td></tr>`).join('')}</tbody></table></div>
+    <div style="margin-top:10px"><button class="btn" onclick="cotizarRequisicion('')">📋 Crear cotización con esto</button></div>`;
+}
 function normTxt(s){
   return String(s||'').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^A-Z0-9\/ .#"]/g,' ');
 }
