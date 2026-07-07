@@ -1239,7 +1239,8 @@ async function axBM(){
       return;
     }
     var LK=[].slice.call(document.querySelectorAll('a[href*=detallesProducto]')).map(function(a){var mm=a.href.match(/detallesProducto\/([^?#]+)/);return mm?decodeURIComponent(mm[1]).replace(/_/g,' '):null;}).filter(Boolean);
-    LK=[].slice.call(new Set(LK).values ? Array.from(new Set(LK)) : LK);
+    LK=LK.concat([].slice.call(document.querySelectorAll('[onclick*=detalleArticulo]')).map(function(e){var mm=(e.getAttribute('onclick')||'').match(/detalleArticulo\('([^']+)'\)/);return mm?mm[1]:null;}).filter(Boolean));
+    LK=Array.from(new Set(LK));
     if(LK.length>1 && !/pedidosAnteriores/i.test(location.pathname)){
       if(confirm('MODO LOTE: capturo los '+LK.length+' productos de esta pagina y los mando a Axion Tools?')){
         var MB=function(t){var e=document.getElementById('axmsg');if(!e){e=document.createElement('div');e.id='axmsg';e.style.cssText='position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:99999;background:#26292b;color:#fff;padding:12px 22px;border-radius:10px;font:14px sans-serif;border-left:5px solid #E8790F';document.body.appendChild(e);}e.textContent='Axion: '+t;};
