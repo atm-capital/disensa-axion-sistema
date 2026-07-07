@@ -103,7 +103,7 @@ footer{max-width:1200px; margin:26px auto 40px; padding:0 16px; color:var(--mute
 const sb = supabase.createClient('https://ypdnzbuvlgkicvbulopk.supabase.co', 'sb_publishable_6L-Mb-JGXVJ36ccpyX6Zjg_5uxDHPvS');
 const $ = id => document.getElementById(id);
 const esc = s => String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const img = c => 'https://storage.googleapis.com/indararticulos/' + encodeURIComponent(String(c).replace(/ /g,'_')) + '_MD.webp';
+const img = c => 'https://storage.googleapis.com/indararticulos/' + encodeURIComponent(String(c).replace(/[^A-Za-z0-9]/g,'_')) + '_MD.webp';
 let off = 0, cart = [], rubroSel = '';
 try{ cart = JSON.parse(localStorage.getItem('axp_cart')||'[]'); }catch(e){ cart = []; }
 

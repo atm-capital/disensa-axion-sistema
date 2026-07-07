@@ -828,7 +828,7 @@ async function fichasCot(id){
   abrirModal(`<h3>📎 Fichas técnicas de la cotización</h3>
     <p class="small muted" style="margin-bottom:10px">Cada liga abre el producto en el portal Indar (con tu sesión iniciada); ahí está el botón <b>"Ver ficha técnica"</b> para descargar el PDF y adjuntarlo al correo junto con la cotización.</p>
     <div class="tbl-scroll" style="max-height:380px;overflow-y:auto"><table><tbody>
-    ${con.map(i=>`<tr><td><img src="https://storage.googleapis.com/indararticulos/${encodeURIComponent(i.codigo.replace(/ /g,'_'))}_MD.webp" width="36" style="border-radius:4px;vertical-align:middle" onerror="this.style.display='none'">
+    ${con.map(i=>`<tr><td><img src="https://storage.googleapis.com/indararticulos/${encodeURIComponent(i.codigo.replace(/[^A-Za-z0-9]/g,'_'))}_MD.webp" width="36" style="border-radius:4px;vertical-align:middle" onerror="this.style.display='none'">
       <b>${esc(i.codigo)}</b> ${esc(i.descripcion.slice(0,45))}</td>
       <td><a href="https://indar.mx/portal/detallesProducto/${encodeURIComponent(i.codigo.replace(/ /g,'_'))}" target="_blank" class="link">abrir en Indar →</a></td></tr>`).join('')
       || '<tr><td class="muted">Solo hay partidas libres (sin código Indar).</td></tr>'}
@@ -863,7 +863,7 @@ async function imprimirCot(id){
   <p style="margin-top:14px"><b>Cliente:</b> ${esc(cliente)}${q.clientes?.telefono?' · '+esc(q.clientes.telefono):''}</p>
   <table><thead><tr><th></th><th>Código</th><th>Descripción</th><th class="num">Cantidad</th><th class="num">P. Unitario</th><th class="num">Importe</th></tr></thead>
   <tbody>${items.map(i=>`<tr>
-    <td style="width:46px">${i.codigo?`<img src="https://storage.googleapis.com/indararticulos/${encodeURIComponent(i.codigo.replace(/ /g,'_'))}_MD.webp" width="42" style="border-radius:4px" onerror="this.style.display='none'">`:''}</td>
+    <td style="width:46px">${i.codigo?`<img src="https://storage.googleapis.com/indararticulos/${encodeURIComponent(i.codigo.replace(/[^A-Za-z0-9]/g,'_'))}_MD.webp" width="42" style="border-radius:4px" onerror="this.style.display='none'">`:''}</td>
     <td>${esc(i.codigo)}</td><td>${esc(i.descripcion)}</td>
     <td class="num">${+i.cantidad}</td><td class="num">${fmt(i.precio_unit)}</td><td class="num">${fmt(i.importe)}</td></tr>`).join('')}</tbody>
   <tfoot><tr><td colspan="5" class="num tot">TOTAL (IVA incluido)</td><td class="num tot">${fmt(q.total)}</td></tr></tfoot></table>
@@ -919,7 +919,7 @@ async function pintarCatalogo(agregar){
     const sel = catSel.has(p.codigo);
     const pz = pzasDe(p.descripcion);
     return `<div class="card" style="margin:0;padding:12px;${sel?'outline:2px solid var(--rojo)':''}">
-      <img src="https://storage.googleapis.com/indararticulos/${encodeURIComponent(p.codigo.replace(/ /g,'_'))}_MD.webp"
+      <img src="https://storage.googleapis.com/indararticulos/${encodeURIComponent(p.codigo.replace(/[^A-Za-z0-9]/g,'_'))}_MD.webp"
         style="width:100%;height:110px;object-fit:contain" onerror="this.style.display='none'" loading="lazy">
       <div class="small" style="min-height:48px"><b>${esc(p.codigo)}</b> <span class="badge b-gris">${esc(p.marca||'')}</span> <a href="https://indar.mx/portal/detallesProducto/${encodeURIComponent(p.codigo.replace(/ /g,'_'))}" target="_blank" class="link" title="Ver producto y ficha técnica en Indar (con tu sesión iniciada)">📎ficha</a><br>${esc((p.descripcion||'').slice(0,60))}</div>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">
@@ -1535,7 +1535,7 @@ async function vImportar(){
   if(impData.tipo === 'producto'){
     const p = impData.items[0];
     $('v-importar').innerHTML = `<div class="card"><h3>➕ Agregar producto a la lista Indar</h3>
-      <p style="margin:8px 0"><img src="https://storage.googleapis.com/indararticulos/${encodeURIComponent(p.c.replace(/ /g,'_'))}_MD.webp" width="60" style="border-radius:6px;vertical-align:middle;margin-right:10px" onerror="this.style.display='none'">
+      <p style="margin:8px 0"><img src="https://storage.googleapis.com/indararticulos/${encodeURIComponent(p.c.replace(/[^A-Za-z0-9]/g,'_'))}_MD.webp" width="60" style="border-radius:6px;vertical-align:middle;margin-right:10px" onerror="this.style.display='none'">
       <b>${esc(p.c)}</b> · ${esc(p.d)}<br>
       <span class="small muted">Precio lista: ${fmt(p.l)} + IVA${p.pr0?` · Precio cliente: −${p.pr0}%`:''} · Sugerido: ${fmt(p.s)} con IVA · Categoría: <b>${esc(p.cat||'S/PEDIDO')}</b></span></p>
       <div style="display:flex;gap:10px">
