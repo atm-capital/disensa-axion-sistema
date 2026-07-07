@@ -1428,6 +1428,66 @@ async function vImportar(){
 }
 let reqParsed = [];
 let plRows = [], plPick = {c:null, d:null}, plSig = '';
+const MX_STOP = new Set(['DE','LA','EL','CON','PARA','DEL','LOS','LAS','EN','POR','SIN','KG','MTS','MM','LTRS','CAL','QUE','UNA','SEGUNDA','BOLSAS','LARGO','COLOR']);
+function mxToks(s){ return normTxt(s).split(/\s+/).filter(t=>t.length>2 && !MX_STOP.has(t)); }
+function mxScore(qToks, candDesc){
+  const C = normTxt(candDesc);
+  let hit = 0, tot = 0;
+  for(const t of qToks){ tot += t.length; if(C.includes(t)) hit += t.length; }
+  return tot ? hit/tot : 0;
+}
+async function matchPartidas(partidas, st){
+  for(let i=0;i<partidas.length;i++){
+    const p = partidas[i];
+    const toks = mxToks(p.desc).sort((a,b)=>b.length-a.length).slice(0,4);
+    const cands = new Map();
+    const pats = [];
+    if(toks.length>1){ pats.push(`%${toks[0]}%${toks[1]}%`, `%${toks[1]}%${toks[0]}%`); }
+    if(toks[0]) pats.push(`%${toks[0]}%`);
+    if(toks[1]) pats.push(`%${toks[1]}%`);
+    for(const pat of pats){
+      const {data} = await sb.from('lista_indar').select('codigo,descripcion,precio_lista,promo_pct,precio_sugerido').ilike('descripcion', pat).limit(6);
+      for(const c of (data||[])) if(!cands.has(c.codigo)) cands.set(c.codigo, c);
+      if(cands.size >= 12) break;
+    }
+    const qT = mxToks(p.desc);
+    p.alts = [...cands.values()].map(c=>({...c, score: mxScore(qT, c.descripcion)}))
+      .sort((a,b)=>b.score-a.score).slice(0,4);
+    p.match = (p.alts[0] && p.alts[0].score >= 0.45) ? p.alts[0] : null;
+    p.sel = p.match ? 0 : -1;
+    st(`Cruzando ${i+1}/${partidas.length}...`);
+  }
+  return partidas;
+}
+function mxRender(targetId, partidas, obra){
+  const con = partidas.filter(p=>p.match).length;
+  $(targetId).innerHTML = `
+    <p style="margin:10px 0"><b>${obra?('Obra: '+esc(obra)+' · '):''}${partidas.length} partidas</b> ·
+      <span class="badge b-verde">${con} con match</span> <span class="badge b-ambar">${partidas.length-con} libres</span>
+      <span class="small muted">— revisa cada renglón: puedes cambiar el match o mandarlo a libre</span></p>
+    <div class="tbl-scroll" style="max-height:380px;overflow-y:auto"><table>
+    <thead><tr><th>Piden</th><th class="num">Cant</th><th class="num">Pagan</th><th>Match (elige)</th><th class="num">Nuestro</th><th class="num">vs pagan</th></tr></thead>
+    <tbody>${partidas.map((p,i)=>{
+      const sel = p.sel>=0 ? p.alts[p.sel] : null;
+      const comp = (sel && p.pu) ? ((+sel.precio_sugerido - p.pu)/p.pu*100) : null;
+      return `<tr>
+      <td>${esc(p.desc.slice(0,40))}</td><td class="num">${p.cant}</td>
+      <td class="num">${p.pu?fmt(p.pu):'—'}</td>
+      <td><select style="max-width:290px" onchange="mxCambiar('${targetId}', ${i}, this.value)">
+        <option value="-1" ${p.sel<0?'selected':''}>— partida libre (sin match) —</option>
+        ${p.alts.map((a,j)=>`<option value="${j}" ${p.sel===j?'selected':''}>${Math.round(a.score*100)}% · ${esc(a.codigo)} · ${esc(a.descripcion.slice(0,42))}</option>`).join('')}
+      </select></td>
+      <td class="num">${sel?fmt(sel.precio_sugerido):'—'}</td>
+      <td class="num">${comp!==null?`<span class="badge ${comp<=0?'b-verde':(comp<=15?'b-ambar':'b-rojo')}">${comp>0?'+':''}${comp.toFixed(0)}%</span>`:'—'}</td>
+      </tr>`;
+    }).join('')}</tbody></table></div>
+    <div style="margin-top:10px"><button class="btn" onclick="cotizarRequisicion('${esc(obra||'').replace(/'/g,'')}')">📋 Crear cotización con esto</button></div>`;
+}
+function mxCambiar(targetId, i, v){
+  reqParsed[i].sel = +v;
+  reqParsed[i].match = +v>=0 ? reqParsed[i].alts[+v] : null;
+  mxRender(targetId, reqParsed, window._mxObra||'');
+}
 async function leerPedidoLibre(){
   const f = $('pl-file').files[0];
   if(!f){ toast('Elige el archivo del cliente', true); return; }
@@ -1473,30 +1533,10 @@ async function cruzarPedidoLibre(){
   }
   if(!partidas.length){ toast('No encontré renglones válidos con ese mapeo — revisa las columnas', true); return; }
   const st = m => $('pl-status').textContent = m;
-  const STOP = new Set(['DE','LA','EL','CON','PARA','DEL','LOS','LAS','EN','POR','SIN','KG','MTS','MM','LTRS','CAL']);
-  for(let i=0;i<partidas.length;i++){
-    const p = partidas[i];
-    const toks = normTxt(p.desc).split(/\s+/).filter(t=>t.length>2 && !STOP.has(t)).sort((a,b)=>b.length-a.length).slice(0,2);
-    p.match = null;
-    if(toks.length){
-      const intentos = toks.length>1 ? [`%${toks[0]}%${toks[1]}%`, `%${toks[1]}%${toks[0]}%`, `%${toks[0]}%`] : [`%${toks[0]}%`];
-      for(const pat of intentos){
-        const {data} = await sb.from('lista_indar').select('codigo,descripcion,precio_lista,promo_pct,precio_sugerido').ilike('descripcion', pat).limit(1);
-        if(data && data.length){ p.match = data[0]; break; }
-      }
-    }
-    st(`Cruzando ${i+1}/${partidas.length}...`);
-  }
-  reqParsed = partidas;
-  const con = partidas.filter(p=>p.match).length;
-  st(`✓ ${partidas.length} partidas: ${con} con match, ${partidas.length-con} libres.`);
-  $('pl-res').innerHTML = `
-    <div class="tbl-scroll" style="max-height:300px;overflow-y:auto;margin-top:10px"><table>
-    <thead><tr><th>Piden</th><th class="num">Cant</th><th>Match catálogo</th><th class="num">Precio</th></tr></thead>
-    <tbody>${partidas.map(p=>`<tr><td>${esc(p.desc.slice(0,44))}</td><td class="num">${p.cant}</td>
-      <td>${p.match?`<b>${esc(p.match.codigo)}</b> ${esc(p.match.descripcion.slice(0,36))}`:'<span class="badge b-ambar">libre</span>'}</td>
-      <td class="num">${p.match?fmt(p.match.precio_sugerido):'—'}</td></tr>`).join('')}</tbody></table></div>
-    <div style="margin-top:10px"><button class="btn" onclick="cotizarRequisicion('')">📋 Crear cotización con esto</button></div>`;
+  reqParsed = await matchPartidas(partidas, st);
+  window._mxObra = '';
+  st(`✓ ${partidas.length} partidas cruzadas — revisa los matches.`);
+  mxRender('pl-res', reqParsed, '');
 }
 function normTxt(s){
   return String(s||'').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^A-Z0-9\/ .#"]/g,' ');
@@ -1529,41 +1569,19 @@ async function leerRequisicion(){
     }
     if(!partidas.length) throw new Error('No encontré partidas — ¿es el formato de requisición de la constructora?');
     st(`Cruzando ${partidas.length} partidas contra el catálogo...`);
-    const STOP = new Set(['DE','LA','EL','CON','PARA','DEL','LOS','LAS','EN','POR','SIN','KG','MTS','MM','LTRS','CAL']);
-    for(let i=0;i<partidas.length;i++){
-      const p = partidas[i];
-      const toks = normTxt(p.desc).split(/\s+/).filter(t=>t.length>2 && !STOP.has(t)).sort((a,b)=>b.length-a.length).slice(0,2);
-      p.match = null;
-      if(toks.length){
-        const intentos = toks.length>1 ? [`%${toks[0]}%${toks[1]}%`, `%${toks[1]}%${toks[0]}%`, `%${toks[0]}%`] : [`%${toks[0]}%`];
-        for(const pat of intentos){
-          const {data} = await sb.from('lista_indar').select('codigo,descripcion,precio_lista,promo_pct,precio_sugerido').ilike('descripcion', pat).limit(1);
-          if(data && data.length){ p.match = data[0]; break; }
-        }
-      }
-      st(`Cruzando ${i+1}/${partidas.length}...`);
-    }
-    reqParsed = partidas;
-    const con = partidas.filter(p=>p.match).length;
+    reqParsed = await matchPartidas(partidas, st);
+    window._mxObra = obra;
     st('');
-    $('rq-res').innerHTML = `
-      <p style="margin:10px 0"><b>Obra:</b> ${esc(obra||'—')} · <b>${partidas.length} partidas</b> · <span class="badge b-verde">${con} con match</span> <span class="badge b-ambar">${partidas.length-con} como partida libre</span></p>
-      <div class="tbl-scroll" style="max-height:340px;overflow-y:auto"><table>
-      <thead><tr><th>Piden</th><th class="num">Cant</th><th class="num">Pagan</th><th>Match catálogo</th><th class="num">Nuestro precio</th></tr></thead>
-      <tbody>${partidas.map(p=>`<tr>
-        <td>${esc(p.desc.slice(0,42))}</td><td class="num">${p.cant}</td>
-        <td class="num">${p.pu?fmt(p.pu):'—'}</td>
-        <td>${p.match?`<b>${esc(p.match.codigo)}</b> ${esc(p.match.descripcion.slice(0,36))}`:'<span class="badge b-ambar">partida libre</span>'}</td>
-        <td class="num">${p.match?fmt(p.match.precio_sugerido):(p.pu?fmt(p.pu):'—')}</td></tr>`).join('')}</tbody></table></div>
-      <div style="margin-top:12px"><button class="btn" onclick="cotizarRequisicion('${esc(obra).replace(/'/g,'')}')">📋 Crear cotización con esto</button></div>`;
+    mxRender('rq-res', reqParsed, obra);
   }catch(e){ st(''); toast(errMsg(e), true); }
   $('rq-btn').disabled = false;
 }
 function cotizarRequisicion(obra){
   window._preCot = reqParsed.map(p=>{
-    if(p.match){
-      const costo = Math.round(+p.match.precio_lista*(1-(+p.match.promo_pct||0))*100)/100;
-      return {codigo:p.match.codigo, desc:p.match.descripcion, cantidad:p.cant, precio:+p.match.precio_sugerido, costo, sugerido:+p.match.precio_sugerido, producto_id:null};
+    const m = p.sel>=0 ? p.alts[p.sel] : null;
+    if(m){
+      const costo = Math.round(+m.precio_lista*(1-(+m.promo_pct||0))*100)/100;
+      return {codigo:m.codigo, desc:m.descripcion, cantidad:p.cant, precio:+m.precio_sugerido, costo, sugerido:+m.precio_sugerido, producto_id:null};
     }
     return {codigo:'', desc:p.desc, cantidad:p.cant, precio:p.pu||0, costo:0, sugerido:p.pu||0, producto_id:null};
   });
