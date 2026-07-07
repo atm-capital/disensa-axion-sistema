@@ -613,7 +613,7 @@ async function buscarCotYa(){
     sb.from('productos').select('id,codigo,descripcion,precio,costo,stock').eq('activo',true)
       .or(`codigo.ilike.${like},descripcion.ilike.${like}`).limit(10),
     sb.from('lista_indar').select('codigo,descripcion,marca,unidad,precio_lista,promo_pct,precio_mayoreo,precio_sugerido')
-      .or(`codigo.ilike.${like},descripcion.ilike.${like}`).limit(20),
+      .or(`codigo.ilike.${like},descripcion.ilike.${like},marca.ilike.${like}`).limit(20),
   ]);
   const miosCod = new Set((mios.data||[]).map(p=>p.codigo));
   let html = (mios.data||[]).map(p=>`
@@ -625,7 +625,7 @@ async function buscarCotYa(){
     const costo = Math.round(+p.precio_lista * (1 - (+p.promo_pct||0)) * 100)/100;
     const pz = pzasDe(p.descripcion);
     return `<div class="it" onclick='agregarCot(${JSON.stringify({c:p.codigo, d:p.descripcion, pr:+p.precio_sugerido, co:costo, su:+p.precio_sugerido, pid:null}).replace(/'/g,"&#39;")})'>
-      <span><b>${esc(p.codigo)}</b> ${esc((p.descripcion||'').slice(0,45))} <span class="badge b-azul">Indar${promo?' · '+Math.round(p.promo_pct*100)+'% promo':''}</span></span>
+      <span><b>${esc(p.codigo)}</b> ${esc((p.descripcion||'').slice(0,42))} <span class="badge b-azul">${esc(p.marca||'Indar')}${promo?' · −'+Math.round(p.promo_pct*100)+'%':''}</span></span>
       <span style="white-space:nowrap">${fmt(p.precio_sugerido)}${pz?`<br><span class="small" style="color:var(--azul)">${fmt(+p.precio_sugerido/pz)}/pza</span>`:''}</span></div>`;
   }).join('');
   $('ct-res').innerHTML = html || '<div class="it muted">Sin resultados en catálogo ni en lista Indar.</div>';
