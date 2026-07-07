@@ -1112,14 +1112,16 @@ async function vFinanzas(){
     <button class="btn sec" onclick="nuevoGasto()">+ Gasto</button>`;
   const hoy = new Date(); hoy.setHours(0,0,0,0);
   const mes = new Date(hoy.getFullYear(), hoy.getMonth(), 1).toISOString().slice(0,10);
-  const [cxp, pagos, gastos, provs, compras] = await Promise.all([
+  const [cxp, pagos, gastos, provs, compras, facts] = await Promise.all([
     sb.from('cuentas_pagar').select('*, proveedores(nombre)').order('fecha_vencimiento'),
     sb.from('pagos_cxp').select('*').gte('fecha', mes),
     sb.from('gastos').select('*').gte('fecha', mes).order('fecha',{ascending:false}),
     sb.from('proveedores').select('id,nombre').order('nombre'),
     sb.from('pedidos_compra').select('total, estado, proveedores(nombre)').gte('fecha', mes).neq('estado','cancelado'),
+    sb.from('facturas').select('*, pedidos_compra(folio_externo)').order('fecha',{ascending:false}).order('folio',{ascending:false}),
   ]);
   for(const r of [cxp,pagos,gastos,provs,compras]) if(r.error) throw r.error;
+  const factRows = facts.error ? null : (facts.data||[]); // null = falta correr 07_facturas_registro.sql
   const META_HOLCIM = 36185.27, INTERES_HOLCIM = 3256.67;
   const compraHolcim = compras.data.filter(c=>/holcim/i.test(c.proveedores?.nombre||'')).reduce((s,c)=>s+ +c.total,0);
   const faltaMeta = Math.max(0, META_HOLCIM - compraHolcim);
@@ -1155,11 +1157,30 @@ async function vFinanzas(){
         <td><span class="badge ${c.estado==='pagada'?'b-verde':c.estado==='parcial'?'b-ambar':'b-gris'}">${c.estado}</span></td>
         <td>${esAdmin() && c.estado!=='pagada' ? `<button class="btn sm" onclick="pagarCuenta(${c.id})">Pagar</button>`:''}</td></tr>`;
       }).join('') || '<tr><td colspan="8" class="muted">Sin cuentas registradas.</td></tr>'}</tbody></table></div></div>
+    <div class="card"><h3>🧾 Facturas</h3>
+      ${factRows === null
+        ? '<p class="small muted">Para activar el archivo de facturas, corre <b>07_facturas_registro.sql</b> en Supabase (SQL Editor). Luego re-sube los XML+PDF en Importar.</p>'
+        : `<div class="tbl-scroll"><table>
+          <thead><tr><th>Tipo</th><th>Folio</th><th>Fecha</th><th>Pedido</th><th class="num">Total</th><th>Vence</th><th>PDF</th></tr></thead>
+          <tbody>${factRows.map(f=>{
+            const tb = {I:'<span class="badge b-azul">Ingreso</span>', T:'<span class="badge b-gris">Traslado</span>', E:'<span class="badge b-ambar">N. crédito</span>'};
+            const v = f.tipo==='I' && f.fecha ? (()=>{const x=aDate(f.fecha); x.setDate(x.getDate()+f.dias); return fecha(x.toISOString().slice(0,10));})() : '—';
+            return `<tr><td>${tb[f.tipo]||esc(f.tipo)}</td><td><b>${esc(f.folio)}</b></td><td>${f.fecha?fecha(f.fecha):'—'}</td>
+              <td>${f.pedidos_compra?.folio_externo ? '#'+esc(f.pedidos_compra.folio_externo) : '<span class="muted small">—</span>'}</td>
+              <td class="num">${fmt(f.total)}</td><td class="small">${v}</td>
+              <td>${f.pdf_path ? `<button class="btn sm sec" onclick="verPdfFactura('${esc(f.pdf_path)}')">📄 Ver</button>` : '<span class="muted small">—</span>'}</td></tr>`;
+          }).join('') || '<tr><td colspan="7" class="muted">Aún no hay facturas archivadas. Súbelas en Importar → Facturas Indar (XML).</td></tr>'}</tbody></table></div>`}
+    </div>
     <div class="card"><h3>Gastos del mes</h3><div class="tbl-scroll"><table>
       <thead><tr><th>Fecha</th><th>Concepto</th><th>Categoría</th><th class="num">Monto</th></tr></thead>
       <tbody>${gastos.data.map(g=>`<tr><td>${fecha(g.fecha)}</td><td>${esc(g.concepto)}</td>
         <td><span class="badge b-gris">${esc(g.categoria)}</span></td><td class="num">${fmt(g.monto)}</td></tr>`).join('')
         || '<tr><td colspan="4" class="muted">Sin gastos este mes.</td></tr>'}</tbody></table></div></div>`;
+}
+async function verPdfFactura(path){
+  const {data, error} = await sb.storage.from('facturas').createSignedUrl(path, 300);
+  if(error || !data?.signedUrl){ toast('No pude abrir el PDF: '+errMsg(error||{}), true); return; }
+  window.open(data.signedUrl, '_blank');
 }
 function pagarCuenta(id){
   const c = cxpData.find(x=>x.id===id);
@@ -1171,15 +1192,27 @@ function pagarCuenta(id){
       <div class="field"><label>Método</label><select id="pg-metodo"><option value="transferencia">Transferencia</option>
         <option value="efectivo">Efectivo</option><option value="cheque">Cheque</option><option value="ak_pago">AK Pago</option></select></div>
     </div>
+    <div class="field"><label>Descuento aplicado (MXN) — Indar lo aplica al pagar
+      <button class="btn sm sec" style="margin-left:8px" onclick="$('pg-desc').value=(${c.saldo}*0.05).toFixed(2);$('pg-monto').value=(${c.saldo}*0.95).toFixed(2)">5% Disensa</button></label>
+      <input id="pg-desc" type="number" step="0.01" value="0"></div>
+    <p class="small muted" style="margin-top:-6px;margin-bottom:10px">Si te descuentan al pagar: pon el descuento y el monto real pagado; el saldo se cierra completo y queda el rastro.</p>
     <div class="field"><label>Referencia (opcional)</label><input id="pg-ref"></div>
     <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cancelar</button>
       <button class="btn" onclick="confirmarPago(${id})">Registrar pago</button></div>`);
 }
 async function confirmarPago(id){
+  const desc = +($('pg-desc')?.value||0);
+  let ref = $('pg-ref').value.trim();
+  if(desc > 0) ref = (ref?ref+' · ':'')+'descuento '+fmt(desc);
   const {error} = await sb.rpc('registrar_pago', {p_cuenta_id:id, p_monto:+$('pg-monto').value,
-    p_metodo:$('pg-metodo').value, p_referencia:$('pg-ref').value.trim()});
+    p_metodo:$('pg-metodo').value, p_referencia:ref});
   if(error){ toast(errMsg(error), true); return; }
-  cerrarModal(); toast('Pago registrado'); vFinanzas();
+  if(desc > 0){ // el descuento cierra el resto del saldo
+    const {data:c2} = await sb.from('cuentas_pagar').select('saldo').eq('id', id).single();
+    if(c2 && +c2.saldo > 0 && +c2.saldo <= desc + 0.01)
+      await sb.from('cuentas_pagar').update({saldo:0, estado:'pagada'}).eq('id', id);
+  }
+  cerrarModal(); toast('Pago registrado'+(desc>0?' con descuento de '+fmt(desc):'')); vFinanzas();
 }
 function nuevaCuenta(){
   abrirModal(`<h3>Nueva cuenta por pagar</h3>
@@ -1336,11 +1369,11 @@ async function vImportar(){
         2) Da clic en el marcador "Enviar a Axion". 3) Elige la cotización. 4) Se abre esta pantalla con todo precargado y confirmas.</p>
       </div>
       <div class="card" style="border-left:4px solid var(--rojo)"><h3>🧾 Facturas Indar (XML) — conciliación automática</h3>
-        <p class="small muted" style="margin-bottom:10px">Sube los <b>XML</b> de las facturas (puedes seleccionar varios a la vez). El sistema distingue:
+        <p class="small muted" style="margin-bottom:10px">Sube los <b>XML y PDF</b> de las facturas, todos juntos (en la ventana: Ctrl+A o Ctrl+clic para marcar varios → Abrir). El sistema distingue:
         <b>Ingreso</b> (compra real → ajusta precios del pedido y crea la cuenta por pagar a su plazo),
-        <b>Traslado</b> (solo envío, se ignora) y <b>Nota de crédito</b> (te avisa para aplicarla).
-        No duplica: si una factura ya está registrada, la salta.</p>
-        <div class="field"><input type="file" id="fx-files" accept=".xml" multiple></div>
+        <b>Traslado</b> (solo envío) y <b>Nota de crédito</b> (te avisa para aplicarla).
+        Todas quedan archivadas en <b>Finanzas → Facturas</b> con su PDF. No duplica: si una ya está registrada, la salta.</p>
+        <div class="field"><input type="file" id="fx-files" accept=".xml,.pdf" multiple></div>
         <button class="btn" id="fx-btn" onclick="leerFacturas()">Leer facturas</button>
         <p class="small" id="fx-status" style="margin-top:8px;font-weight:600"></p>
         <div id="fx-res"></div>
@@ -1443,7 +1476,9 @@ let fxDocs = [], fxPedidos = [];
 function fxParseXML(texto, nombre){
   const doc = new DOMParser().parseFromString(texto, 'text/xml');
   const comp = doc.documentElement;
-  if(!comp || !comp.getAttribute('Total') === undefined) return null;
+  if(!comp || comp.nodeName === 'parsererror' || doc.getElementsByTagName('parsererror').length || !comp.getAttribute('TipoDeComprobante')) return null;
+  const tfd = doc.getElementsByTagName('tfd:TimbreFiscalDigital')[0] || doc.getElementsByTagName('TimbreFiscalDigital')[0];
+  const uuid = ((tfd && tfd.getAttribute('UUID')) || nombre.replace(/\.xml$/i,'')).toUpperCase();
   const conceptos = [...doc.getElementsByTagName('cfdi:Concepto')].concat([...doc.getElementsByTagName('Concepto')]);
   const items = conceptos.map(c=>({
     cod: (c.getAttribute('NoIdentificacion')||'').trim(),
@@ -1454,31 +1489,42 @@ function fxParseXML(texto, nombre){
   })).filter(i=>i.cod);
   const cond = comp.getAttribute('CondicionesDePago')||'';
   const dias = parseInt((cond.match(/(\d+)/)||[])[1]) || 30;
-  return { nombre, folio: comp.getAttribute('Folio')||'?', fecha: (comp.getAttribute('Fecha')||'').slice(0,10),
+  return { nombre, uuid, folio: comp.getAttribute('Folio')||'?', fecha: (comp.getAttribute('Fecha')||'').slice(0,10),
     tipo: comp.getAttribute('TipoDeComprobante')||'?', total: parseFloat(comp.getAttribute('Total')||'0'),
     subtotal: parseFloat(comp.getAttribute('SubTotal')||'0'), dias, items };
 }
+let fxPdfs = {};
 async function leerFacturas(){
   const files = [...$('fx-files').files];
-  if(!files.length){ toast('Elige los XML de las facturas', true); return; }
+  if(!files.length){ toast('Elige los XML (y PDF) de las facturas', true); return; }
   $('fx-btn').disabled = true;
   const st = m => $('fx-status').textContent = m;
   try{
-    st('Leyendo XMLs...');
-    fxDocs = [];
+    st('Leyendo archivos...');
+    fxDocs = []; fxPdfs = {};
+    const errores = [];
     for(const f of files){
-      try{ const d = fxParseXML(await f.text(), f.name); if(d) fxDocs.push(d); }
-      catch(e){ toast('No pude leer '+f.name, true); }
+      if(/\.pdf$/i.test(f.name)){ fxPdfs[f.name.replace(/\.pdf$/i,'').toUpperCase()] = f; continue; }
+      try{
+        const d = fxParseXML(await f.text(), f.name);
+        if(d) fxDocs.push(d); else errores.push(f.name);
+      }catch(e){ errores.push(f.name); }
     }
-    if(!fxDocs.length) throw new Error('Ningún XML válido.');
+    for(const d of fxDocs) d.pdf = fxPdfs[d.uuid] || fxPdfs[d.nombre.replace(/\.xml$/i,'').toUpperCase()] || null;
+    if(!fxDocs.length) throw new Error('Ningún XML válido de '+files.length+' archivo(s).'+(errores.length?' Con error: '+errores.join(', '):''));
     st('Buscando pedidos abiertos...');
     const {data:peds, error} = await sb.from('pedidos_compra').select('id,folio_externo,estado,total, pedido_compra_items(producto_id, productos(codigo))').in('estado',['enviado','parcial']);
     if(error) throw error;
     fxPedidos = (peds||[]).map(p=>({id:p.id, folio:p.folio_externo, total:p.total,
       codes: new Set((p.pedido_compra_items||[]).map(i=>i.productos?.codigo).filter(Boolean))}));
-    // detectar ya registradas
+    // ¿ya están en el registro de facturas? (si la tabla no existe aún, seguimos sin registro)
+    let regUuids = new Set(), hayTabla = true;
+    { const {data:fr, error:eF} = await sb.from('facturas').select('uuid').in('uuid', fxDocs.map(d=>d.uuid));
+      if(eF) hayTabla = false; else regUuids = new Set((fr||[]).map(r=>r.uuid)); }
+    window._fxTabla = hayTabla;
     for(const d of fxDocs){
-      if(d.tipo!=='I'){ d.reg = false; d.pedidoId = null; continue; }
+      d.enRegistro = regUuids.has(d.uuid);
+      if(d.tipo!=='I'){ d.reg = d.enRegistro; d.pedidoId = null; continue; }
       const {data:ya} = await sb.from('cuentas_pagar').select('id').ilike('concepto', `Factura ${d.folio}%`);
       d.reg = !!(ya && ya.length);
       let best = null, bs = 0;
@@ -1490,33 +1536,51 @@ async function leerFacturas(){
       d.pedidoId = (best && bs >= 0.3) ? best.id : null;
       d.matchPct = Math.round(bs*100);
     }
-    st('');
+    const nI = fxDocs.filter(d=>d.tipo==='I').length, nT = fxDocs.filter(d=>d.tipo==='T').length, nE = fxDocs.filter(d=>d.tipo==='E').length;
+    st(`${fxDocs.length} XML leídos (${nI} ingreso, ${nT} traslado${nE?', '+nE+' nota de crédito':''}) · ${Object.keys(fxPdfs).length} PDF` + (errores.length ? ` · ⚠️ sin leer: ${errores.join(', ')}` : ''));
     const tipoB = {I:'<span class="badge b-azul">Ingreso (compra)</span>', T:'<span class="badge b-gris">Traslado (envío)</span>', E:'<span class="badge b-ambar">Nota de crédito</span>'};
+    const pendiente = d => (d.tipo==='I' && !d.reg) || (window._fxTabla && !d.enRegistro);
     $('fx-res').innerHTML = `
       <div class="tbl-scroll" style="margin-top:8px"><table>
-      <thead><tr><th>Tipo</th><th>Folio</th><th>Fecha</th><th class="num">Total</th><th class="num">Conceptos</th><th>Pedido vinculado</th><th>Estado</th></tr></thead>
+      <thead><tr><th>Tipo</th><th>Folio</th><th>Fecha</th><th class="num">Total</th><th class="num">Conceptos</th><th>PDF</th><th>Pedido vinculado</th><th>Estado</th></tr></thead>
       <tbody>${fxDocs.map((d,i)=>`<tr>
         <td>${tipoB[d.tipo]||d.tipo}</td><td><b>${esc(d.folio)}</b></td><td>${d.fecha}</td>
         <td class="num">${fmt(d.total)}</td><td class="num">${d.items.length}</td>
+        <td>${d.pdf ? '📄' : '<span class="muted small">—</span>'}</td>
         <td>${d.tipo==='I' ? `<select onchange="fxDocs[${i}].pedidoId = this.value?+this.value:null">
           <option value="">— sin pedido —</option>
           ${fxPedidos.map(p=>`<option value="${p.id}" ${d.pedidoId===p.id?'selected':''}>#${esc(p.folio)} (${d.pedidoId===p.id?d.matchPct+'% partidas':fmt(p.total)})</option>`).join('')}
         </select>` : '<span class="muted small">n/a</span>'}</td>
-        <td>${d.tipo!=='I' ? (d.tipo==='T'?'<span class="small muted">se ignora</span>':'<span class="small">aplícala con "Pagar" en Finanzas</span>')
-          : (d.reg ? '<span class="badge b-verde">ya registrada</span>' : '<span class="badge b-ambar">por aplicar</span>')}</td>
+        <td>${d.tipo==='I'
+          ? (d.reg ? (d.enRegistro||!window._fxTabla ? '<span class="badge b-verde">ya registrada</span>' : '<span class="badge b-ambar">por archivar</span>') : '<span class="badge b-ambar">por aplicar</span>')
+          : (d.enRegistro ? '<span class="badge b-verde">archivada</span>' : (window._fxTabla ? '<span class="badge b-ambar">por archivar</span>' : '<span class="small muted">'+(d.tipo==='T'?'se ignora':'aplícala con "Pagar" en Finanzas')+'</span>'))}</td>
       </tr>`).join('')}</tbody></table></div>
-      ${fxDocs.some(d=>d.tipo==='I' && !d.reg) ? `<div style="margin-top:12px"><button class="btn" id="fx-aplicar" onclick="aplicarFacturas()">✅ Aplicar facturas nuevas</button></div>` : '<p class="small muted" style="margin-top:10px">No hay facturas nuevas por aplicar.</p>'}`;
+      ${fxDocs.some(pendiente) ? `<div style="margin-top:12px"><button class="btn" id="fx-aplicar" onclick="aplicarFacturas()">✅ Aplicar y archivar</button></div>` : '<p class="small muted" style="margin-top:10px">Todo está aplicado y archivado. Las ves en <b>Finanzas → Facturas</b>.</p>'}`;
   }catch(e){ st(''); toast(errMsg(e), true); }
   $('fx-btn').disabled = false;
+}
+async function fxArchivar(d){ // guarda en tabla facturas + sube PDF (si existen tabla/bucket)
+  if(!window._fxTabla || d.enRegistro) return;
+  let pdfPath = null;
+  if(d.pdf){
+    const {error:eS} = await sb.storage.from('facturas').upload(d.uuid+'.pdf', d.pdf, {upsert:true, contentType:'application/pdf'});
+    if(!eS) pdfPath = d.uuid+'.pdf';
+  }
+  const {error} = await sb.from('facturas').insert({uuid:d.uuid, folio:d.folio, tipo:d.tipo, fecha:d.fecha||null,
+    subtotal:d.subtotal, total:d.total, dias:d.dias, pedido_id:d.pedidoId||null, pdf_path:pdfPath, items:d.items});
+  if(!error) d.enRegistro = true;
 }
 async function aplicarFacturas(){
   $('fx-aplicar').disabled = true;
   const st = m => $('fx-status').textContent = m;
-  let aplicadas = 0, cxpN = 0, partidas = 0;
+  let aplicadas = 0, cxpN = 0, partidas = 0, archivadas = 0;
   try{
     const {data:prov} = await sb.from('proveedores').select('id').eq('nombre','Indar').single();
     for(const d of fxDocs){
-      if(d.tipo!=='I' || d.reg) continue;
+      if(d.tipo!=='I' || d.reg){ // traslados, notas de crédito o ya conciliadas: solo archivar
+        const antes = d.enRegistro; await fxArchivar(d); if(!antes && d.enRegistro) archivadas++;
+        continue;
+      }
       st(`Aplicando factura ${d.folio}...`);
       let folioPed = '';
       if(d.pedidoId){
@@ -1544,10 +1608,11 @@ async function aplicarFacturas(){
         referencia:'PPD crédito '+d.dias+' días · '+d.nombre.slice(0,30),
         fecha_emision:d.fecha, fecha_vencimiento:v.toISOString().slice(0,10), monto:d.total, saldo:d.total});
       if(!eC){ cxpN++; d.reg = true; }
+      const antes = d.enRegistro; await fxArchivar(d); if(!antes && d.enRegistro) archivadas++;
       aplicadas++;
     }
     st('');
-    toast(`✅ ${aplicadas} factura(s) aplicadas: ${cxpN} cuentas por pagar creadas, ${partidas} partidas actualizadas a precio de factura`);
+    toast(`✅ ${aplicadas} factura(s) aplicadas (${cxpN} CxP, ${partidas} partidas a precio de factura) · ${archivadas} archivada(s) en Finanzas → Facturas`);
     leerFacturas();
   }catch(e){ st(''); toast(errMsg(e), true); $('fx-aplicar').disabled = false; }
 }
