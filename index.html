@@ -1094,6 +1094,18 @@ async function axBM(){
     if(!/indar\.mx$/.test(location.hostname)){alert('Este boton se usa dentro de indar.mx (con tu sesion iniciada).');return;}
     var K=document.querySelector('meta[name=csrf-token]');
     var T=K?K.getAttribute('content'):'';
+    if(/detallesProducto/i.test(location.pathname)){
+      var cod=decodeURIComponent(location.pathname.split('/').pop()).replace(/_/g,' ');
+      var ht=document.documentElement.innerHTML;
+      var li=(ht.match(/Precio Lista:[\s\S]{0,120}?\$\s*([\d,]+\.?\d*)/)||[])[1];
+      var su=(ht.match(/sugerido de venta:[\s\S]{0,120}?\$\s*([\d,]+\.?\d*)/)||[])[1];
+      var de=document.querySelector('.purchasedescription');
+      var P1={v:1,tipo:'producto',items:[{c:cod,d:de?de.textContent.trim():cod,l:li?parseFloat(li.replace(/,/g,'')):0,s:su?parseFloat(su.replace(/,/g,'')):0}]};
+      var Q1='https://atm-capital.github.io/disensa-axion-sistema/'+'\x23import='+btoa(unescape(encodeURIComponent(JSON.stringify(P1)))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+      var W1=window.open(Q1,'_blank');
+      if(!W1){var dv=document.createElement('div');dv.style.cssText='position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:99999;background:#26292b;padding:12px 22px;border-radius:10px;font:14px sans-serif;border-left:5px solid #E8790F';var a1=document.createElement('a');a1.href=Q1;a1.target='_blank';a1.textContent='Producto '+cod+' listo - CLIC AQUI para mandarlo a Axion';a1.style.cssText='color:#FBA33C;font-weight:bold';dv.appendChild(a1);document.body.appendChild(dv);a1.onclick=function(){setTimeout(function(){dv.remove();},1500);};}
+      return;
+    }
     var P=async function(u,b){var r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','X-CSRF-TOKEN':T,'X-Requested-With':'XMLHttpRequest'},body:b});return r.json();};
     var M=function(t){var e=document.getElementById('axmsg');if(!e){e=document.createElement('div');e.id='axmsg';e.style.cssText='position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:99999;background:#26292b;color:#fff;padding:12px 22px;border-radius:10px;font:14px sans-serif;border-left:5px solid #E8790F';document.body.appendChild(e);}e.textContent='Axion: '+t;};
     M('leyendo cotizaciones...');
@@ -1108,8 +1120,8 @@ async function axBM(){
     var S=[];
     if(typeof showCotizacionModal==='function'&&/pedidosAnteriores/i.test(location.pathname)){showCotizacionModal(+F);await new Promise(function(r){setTimeout(r,900);});S=L(document);}else{S=L(D);}
     if(!S.length){alert('No encontre las partes de '+F+'. Da clic a la cotizacion para ver sus partes y reintenta.');return;}
+    var vistos={},U=S.filter(function(x){if(vistos[x.id])return false;vistos[x.id]=1;return true;});
     var X=Math.max.apply(null,S.map(function(x){return x.s;}));
-    var vistos={},U=S.filter(function(x){if(x.s!==X||vistos[x.id])return false;vistos[x.id]=1;return true;});
     M('leyendo partidas de '+U.length+' parte(s)...');
     var I={},o,d1,t1,k;
     for(var a=0;a<U.length;a++){o=U[a];d1=await P('/pedidosAnteriores/getDetalleFacturado','id='+o.id);
@@ -1164,6 +1176,19 @@ async function vImportar(){
         <div class="field"><textarea id="imp-manual" rows="3" placeholder="Pega aquí el texto que genera el botón (por si no se abre solo)"></textarea></div>
         <button class="btn sec" onclick="impManual()">Cargar</button>
       </div>`;
+    return;
+  }
+  // producto suelto (S/PEDIDO desde la página del artículo)
+  if(impData.tipo === 'producto'){
+    const p = impData.items[0];
+    $('v-importar').innerHTML = `<div class="card"><h3>➕ Agregar producto a la lista Indar</h3>
+      <p style="margin:8px 0"><img src="https://storage.googleapis.com/indararticulos/${encodeURIComponent(p.c.replace(/ /g,'_'))}_MD.webp" width="60" style="border-radius:6px;vertical-align:middle;margin-right:10px" onerror="this.style.display='none'">
+      <b>${esc(p.c)}</b> · ${esc(p.d)}<br>
+      <span class="small muted">Precio lista: ${fmt(p.l)} + IVA · Sugerido: ${fmt(p.s)} con IVA · Se marcará como "S/PEDIDO" (sobre pedido)</span></p>
+      <div style="display:flex;gap:10px">
+        <button class="btn" onclick="agregarProdLista()">Agregar a la lista (para cotizar)</button>
+        <button class="btn sec" onclick="localStorage.removeItem('ax_import'); vImportar();">Descartar</button>
+      </div></div>`;
     return;
   }
   // hay datos: previsualizar
@@ -1254,6 +1279,15 @@ async function subirListaPrecios(){
     toast(`Lista actualizada: ${regs.length.toLocaleString('es-MX')} productos Indar` + (actualizados?` · ${actualizados} de tus productos con costo/precio nuevos`:''));
   }catch(e){ st(''); toast(errMsg(e), true); }
   $('lp-btn').disabled = false;
+}
+async function agregarProdLista(){
+  const p = impData.items[0];
+  const {error} = await sb.from('lista_indar').upsert({codigo:p.c, descripcion:p.d, categoria:'S/PEDIDO',
+    precio_lista:p.l||0, precio_sugerido:p.s||0, promo_pct:0, actualizado:new Date().toISOString()}, {onConflict:'codigo'});
+  if(error){ toast(errMsg(error), true); return; }
+  localStorage.removeItem('ax_import');
+  toast(p.c+' agregado — ya aparece en el buscador del cotizador');
+  vImportar();
 }
 function impManual(){
   const v = $('imp-manual').value.trim();
