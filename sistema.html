@@ -1793,7 +1793,14 @@ function mxRender(targetId, partidas, obra){
       <td class="num">${comp!==null?`<span class="badge ${comp<=0?'b-verde':(comp<=15?'b-ambar':'b-rojo')}">${comp>0?'+':''}${comp.toFixed(0)}%</span>`:'—'}</td>
       </tr>`;
     }).join('')}</tbody></table></div>
-    <div style="margin-top:10px"><button class="btn" onclick="cotizarRequisicion('${esc(obra||'').replace(/'/g,'')}')">📋 Crear cotización con esto</button></div>`;
+    <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn" onclick="cotizarRequisicion('${esc(obra||'').replace(/'/g,'')}')">📋 Crear cotización con esto</button>
+      ${partidas.some(p=>p.sel<0) ? `<button class="btn sec" onclick="enviarLibres('${esc(obra||'').replace(/'/g,'')}')">📤 Mandar libres a proveedor</button>` : ''}</div>`;
+}
+function enviarLibres(obra){
+  const libres = reqParsed.filter(p=>p.sel<0);
+  if(!libres.length){ toast('No hay partidas libres'); return; }
+  const msj = `Hola, ¿me apoyas con precio y disponibilidad de esto?${obra?' ('+obra+')':''}\n\n` + libres.map(p=>`• ${p.cant} x ${p.desc}`).join('\n') + '\n\nGracias — Axion Tools';
+  window.open('https://wa.me/?text='+encodeURIComponent(msj), '_blank');
 }
 function mxCambiar(targetId, i, v){
   reqParsed[i].sel = +v;
