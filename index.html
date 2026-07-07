@@ -318,12 +318,13 @@ async function vResumen(){
   const hoy = new Date(); hoy.setHours(0,0,0,0);
   const mes = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
   const hace14 = new Date(hoy); hace14.setDate(hace14.getDate()-13);
-  const [ventasMes, prods, cxp] = await Promise.all([
+  const [ventasMes, prods, cxp, pedCurso] = await Promise.all([
     sb.from('ventas').select('fecha,total,cancelada').gte('fecha', mes.toISOString()).eq('cancelada', false),
     sb.from('productos').select('costo,precio,stock,stock_min,activo').eq('activo', true),
     sb.from('cuentas_pagar').select('*, proveedores(nombre)').neq('estado','pagada').order('fecha_vencimiento'),
+    sb.from('pedidos_compra').select('folio_externo,fecha,estado,total,proveedores(nombre)').in('estado',['borrador','enviado','parcial']).order('fecha',{ascending:false}),
   ]);
-  for(const r of [ventasMes,prods,cxp]) if(r.error) throw r.error;
+  for(const r of [ventasMes,prods,cxp,pedCurso]) if(r.error) throw r.error;
   const vHoy = ventasMes.data.filter(v=>new Date(v.fecha)>=hoy);
   const totHoy = vHoy.reduce((s,v)=>s+ +v.total,0);
   const totMes = ventasMes.data.reduce((s,v)=>s+ +v.total,0);
@@ -352,6 +353,13 @@ async function vResumen(){
             <td><span class="badge ${b}">${fecha(c.fecha_vencimiento)} (${dias<0?Math.abs(dias)+' d vencida':dias+' d'})</span></td>
             <td class="num"><b>${fmt(c.saldo)}</b></td></tr>`;
         }).join('') || '<tr><td colspan="4" class="muted">Sin cuentas pendientes 🎉</td></tr>'}</tbody></table></div>
+      </div>
+      <div class="card"><h3>🚚 Pedidos a proveedor en curso</h3>
+        <div class="tbl-scroll"><table><thead><tr><th>Folio</th><th>Proveedor</th><th>Fecha</th><th>Estado</th><th class="num">Total</th></tr></thead>
+        <tbody>${pedCurso.data.map(p=>`<tr style="cursor:pointer" onclick="irA('pedidos')">
+          <td><b>${esc(p.folio_externo)}</b></td><td>${esc(p.proveedores?.nombre)}</td><td>${fecha(p.fecha)}</td>
+          <td><span class="badge ${p.estado==='parcial'?'b-ambar':'b-azul'}">${p.estado}</span></td>
+          <td class="num"><b>${fmt(p.total)}</b></td></tr>`).join('') || '<tr><td colspan="5" class="muted">Nada en camino.</td></tr>'}</tbody></table></div>
       </div>
     </div>`;
 
