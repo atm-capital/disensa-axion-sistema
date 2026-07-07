@@ -1158,7 +1158,10 @@ async function axBM(){
       var li=(ht.match(/Precio Lista:[\s\S]{0,120}?\$\s*([\d,]+\.?\d*)/)||[])[1];
       var su=(ht.match(/sugerido de venta:[\s\S]{0,120}?\$\s*([\d,]+\.?\d*)/)||[])[1];
       var de=document.querySelector('.purchasedescription');
-      var P1={v:1,tipo:'producto',items:[{c:cod,d:de?de.textContent.trim():cod,l:li?parseFloat(li.replace(/,/g,'')):0,s:su?parseFloat(su.replace(/,/g,'')):0}]};
+      var bt=document.body.innerText||'';
+      var ca=(bt.match(/Categor[^:]*:\s*([A-Z0-9\/ .-]{2,25})/)||[])[1];
+      var pc=(bt.match(/Precio Cliente:\s*\(-?([\d.]+)\s*%\)/)||[])[1];
+      var P1={v:1,tipo:'producto',items:[{c:cod,d:de?de.textContent.trim():cod,l:li?parseFloat(li.replace(/,/g,'')):0,s:su?parseFloat(su.replace(/,/g,'')):0,cat:ca?ca.trim():'',pr0:pc?parseFloat(pc):0}]};
       var Q1='https://atm-capital.github.io/disensa-axion-sistema/'+'\x23import='+btoa(unescape(encodeURIComponent(JSON.stringify(P1)))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
       var W1=window.open(Q1,'_blank');
       if(!W1){var dv=document.createElement('div');dv.style.cssText='position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:99999;background:#26292b;padding:12px 22px;border-radius:10px;font:14px sans-serif;border-left:5px solid #E8790F';var a1=document.createElement('a');a1.href=Q1;a1.target='_blank';a1.textContent='Producto '+cod+' listo - CLIC AQUI para mandarlo a Axion';a1.style.cssText='color:#FBA33C;font-weight:bold';dv.appendChild(a1);document.body.appendChild(dv);a1.onclick=function(){setTimeout(function(){dv.remove();},1500);};}
@@ -1242,7 +1245,7 @@ async function vImportar(){
     $('v-importar').innerHTML = `<div class="card"><h3>➕ Agregar producto a la lista Indar</h3>
       <p style="margin:8px 0"><img src="https://storage.googleapis.com/indararticulos/${encodeURIComponent(p.c.replace(/ /g,'_'))}_MD.webp" width="60" style="border-radius:6px;vertical-align:middle;margin-right:10px" onerror="this.style.display='none'">
       <b>${esc(p.c)}</b> · ${esc(p.d)}<br>
-      <span class="small muted">Precio lista: ${fmt(p.l)} + IVA · Sugerido: ${fmt(p.s)} con IVA · Se marcará como "S/PEDIDO" (sobre pedido)</span></p>
+      <span class="small muted">Precio lista: ${fmt(p.l)} + IVA${p.pr0?` · Precio cliente: −${p.pr0}%`:''} · Sugerido: ${fmt(p.s)} con IVA · Categoría: <b>${esc(p.cat||'S/PEDIDO')}</b></span></p>
       <div style="display:flex;gap:10px">
         <button class="btn" onclick="agregarProdLista()">Agregar a la lista (para cotizar)</button>
         <button class="btn sec" onclick="localStorage.removeItem('ax_import'); vImportar();">Descartar</button>
@@ -1340,8 +1343,8 @@ async function subirListaPrecios(){
 }
 async function agregarProdLista(){
   const p = impData.items[0];
-  const {error} = await sb.from('lista_indar').upsert({codigo:p.c, descripcion:p.d, categoria:'S/PEDIDO',
-    precio_lista:p.l||0, precio_sugerido:p.s||0, promo_pct:0, actualizado:new Date().toISOString()}, {onConflict:'codigo'});
+  const {error} = await sb.from('lista_indar').upsert({codigo:p.c, descripcion:p.d, categoria:(p.cat||'S/PEDIDO').trim(),
+    precio_lista:p.l||0, precio_sugerido:p.s||0, promo_pct:(p.pr0||0)/100, actualizado:new Date().toISOString()}, {onConflict:'codigo'});
   if(error){ toast(errMsg(error), true); return; }
   localStorage.removeItem('ax_import');
   toast(p.c+' agregado — ya aparece en el buscador del cotizador');
