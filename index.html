@@ -524,7 +524,8 @@ async function vCotizaciones(){
       <td class="num"><b>${fmt(x.total)}</b></td>
       <td><select onchange="cambiarEstadoCot(${x.id}, this.value)" ${puedeVender()?'':'disabled'}>
         ${['borrador','enviada','aceptada','rechazada','vencida'].map(e=>`<option ${x.estado===e?'selected':''}>${e}</option>`).join('')}</select></td>
-      <td style="white-space:nowrap"><button class="btn sec sm" onclick="imprimirCot(${x.id})">🖨 Imprimir / PDF</button></td>
+      <td style="white-space:nowrap"><button class="btn sec sm" onclick="imprimirCot(${x.id})">🖨 PDF</button>
+        <button class="btn sec sm" onclick="fichasCot(${x.id})">📎 Fichas</button></td>
     </tr>`).join('') || '<tr><td colspan="7" class="muted">Aún no hay cotizaciones. Crea la primera con "+ Nueva cotización".</td></tr>'}</tbody></table></div></div>`;
 }
 async function cambiarEstadoCot(id, estado){
@@ -568,19 +569,20 @@ async function buscarCotYa(){
   if(q.length < 3){ $('ct-res').innerHTML = '<div class="it muted">Escribe 3+ letras…</div>'; return; }
   const like = `%${q.replace(/[%,]/g,' ')}%`;
   const [mios, indar] = await Promise.all([
-    sb.from('productos').select('id,codigo,descripcion,precio,stock').eq('activo',true)
+    sb.from('productos').select('id,codigo,descripcion,precio,costo,stock').eq('activo',true)
       .or(`codigo.ilike.${like},descripcion.ilike.${like}`).limit(10),
     sb.from('lista_indar').select('codigo,descripcion,marca,unidad,precio_lista,promo_pct,precio_mayoreo,precio_sugerido')
       .or(`codigo.ilike.${like},descripcion.ilike.${like}`).limit(20),
   ]);
   const miosCod = new Set((mios.data||[]).map(p=>p.codigo));
   let html = (mios.data||[]).map(p=>`
-    <div class="it" onclick='agregarCot(${JSON.stringify({c:p.codigo, d:p.descripcion, pr:+p.precio, pid:p.id}).replace(/'/g,"&#39;")})'>
+    <div class="it" onclick='agregarCot(${JSON.stringify({c:p.codigo, d:p.descripcion, pr:+p.precio, co:+p.costo, su:+p.precio, pid:p.id}).replace(/'/g,"&#39;")})'>
       <span><b>${esc(p.codigo)}</b> ${esc(p.descripcion.slice(0,45))} <span class="badge b-verde">mío · ${+p.stock} pza</span></span>
       <span>${fmt(p.precio)}</span></div>`).join('');
   html += (indar.data||[]).filter(p=>!miosCod.has(p.codigo)).map(p=>{
     const promo = +p.promo_pct > 0;
-    return `<div class="it" onclick='agregarCot(${JSON.stringify({c:p.codigo, d:p.descripcion, pr:+p.precio_sugerido, pid:null}).replace(/'/g,"&#39;")})'>
+    const costo = Math.round(+p.precio_lista * (1 - (+p.promo_pct||0)) * 100)/100;
+    return `<div class="it" onclick='agregarCot(${JSON.stringify({c:p.codigo, d:p.descripcion, pr:+p.precio_sugerido, co:costo, su:+p.precio_sugerido, pid:null}).replace(/'/g,"&#39;")})'>
       <span><b>${esc(p.codigo)}</b> ${esc((p.descripcion||'').slice(0,45))} <span class="badge b-azul">Indar${promo?' · '+Math.round(p.promo_pct*100)+'% promo':''}</span></span>
       <span>${fmt(p.precio_sugerido)}</span></div>`;
   }).join('');
@@ -589,26 +591,42 @@ async function buscarCotYa(){
 function agregarCot(p){
   const ya = cotCarrito.find(x=>x.codigo===p.c);
   if(ya) ya.cantidad++;
-  else cotCarrito.push({codigo:p.c, desc:p.d, cantidad:1, precio:+(p.pr||0), producto_id:p.pid});
+  else cotCarrito.push({codigo:p.c, desc:p.d, cantidad:1, precio:+(p.pr||0), costo:+(p.co||0), sugerido:+(p.su||0), producto_id:p.pid});
   pintarCot();
 }
 function agregarLibreCot(){
   const d = prompt('Descripción de la partida:'); if(!d) return;
   const pr = +(prompt('Precio unitario (con IVA):')||0);
-  cotCarrito.push({codigo:'', desc:d, cantidad:1, precio:pr, producto_id:null});
+  const co = +(prompt('Tu costo sin IVA (opcional, para ver tu margen — NO se imprime):')||0);
+  cotCarrito.push({codigo:'', desc:d, cantidad:1, precio:pr, costo:co, sugerido:pr, producto_id:null});
   pintarCot();
 }
 function cotCant(i,v){ const n=+v||0; if(n<=0) cotCarrito.splice(i,1); else cotCarrito[i].cantidad=n; pintarCot(); }
 function cotPrecio(i,v){ cotCarrito[i].precio = Math.max(0,+v||0); pintarCot(); }
+function cotPreset(i,v){
+  const c = cotCarrito[i];
+  if(v==='pub') c.precio = c.sugerido;
+  else if(c.costo>0){ const m = {m25:1.25, m20:1.20, m15:1.15, m10:1.10}[v]; if(m) c.precio = Math.round(c.costo*m*1.16*100)/100; }
+  pintarCot();
+}
 function pintarCot(){
-  $('ct-carrito').innerHTML = cotCarrito.map((c,i)=>`
-    <tr><td style="max-width:170px"><b>${esc(c.codigo||'libre')}</b><br><span class="small muted">${esc(c.desc.slice(0,38))}</span></td>
+  $('ct-carrito').innerHTML = cotCarrito.map((c,i)=>{
+    const pct = c.costo>0 ? ((c.precio/1.16 - c.costo)/c.costo*100) : null;
+    const col = pct===null?'var(--gris)':(pct>=25?'var(--verde)':(pct>=12?'var(--ambar)':'var(--rojo)'));
+    return `
+    <tr><td style="max-width:165px"><b>${esc(c.codigo||'libre')}</b><br><span class="small muted">${esc(c.desc.slice(0,36))}</span></td>
     <td><input value="${c.cantidad}" onchange="cotCant(${i},this.value)"></td>
-    <td><input value="${c.precio}" onchange="cotPrecio(${i},this.value)"></td>
-    <td class="num">${fmt(c.cantidad*c.precio)}</td>
-    <td><span class="x" onclick="cotCarrito.splice(${i},1);pintarCot()">✕</span></td></tr>`).join('')
-    || '<tr><td class="muted" style="padding:12px 6px">Busca productos y da clic para agregarlos.</td></tr>';
-  $('ct-total').textContent = fmt(cotCarrito.reduce((s,c)=>s+c.cantidad*c.precio,0));
+    <td><input value="${c.precio}" onchange="cotPrecio(${i},this.value)">
+      <select onchange="cotPreset(${i},this.value);this.value=''" style="width:64px;padding:4px;border:1px solid var(--linea);border-radius:6px;font-size:11px">
+        <option value="">precio…</option><option value="pub">Público</option><option value="m25">May +25%</option><option value="m20">May +20%</option><option value="m15">May +15%</option><option value="m10">May +10%</option></select></td>
+    <td class="num">${fmt(c.cantidad*c.precio)}<br>
+      <span class="small" style="color:${col}">${c.costo>0?`costo ${fmt(c.costo)} · marg ${pct.toFixed(0)}%`:'sin costo'}</span></td>
+    <td><span class="x" onclick="cotCarrito.splice(${i},1);pintarCot()">✕</span></td></tr>`;
+  }).join('') || '<tr><td class="muted" style="padding:12px 6px">Busca productos y da clic para agregarlos.</td></tr>';
+  const tot = cotCarrito.reduce((s,c)=>s+c.cantidad*c.precio,0);
+  const cost = cotCarrito.reduce((s,c)=>s+c.cantidad*(c.costo||0),0);
+  const mg = cost>0 ? ((tot/1.16-cost)/cost*100) : null;
+  $('ct-total').innerHTML = fmt(tot) + (mg!==null?` <span class="small" style="color:var(--gris)">· margen total ${mg.toFixed(1)}% (no se imprime)</span>`:'');
 }
 async function guardarCot(){
   if(!cotCarrito.length){ toast('Agrega al menos una partida', true); return; }
@@ -632,6 +650,20 @@ async function guardarCot(){
     vCotizaciones();
     imprimirCot(cot.id);
   }catch(e){ toast(errMsg(e), true); $('ct-guardar').disabled = false; }
+}
+async function fichasCot(id){
+  const {data, error} = await sb.from('cotizacion_items').select('codigo,descripcion').eq('cotizacion_id',id).order('id');
+  if(error){ toast(errMsg(error),true); return; }
+  const con = data.filter(i=>i.codigo);
+  abrirModal(`<h3>📎 Fichas técnicas de la cotización</h3>
+    <p class="small muted" style="margin-bottom:10px">Cada liga abre el producto en el portal Indar (con tu sesión iniciada); ahí está el botón <b>"Ver ficha técnica"</b> para descargar el PDF y adjuntarlo al correo junto con la cotización.</p>
+    <div class="tbl-scroll" style="max-height:380px;overflow-y:auto"><table><tbody>
+    ${con.map(i=>`<tr><td><img src="https://storage.googleapis.com/indararticulos/${encodeURIComponent(i.codigo.replace(/ /g,'_'))}_MD.webp" width="36" style="border-radius:4px;vertical-align:middle" onerror="this.style.display='none'">
+      <b>${esc(i.codigo)}</b> ${esc(i.descripcion.slice(0,45))}</td>
+      <td><a href="https://indar.mx/portal/detallesProducto/${encodeURIComponent(i.codigo.replace(/ /g,'_'))}" target="_blank" class="link">abrir en Indar →</a></td></tr>`).join('')
+      || '<tr><td class="muted">Solo hay partidas libres (sin código Indar).</td></tr>'}
+    </tbody></table></div>
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
 }
 async function imprimirCot(id){
   const [c, it] = await Promise.all([
@@ -659,10 +691,12 @@ async function imprimirCot(id){
   <div style="text-align:right"><div style="font-size:19px;font-weight:bold">COTIZACIÓN C-${q.folio}</div>
   <div class="mut">Fecha: ${fecha(q.fecha)}<br>Válida hasta: <b>${fecha(vence)}</b></div></div></div>
   <p style="margin-top:14px"><b>Cliente:</b> ${esc(cliente)}${q.clientes?.telefono?' · '+esc(q.clientes.telefono):''}</p>
-  <table><thead><tr><th>Código</th><th>Descripción</th><th class="num">Cantidad</th><th class="num">P. Unitario</th><th class="num">Importe</th></tr></thead>
-  <tbody>${items.map(i=>`<tr><td>${esc(i.codigo)}</td><td>${esc(i.descripcion)}</td>
+  <table><thead><tr><th></th><th>Código</th><th>Descripción</th><th class="num">Cantidad</th><th class="num">P. Unitario</th><th class="num">Importe</th></tr></thead>
+  <tbody>${items.map(i=>`<tr>
+    <td style="width:46px">${i.codigo?`<img src="https://storage.googleapis.com/indararticulos/${encodeURIComponent(i.codigo.replace(/ /g,'_'))}_MD.webp" width="42" style="border-radius:4px" onerror="this.style.display='none'">`:''}</td>
+    <td>${esc(i.codigo)}</td><td>${esc(i.descripcion)}</td>
     <td class="num">${+i.cantidad}</td><td class="num">${fmt(i.precio_unit)}</td><td class="num">${fmt(i.importe)}</td></tr>`).join('')}</tbody>
-  <tfoot><tr><td colspan="4" class="num tot">TOTAL (IVA incluido)</td><td class="num tot">${fmt(q.total)}</td></tr></tfoot></table>
+  <tfoot><tr><td colspan="5" class="num tot">TOTAL (IVA incluido)</td><td class="num tot">${fmt(q.total)}</td></tr></tfoot></table>
   ${q.notas?`<p><b>Notas:</b> ${esc(q.notas)}</p>`:''}
   <div class="pie">Precios en pesos mexicanos con IVA incluido, sujetos a cambio sin previo aviso después de la vigencia. Sujeto a disponibilidad de existencias.</div>
   <p class="noprint" style="margin-top:20px"><button onclick="window.print()" style="padding:10px 18px;background:#E8790F;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer">🖨 Imprimir / Guardar PDF</button></p>
@@ -874,20 +908,43 @@ async function verPedido(id, estado){
   abrirModal(`<h3>Partidas del pedido (${data.length})</h3>
     ${recibiendo?`<p class="small muted" style="margin-bottom:8px">Cuando llegue una entrega, escribe cuántas piezas llegaron en <b>Recibir ahora</b> y da clic en <b>Registrar recepción</b>. Solo lo recibido se suma al inventario; el resto queda pendiente.</p>`:''}
     <div class="tbl-scroll" style="max-height:400px;overflow-y:auto"><table>
-    <thead><tr><th>Producto</th><th class="num">Pedida</th><th class="num">Recibida</th>${recibiendo?'<th class="num">Recibir ahora</th>':''}<th class="num">Costo</th><th class="num">Importe</th></tr></thead>
+    <thead><tr><th>Producto</th><th class="num">Pedida</th><th class="num">Recibida</th>${recibiendo?'<th class="num">Recibir ahora</th>':''}<th class="num">Costo</th><th class="num">Importe</th>${recibiendo?'<th>Quitar</th>':''}</tr></thead>
     <tbody>${data.map(i=>{
       const rec = +(i.cantidad_recibida||0), pend = +i.cantidad - rec;
       return `<tr><td>${esc(i.productos?.codigo)} · ${esc((i.productos?.descripcion||'').slice(0,45))}</td>
-      <td class="num">${+i.cantidad}</td>
+      <td class="num">${recibiendo?`<input id="ped-cant-${i.id}" type="number" min="${Math.max(rec,1)}" value="${+i.cantidad}" style="width:64px;padding:5px;border:1px solid var(--linea);border-radius:6px;text-align:right">`:(+i.cantidad)}</td>
       <td class="num"><span class="badge ${pend<=0?'b-verde':(rec>0?'b-ambar':'b-gris')}">${rec}</span></td>
       ${recibiendo?`<td class="num">${pend>0?`<input id="rec-${i.id}" type="number" min="0" max="${pend}" value="0" style="width:64px;padding:5px;border:1px solid var(--linea);border-radius:6px;text-align:right">`:'✓'}</td>`:''}
-      <td class="num">${fmt(i.costo_unit)}</td><td class="num">${fmt(i.importe)}</td></tr>`;
+      <td class="num">${fmt(i.costo_unit)}</td><td class="num">${fmt(i.importe)}</td>
+      ${recibiendo?`<td style="text-align:center">${rec===0?`<input type="checkbox" id="ped-del-${i.id}">`:''}</td>`:''}</tr>`;
     }).join('')}</tbody>
-    <tfoot><tr><th colspan="${recibiendo?5:4}" class="num">Suma</th><th class="num">${fmt(tot)}</th></tr></tfoot></table></div>
+    <tfoot><tr><th colspan="${recibiendo?6:4}" class="num">Suma</th><th class="num">${fmt(tot)}</th></tr></tfoot></table></div>
     <div class="acciones">
       ${recibiendo?`<button class="btn sec" onclick="llenarPendiente()">Llenar con lo pendiente</button>
-      <button class="btn" onclick="registrarRecepcion(${id})">Registrar recepción</button>`:''}
+      <button class="btn" onclick="registrarRecepcion(${id})">Registrar recepción</button>
+      <button class="btn sec" onclick="guardarCambiosPedido(${id})">💾 Guardar cambios (cantidades/quitar)</button>`:''}
       <button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
+}
+async function guardarCambiosPedido(pedidoId){
+  try{
+    let cambios = 0;
+    for(const i of pedItems){
+      const del = $('ped-del-'+i.id)?.checked;
+      if(del){ const {error} = await sb.from('pedido_compra_items').delete().eq('id', i.id); if(error) throw error; cambios++; continue; }
+      const nc = +($('ped-cant-'+i.id)?.value || i.cantidad);
+      if(nc !== +i.cantidad && nc >= +(i.cantidad_recibida||0)){
+        const {error} = await sb.from('pedido_compra_items').update({cantidad:nc, importe: Math.round(nc * +i.costo_unit * 100)/100}).eq('id', i.id);
+        if(error) throw error; cambios++;
+      }
+    }
+    if(!cambios){ toast('No hay cambios que guardar'); return; }
+    const {data:items, error:e2} = await sb.from('pedido_compra_items').select('importe').eq('pedido_id', pedidoId);
+    if(e2) throw e2;
+    const sub = Math.round(items.reduce((s,i)=>s+ +i.importe,0)*100)/100;
+    const iva = Math.round(sub*16)/100;
+    await sb.from('pedidos_compra').update({subtotal:sub, iva, total: Math.round((sub+iva)*100)/100}).eq('id', pedidoId);
+    cerrarModal(); toast(cambios+' cambio(s) guardados; totales recalculados'); vPedidos();
+  }catch(e){ toast(errMsg(e), true); }
 }
 function llenarPendiente(){
   pedItems.forEach(i=>{ const el=$('rec-'+i.id); if(el) el.value = +i.cantidad - +(i.cantidad_recibida||0); });
