@@ -1335,6 +1335,16 @@ async function vImportar(){
         <p class="small muted"><b>Cómo se usa:</b> 1) Entra a indar.mx con tu usuario → Pedidos → Pedidos Anteriores.
         2) Da clic en el marcador "Enviar a Axion". 3) Elige la cotización. 4) Se abre esta pantalla con todo precargado y confirmas.</p>
       </div>
+      <div class="card" style="border-left:4px solid var(--rojo)"><h3>🧾 Facturas Indar (XML) — conciliación automática</h3>
+        <p class="small muted" style="margin-bottom:10px">Sube los <b>XML</b> de las facturas (puedes seleccionar varios a la vez). El sistema distingue:
+        <b>Ingreso</b> (compra real → ajusta precios del pedido y crea la cuenta por pagar a su plazo),
+        <b>Traslado</b> (solo envío, se ignora) y <b>Nota de crédito</b> (te avisa para aplicarla).
+        No duplica: si una factura ya está registrada, la salta.</p>
+        <div class="field"><input type="file" id="fx-files" accept=".xml" multiple></div>
+        <button class="btn" id="fx-btn" onclick="leerFacturas()">Leer facturas</button>
+        <p class="small" id="fx-status" style="margin-top:8px;font-weight:600"></p>
+        <div id="fx-res"></div>
+      </div>
       <div class="card"><h3>🏗 Cotizar requisición de obra</h3>
         <p class="small muted" style="margin-bottom:10px">Sube el Excel de la requisición (formato constructora). El sistema lee las partidas, las cruza contra el catálogo de ${'23 mil'} y te arma la cotización: lo que hay con su precio, y lo que no como partida libre.</p>
         <div class="field"><input type="file" id="rq-file" accept=".xlsx,.xls"></div>
@@ -1428,6 +1438,119 @@ async function vImportar(){
 }
 let reqParsed = [];
 let plRows = [], plPick = {c:null, d:null}, plSig = '';
+/* ===== FACTURAS XML (CFDI) ===== */
+let fxDocs = [], fxPedidos = [];
+function fxParseXML(texto, nombre){
+  const doc = new DOMParser().parseFromString(texto, 'text/xml');
+  const comp = doc.documentElement;
+  if(!comp || !comp.getAttribute('Total') === undefined) return null;
+  const conceptos = [...doc.getElementsByTagName('cfdi:Concepto')].concat([...doc.getElementsByTagName('Concepto')]);
+  const items = conceptos.map(c=>({
+    cod: (c.getAttribute('NoIdentificacion')||'').trim(),
+    cant: parseFloat(c.getAttribute('Cantidad')||'0'),
+    pu: parseFloat(c.getAttribute('ValorUnitario')||'0'),
+    imp: parseFloat(c.getAttribute('Importe')||'0'),
+    desc: (c.getAttribute('Descripcion')||'').slice(0,60),
+  })).filter(i=>i.cod);
+  const cond = comp.getAttribute('CondicionesDePago')||'';
+  const dias = parseInt((cond.match(/(\d+)/)||[])[1]) || 30;
+  return { nombre, folio: comp.getAttribute('Folio')||'?', fecha: (comp.getAttribute('Fecha')||'').slice(0,10),
+    tipo: comp.getAttribute('TipoDeComprobante')||'?', total: parseFloat(comp.getAttribute('Total')||'0'),
+    subtotal: parseFloat(comp.getAttribute('SubTotal')||'0'), dias, items };
+}
+async function leerFacturas(){
+  const files = [...$('fx-files').files];
+  if(!files.length){ toast('Elige los XML de las facturas', true); return; }
+  $('fx-btn').disabled = true;
+  const st = m => $('fx-status').textContent = m;
+  try{
+    st('Leyendo XMLs...');
+    fxDocs = [];
+    for(const f of files){
+      try{ const d = fxParseXML(await f.text(), f.name); if(d) fxDocs.push(d); }
+      catch(e){ toast('No pude leer '+f.name, true); }
+    }
+    if(!fxDocs.length) throw new Error('Ningún XML válido.');
+    st('Buscando pedidos abiertos...');
+    const {data:peds, error} = await sb.from('pedidos_compra').select('id,folio_externo,estado,total, pedido_compra_items(producto_id, productos(codigo))').in('estado',['enviado','parcial']);
+    if(error) throw error;
+    fxPedidos = (peds||[]).map(p=>({id:p.id, folio:p.folio_externo, total:p.total,
+      codes: new Set((p.pedido_compra_items||[]).map(i=>i.productos?.codigo).filter(Boolean))}));
+    // detectar ya registradas
+    for(const d of fxDocs){
+      if(d.tipo!=='I'){ d.reg = false; d.pedidoId = null; continue; }
+      const {data:ya} = await sb.from('cuentas_pagar').select('id').ilike('concepto', `Factura ${d.folio}%`);
+      d.reg = !!(ya && ya.length);
+      let best = null, bs = 0;
+      for(const p of fxPedidos){
+        const hits = d.items.filter(i=>p.codes.has(i.cod)).length;
+        const s = d.items.length ? hits/d.items.length : 0;
+        if(s > bs){ bs = s; best = p; }
+      }
+      d.pedidoId = (best && bs >= 0.3) ? best.id : null;
+      d.matchPct = Math.round(bs*100);
+    }
+    st('');
+    const tipoB = {I:'<span class="badge b-azul">Ingreso (compra)</span>', T:'<span class="badge b-gris">Traslado (envío)</span>', E:'<span class="badge b-ambar">Nota de crédito</span>'};
+    $('fx-res').innerHTML = `
+      <div class="tbl-scroll" style="margin-top:8px"><table>
+      <thead><tr><th>Tipo</th><th>Folio</th><th>Fecha</th><th class="num">Total</th><th class="num">Conceptos</th><th>Pedido vinculado</th><th>Estado</th></tr></thead>
+      <tbody>${fxDocs.map((d,i)=>`<tr>
+        <td>${tipoB[d.tipo]||d.tipo}</td><td><b>${esc(d.folio)}</b></td><td>${d.fecha}</td>
+        <td class="num">${fmt(d.total)}</td><td class="num">${d.items.length}</td>
+        <td>${d.tipo==='I' ? `<select onchange="fxDocs[${i}].pedidoId = this.value?+this.value:null">
+          <option value="">— sin pedido —</option>
+          ${fxPedidos.map(p=>`<option value="${p.id}" ${d.pedidoId===p.id?'selected':''}>#${esc(p.folio)} (${d.pedidoId===p.id?d.matchPct+'% partidas':fmt(p.total)})</option>`).join('')}
+        </select>` : '<span class="muted small">n/a</span>'}</td>
+        <td>${d.tipo!=='I' ? (d.tipo==='T'?'<span class="small muted">se ignora</span>':'<span class="small">aplícala con "Pagar" en Finanzas</span>')
+          : (d.reg ? '<span class="badge b-verde">ya registrada</span>' : '<span class="badge b-ambar">por aplicar</span>')}</td>
+      </tr>`).join('')}</tbody></table></div>
+      ${fxDocs.some(d=>d.tipo==='I' && !d.reg) ? `<div style="margin-top:12px"><button class="btn" id="fx-aplicar" onclick="aplicarFacturas()">✅ Aplicar facturas nuevas</button></div>` : '<p class="small muted" style="margin-top:10px">No hay facturas nuevas por aplicar.</p>'}`;
+  }catch(e){ st(''); toast(errMsg(e), true); }
+  $('fx-btn').disabled = false;
+}
+async function aplicarFacturas(){
+  $('fx-aplicar').disabled = true;
+  const st = m => $('fx-status').textContent = m;
+  let aplicadas = 0, cxpN = 0, partidas = 0;
+  try{
+    const {data:prov} = await sb.from('proveedores').select('id').eq('nombre','Indar').single();
+    for(const d of fxDocs){
+      if(d.tipo!=='I' || d.reg) continue;
+      st(`Aplicando factura ${d.folio}...`);
+      let folioPed = '';
+      if(d.pedidoId){
+        const ped = fxPedidos.find(p=>p.id===d.pedidoId);
+        folioPed = ped ? ped.folio : '';
+        const {data:its} = await sb.from('pedido_compra_items').select('id,cantidad,cantidad_facturada,productos(codigo)').eq('pedido_id', d.pedidoId);
+        for(const c of d.items){
+          const it = (its||[]).find(x=>x.productos?.codigo===c.cod);
+          if(!it) continue;
+          const upd = {costo_unit: c.pu, importe: Math.round(+it.cantidad * c.pu * 100)/100};
+          try{ upd.cantidad_facturada = (+it.cantidad_facturada||0) + c.cant; }catch(e){}
+          const {error:eU} = await sb.from('pedido_compra_items').update(upd).eq('id', it.id);
+          if(eU){ delete upd.cantidad_facturada; await sb.from('pedido_compra_items').update(upd).eq('id', it.id); }
+          partidas++;
+        }
+        // recalcular totales del pedido
+        const {data:re} = await sb.from('pedido_compra_items').select('importe').eq('pedido_id', d.pedidoId);
+        const sub = Math.round((re||[]).reduce((s,i)=>s+ +i.importe,0)*100)/100;
+        const iva = Math.round(sub*16)/100;
+        await sb.from('pedidos_compra').update({subtotal:sub, iva, total:Math.round((sub+iva)*100)/100}).eq('id', d.pedidoId);
+      }
+      const v = new Date(d.fecha+'T00:00:00'); v.setDate(v.getDate()+d.dias);
+      const {error:eC} = await sb.from('cuentas_pagar').insert({proveedor_id:prov.id,
+        concepto:'Factura '+d.folio+(folioPed?' (pedido '+folioPed+')':''),
+        referencia:'PPD crédito '+d.dias+' días · '+d.nombre.slice(0,30),
+        fecha_emision:d.fecha, fecha_vencimiento:v.toISOString().slice(0,10), monto:d.total, saldo:d.total});
+      if(!eC){ cxpN++; d.reg = true; }
+      aplicadas++;
+    }
+    st('');
+    toast(`✅ ${aplicadas} factura(s) aplicadas: ${cxpN} cuentas por pagar creadas, ${partidas} partidas actualizadas a precio de factura`);
+    leerFacturas();
+  }catch(e){ st(''); toast(errMsg(e), true); $('fx-aplicar').disabled = false; }
+}
 const MX_STOP = new Set(['DE','LA','EL','CON','PARA','DEL','LOS','LAS','EN','POR','SIN','KG','MTS','MM','LTRS','CAL','QUE','UNA','SEGUNDA','BOLSAS','LARGO','COLOR']);
 function mxToks(s){ return normTxt(s).split(/\s+/).filter(t=>t.length>2 && !MX_STOP.has(t)); }
 function mxScore(qToks, candDesc){
