@@ -848,7 +848,52 @@ async function guardarGasto(){
 /* ============================================================
    VISTA: IMPORTAR (pedidos Indar vía botón "Enviar a Axion")
 ============================================================ */
-const BOOKMARKLET = "javascript:(function(){var s=document.createElement('script');s.src='https://atm-capital.github.io/disensa-axion-sistema/importador-indar.js?x='+Date.now();document.body.appendChild(s);})();";
+async function axBM(){
+  try{
+    var A='https://atm-capital.github.io/disensa-axion-sistema/';
+    var B=function(s){return btoa(unescape(encodeURIComponent(s))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');};
+    if(!/indar\.mx$/.test(location.hostname)){alert('Este boton se usa dentro de indar.mx (con tu sesion iniciada).');return;}
+    var K=document.querySelector('meta[name=csrf-token]');
+    var T=K?K.getAttribute('content'):'';
+    var P=async function(u,b){var r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','X-CSRF-TOKEN':T,'X-Requested-With':'XMLHttpRequest'},body:b});return r.json();};
+    var M=function(t){var e=document.getElementById('axmsg');if(!e){e=document.createElement('div');e.id='axmsg';e.style.cssText='position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:99999;background:#26292b;color:#fff;padding:12px 22px;border-radius:10px;font:14px sans-serif;border-left:5px solid #E8790F';document.body.appendChild(e);}e.textContent='Axion: '+t;};
+    M('leyendo cotizaciones...');
+    var D=document;
+    if(!/pedidosAnteriores/i.test(location.pathname)){var h0=await fetch('/pedidosAnteriores').then(function(r){return r.text();});D=new DOMParser().parseFromString(h0,'text/html');}
+    var C=[].slice.call(D.querySelectorAll('.item-box[onclick*=showCotizacionModal]')).map(function(e){var n=(e.getAttribute('onclick').match(/\((\d+)\)/)||[])[1];return {n:n,t:e.textContent.replace(/\s+/g,' ').trim().slice(0,60)};}).filter(function(c){return c.n;});
+    if(!C.length){alert('Abre Pedidos - Pedidos Anteriores y vuelve a dar clic al boton.');return;}
+    var F=prompt('Cual cotizacion importo a Axion Tools?\n\n'+C.map(function(c){return '- '+c.t;}).join('\n')+'\n\nEscribe el numero:',C[0].n);
+    if(!F){var e0=document.getElementById('axmsg');if(e0)e0.remove();return;}
+    M('buscando partes de '+F+'...');
+    var L=function(d){return [].slice.call(d.querySelectorAll('.item-box2[onclick*=openDetail]')).map(function(e){var i=(e.getAttribute('onclick').match(/'(\d+)'/)||[])[1];var m=e.textContent.match(new RegExp(F+'-(\\d+)\\/(\\d+)'));return (m&&i)?{id:i,s:+m[2]}:null;}).filter(Boolean);};
+    var S=[];
+    if(typeof showCotizacionModal==='function'&&/pedidosAnteriores/i.test(location.pathname)){showCotizacionModal(+F);await new Promise(function(r){setTimeout(r,900);});S=L(document);}else{S=L(D);}
+    if(!S.length){alert('No encontre las partes de '+F+'. Da clic a la cotizacion para ver sus partes y reintenta.');return;}
+    var X=Math.max.apply(null,S.map(function(x){return x.s;}));
+    var vistos={},U=S.filter(function(x){if(x.s!==X||vistos[x.id])return false;vistos[x.id]=1;return true;});
+    M('leyendo partidas de '+U.length+' parte(s)...');
+    var I={},o,d1,t1,k;
+    for(var a=0;a<U.length;a++){o=U[a];d1=await P('/pedidosAnteriores/getDetalleFacturado','id='+o.id);
+      if(Array.isArray(d1))for(var b=0;b<d1.length;b++){t1=d1[b];k=t1.itemid;if(!I[k])I[k]={c:k,q:0,e:0,f:0};I[k].q+=+t1.cantPedido||0;I[k].e+=+t1.cantEmpacada||0;I[k].f+=+t1.cantFacturada||0;}}
+    var KS=Object.keys(I);
+    if(!KS.length){alert('Las partes no regresaron partidas. Intenta mas tarde.');return;}
+    for(var n2=0;n2<KS.length;n2++){var c2=KS[n2];M('precios '+(n2+1)+'/'+KS.length+'...');
+      try{var h=await fetch('/portal/detallesProducto/'+encodeURIComponent(c2.replace(/ /g,'_'))).then(function(r){return r.text();});
+        var dd=new DOMParser().parseFromString(h,'text/html');
+        var l=(h.match(/Precio Lista:[\s\S]{0,120}?\$\s*([\d,]+\.?\d*)/)||[])[1];
+        var sg=(h.match(/sugerido de venta:[\s\S]{0,120}?\$\s*([\d,]+\.?\d*)/)||[])[1];
+        I[c2].l=l?parseFloat(l.replace(/,/g,'')):null;
+        I[c2].s=sg?parseFloat(sg.replace(/,/g,'')):null;
+        var pd=dd.querySelector('.purchasedescription');
+        I[c2].d=pd?pd.textContent.trim():c2;
+      }catch(e2){I[c2].d=c2;}}
+    var Y={v:1,tipo:'pedido',folio:String(F),fecha:new Date().toISOString().slice(0,10),serie:X,sos:U.map(function(x){return x.id;}),items:Object.values(I)};
+    M('abriendo Axion Tools...');
+    window.open(A+'\x23import='+B(JSON.stringify(Y)),'_blank');
+    setTimeout(function(){var e3=document.getElementById('axmsg');if(e3)e3.remove();},3000);
+  }catch(e){alert('Axion fallo: '+e.message+'. Reintenta o avisale a Claude.');}
+}
+const BOOKMARKLET = 'javascript:(' + axBM.toString().replace(/\r/g,'').replace(/\n\s*/g,' ') + ')();';
 let impData = null;
 function deB64(s){ s = s.replace(/-/g,'+').replace(/_/g,'/'); return decodeURIComponent(escape(atob(s))); }
 async function vImportar(){
