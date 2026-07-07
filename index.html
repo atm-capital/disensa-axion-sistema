@@ -770,10 +770,12 @@ async function imprimirCot(id){
 ============================================================ */
 let catSel = new Map(), catPagina = 0;
 async function vCatalogo(){
-  const [ma, fa] = await Promise.all([sb.rpc('marcas_indar'), sb.rpc('familias_indar')]);
+  const [ma, fa, ru] = await Promise.all([sb.rpc('marcas_indar'), sb.rpc('familias_indar'), sb.rpc('rubros_indar')]);
   $('v-catalogo').innerHTML = `
     <div class="toolbar">
       <input type="search" id="cat-q" placeholder="Buscar en el catálogo..." oninput="clearTimeout(window._catT); window._catT=setTimeout(()=>{catPagina=0;pintarCatalogo();},350)">
+      <select id="cat-rubro" onchange="catPagina=0;pintarCatalogo()"><option value="">Todos los usos</option>
+        ${(ru.data||[]).map(x=>`<option value="${esc(x.rubro)}">${esc(x.rubro)} (${x.n})</option>`).join('')}</select>
       <select id="cat-marca" onchange="catPagina=0;pintarCatalogo()"><option value="">Todas las marcas</option>
         ${(ma.data||[]).map(x=>`<option value="${esc(x.marca)}">${esc(x.marca)} (${x.n})</option>`).join('')}</select>
       <select id="cat-fam" onchange="catPagina=0;pintarCatalogo()"><option value="">Todas las familias</option>
@@ -786,11 +788,12 @@ async function vCatalogo(){
   pintarCatalogo();
 }
 async function pintarCatalogo(agregar){
-  const q = ($('cat-q')?.value||'').trim(), marca = $('cat-marca')?.value, fam = $('cat-fam')?.value;
+  const q = ($('cat-q')?.value||'').trim(), marca = $('cat-marca')?.value, fam = $('cat-fam')?.value, rubro = $('cat-rubro')?.value;
   let con = sb.from('lista_indar').select('codigo,descripcion,marca,categoria,precio_lista,promo_pct,precio_sugerido').order('descripcion');
   if(q.length>=2){ const like = `%${q.replace(/[%,]/g,' ')}%`; con = con.or(`codigo.ilike.${like},descripcion.ilike.${like}`); }
   if(marca) con = marca==='(sin marca)' ? con.or('marca.is.null,marca.eq.') : con.eq('marca', marca);
   if(fam) con = fam==='(sin familia)' ? con.or('categoria.is.null,categoria.eq.') : con.eq('categoria', fam);
+  if(rubro) con = con.eq('rubro', rubro);
   const desde = catPagina*48;
   const {data, error} = await con.range(desde, desde+47);
   if(error){ toast(errMsg(error), true); return; }
@@ -1007,7 +1010,15 @@ async function vPedidos(){
   const {data, error} = await sb.from('pedidos_compra').select('*, proveedores(nombre)').order('fecha',{ascending:false});
   if(error) throw error;
   const badges = {borrador:'b-gris', enviado:'b-azul', parcial:'b-ambar', recibido:'b-verde', cancelado:'b-rojo'};
+  const porEstado = {};
+  for(const p of data){ if(!porEstado[p.estado]) porEstado[p.estado] = {n:0, t:0}; porEstado[p.estado].n++; porEstado[p.estado].t += +p.total; }
+  const totalGral = data.filter(p=>p.estado!=='cancelado').reduce((s,p)=>s+ +p.total,0);
   $('v-pedidos').innerHTML = `
+    <div class="kpis">
+      ${['enviado','parcial','recibido','borrador','cancelado'].filter(e=>porEstado[e]).map(e=>`
+        <div class="kpi"><div class="l">${e} (${porEstado[e].n})</div><div class="v">${fmt(porEstado[e].t)}</div></div>`).join('')}
+      <div class="kpi"><div class="l">Total pedidos (${data.filter(p=>p.estado!=='cancelado').length})</div><div class="v">${fmt(totalGral)}</div></div>
+    </div>` + `
     <div class="card"><h3>Pedidos de compra</h3>
     <p class="small muted" style="margin-bottom:10px">Los pedidos se capturan en el portal del proveedor (Indar / Holcim) y aquí se registran para dar seguimiento. Al marcar <b>Recibido</b>, las cantidades se suman al inventario automáticamente.</p>
     <div class="tbl-scroll"><table>
