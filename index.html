@@ -525,18 +525,52 @@ async function vCotizaciones(){
       <td><select onchange="cambiarEstadoCot(${x.id}, this.value)" ${puedeVender()?'':'disabled'}>
         ${['borrador','enviada','aceptada','rechazada','vencida'].map(e=>`<option ${x.estado===e?'selected':''}>${e}</option>`).join('')}</select></td>
       <td style="white-space:nowrap"><button class="btn sec sm" onclick="imprimirCot(${x.id})">🖨 PDF</button>
-        <button class="btn sec sm" onclick="fichasCot(${x.id})">📎 Fichas</button></td>
+        <button class="btn sec sm" onclick="fichasCot(${x.id})">📎 Fichas</button>
+        ${puedeVender()?`<button class="btn sec sm" onclick="nuevaCot(${x.id})">✏ Editar</button>`:''}
+        ${esAdmin()?`<button class="btn sec sm" onclick="borrarCot(${x.id}, ${x.folio})">🗑</button>`:''}</td>
     </tr>`).join('') || '<tr><td colspan="7" class="muted">Aún no hay cotizaciones. Crea la primera con "+ Nueva cotización".</td></tr>'}</tbody></table></div></div>`;
 }
 async function cambiarEstadoCot(id, estado){
   const {error} = await sb.from('cotizaciones').update({estado}).eq('id', id);
   toast(error ? errMsg(error) : 'Estado: '+estado, !!error);
 }
-async function nuevaCot(){
-  cotCarrito = [];
+async function borrarCot(id, folio){
+  if(!confirm('¿Borrar la cotización C-'+folio+'? No se puede deshacer.')) return;
+  const {error} = await sb.from('cotizaciones').delete().eq('id', id);
+  if(error){ toast(errMsg(error), true); return; }
+  toast('Cotización C-'+folio+' borrada'); vCotizaciones();
+}
+let cotEditId = null;
+async function nuevaCot(editId){
+  cotCarrito = []; cotEditId = editId || null;
   const c = await sb.from('clientes').select('id,nombre').order('nombre');
   cotClientes = c.data || [];
-  abrirModal(`<h3>Nueva cotización</h3>
+  let ed = null;
+  if(cotEditId){
+    const [q, it] = await Promise.all([
+      sb.from('cotizaciones').select('*').eq('id', cotEditId).single(),
+      sb.from('cotizacion_items').select('*').eq('cotizacion_id', cotEditId).order('id'),
+    ]);
+    if(q.error||it.error){ toast(errMsg(q.error||it.error), true); return; }
+    ed = q.data;
+    cotCarrito = it.data.map(i=>({codigo:i.codigo, desc:i.descripcion, cantidad:+i.cantidad,
+      precio:+i.precio_unit, costo:0, sugerido:+i.precio_unit, producto_id:i.producto_id}));
+    // recuperar costos para ver márgenes
+    const cods = cotCarrito.map(i=>i.codigo).filter(Boolean);
+    if(cods.length){
+      const [mp, li] = await Promise.all([
+        sb.from('productos').select('codigo,costo,precio').in('codigo', cods),
+        sb.from('lista_indar').select('codigo,precio_lista,promo_pct,precio_sugerido').in('codigo', cods),
+      ]);
+      const m1 = new Map((mp.data||[]).map(p=>[p.codigo,p])), m2 = new Map((li.data||[]).map(p=>[p.codigo,p]));
+      for(const it2 of cotCarrito){
+        const a = m1.get(it2.codigo), b = m2.get(it2.codigo);
+        if(a){ it2.costo = +a.costo; it2.sugerido = +a.precio; }
+        else if(b){ it2.costo = Math.round(+b.precio_lista*(1-(+b.promo_pct||0))*100)/100; it2.sugerido = +b.precio_sugerido; }
+      }
+    }
+  }
+  abrirModal(`<h3>${cotEditId?'Editar cotización C-'+ed.folio:'Nueva cotización'}</h3>
     <div class="pos">
       <div>
         <div class="field"><label>Buscar producto (mi catálogo + lista Indar completa)</label>
@@ -547,19 +581,20 @@ async function nuevaCot(){
       <div>
         <div class="frow">
           <div class="field"><label>Cliente registrado</label>
-            <select id="ct-cliente"><option value="">— ninguno —</option>${cotClientes.map(x=>`<option value="${x.id}">${esc(x.nombre)}</option>`).join('')}</select></div>
-          <div class="field"><label>O nombre libre (obra/empresa)</label><input id="ct-cliente-txt" placeholder="Ej. Totalplay obra GDL"></div>
+            <select id="ct-cliente"><option value="">— ninguno —</option>${cotClientes.map(x=>`<option value="${x.id}" ${ed&&ed.cliente_id==x.id?'selected':''}>${esc(x.nombre)}</option>`).join('')}</select></div>
+          <div class="field"><label>O nombre libre (obra/empresa)</label><input id="ct-cliente-txt" placeholder="Ej. Totalplay obra GDL" value="${ed?esc(ed.cliente_texto||''):''}"></div>
         </div>
         <div class="frow">
-          <div class="field"><label>Vigencia (días)</label><input id="ct-vigencia" type="number" value="7"></div>
-          <div class="field"><label>Notas (van impresas)</label><input id="ct-notas" placeholder="Condiciones, entrega..."></div>
+          <div class="field"><label>Vigencia (días)</label><input id="ct-vigencia" type="number" value="${ed?ed.vigencia_dias:7}"></div>
+          <div class="field"><label>Notas (van impresas)</label><input id="ct-notas" placeholder="Condiciones, entrega..." value="${ed?esc(ed.notas||''):''}"></div>
         </div>
         <table class="carrito" style="margin:8px 0"><tbody id="ct-carrito"></tbody></table>
         <div class="tot-line grande"><span>Total (IVA incluido)</span><span id="ct-total">$0.00</span></div>
         <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cancelar</button>
-          <button class="btn" id="ct-guardar" onclick="guardarCot()">Guardar cotización</button></div>
+          <button class="btn" id="ct-guardar" onclick="guardarCot()">${cotEditId?'Guardar cambios':'Guardar cotización'}</button></div>
       </div>
     </div>`, true);
+  pintarCot();
   $('ct-buscar').focus();
 }
 let ctTimer = null;
@@ -633,22 +668,35 @@ async function guardarCot(){
   $('ct-guardar').disabled = true;
   try{
     const total = Math.round(cotCarrito.reduce((s,c)=>s+c.cantidad*c.precio,0)*100)/100;
-    const {data:cot, error:e1} = await sb.from('cotizaciones').insert({
+    const datos = {
       cliente_id: $('ct-cliente').value ? +$('ct-cliente').value : null,
       cliente_texto: $('ct-cliente-txt').value.trim(),
       vigencia_dias: +$('ct-vigencia').value||7,
       subtotal: Math.round(total/1.16*100)/100, total,
-      notas: $('ct-notas').value.trim(), usuario_id: sesion.user.id
-    }).select('id,folio').single();
-    if(e1) throw e1;
+      notas: $('ct-notas').value.trim()
+    };
+    let cotId, folio;
+    if(cotEditId){
+      const {data:q, error:e1} = await sb.from('cotizaciones').update(datos).eq('id', cotEditId).select('id,folio').single();
+      if(e1) throw e1;
+      cotId = q.id; folio = q.folio;
+      const {error:eD} = await sb.from('cotizacion_items').delete().eq('cotizacion_id', cotId);
+      if(eD) throw eD;
+    } else {
+      datos.usuario_id = sesion.user.id;
+      const {data:q, error:e1} = await sb.from('cotizaciones').insert(datos).select('id,folio').single();
+      if(e1) throw e1;
+      cotId = q.id; folio = q.folio;
+    }
     const {error:e2} = await sb.from('cotizacion_items').insert(cotCarrito.map(c=>({
-      cotizacion_id: cot.id, producto_id: c.producto_id, codigo: c.codigo,
+      cotizacion_id: cotId, producto_id: c.producto_id, codigo: c.codigo,
       descripcion: c.desc, cantidad: c.cantidad, precio_unit: c.precio,
       importe: Math.round(c.cantidad*c.precio*100)/100 })));
     if(e2) throw e2;
-    cerrarModal(); toast('Cotización C-'+cot.folio+' guardada');
+    cerrarModal(); toast('Cotización C-'+folio+(cotEditId?' actualizada':' guardada'));
+    cotEditId = null;
     vCotizaciones();
-    imprimirCot(cot.id);
+    imprimirCot(cotId);
   }catch(e){ toast(errMsg(e), true); $('ct-guardar').disabled = false; }
 }
 async function fichasCot(id){
