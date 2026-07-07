@@ -507,14 +507,29 @@ async function guardarVenta(){
 let cotCarrito = [], cotClientes = [];
 async function vCotizaciones(){
   if(puedeVender()) $('vtools').innerHTML = `<button class="btn" onclick="nuevaCot()">+ Nueva cotización</button>`;
-  const [c, li] = await Promise.all([
+  const [c, li, so] = await Promise.all([
     sb.from('cotizaciones').select('*, clientes(nombre), perfiles(nombre)').order('fecha',{ascending:false}).limit(100),
     sb.from('lista_indar').select('codigo', {count:'exact', head:true}),
+    sb.from('solicitudes').select('*').order('creado',{ascending:false}).limit(50),
   ]);
   if(c.error) throw c.error;
+  const sols = so.error ? null : (so.data||[]); // null = falta correr 08_portal_clientes.sql
+  window._sols = sols || [];
+  const nNuevas = (sols||[]).filter(s=>s.estado==='nueva').length;
   const nLista = li.count || 0;
   const bE = {borrador:'b-gris', enviada:'b-azul', aceptada:'b-verde', rechazada:'b-rojo', vencida:'b-ambar'};
   $('v-cotizaciones').innerHTML = `
+    ${sols===null ? '' : `<div class="card" style="border-left:4px solid ${nNuevas?'var(--ambar)':'var(--linea)'}"><h3>🌐 Solicitudes del portal de clientes ${nNuevas?`<span class="badge b-ambar">${nNuevas} nueva(s)</span>`:''}</h3>
+      <p class="small muted" style="margin-bottom:8px">Comparte el catálogo público (sin precios): <a href="https://atm-capital.github.io/disensa-axion-sistema/portal.html" target="_blank"><b>atm-capital.github.io/disensa-axion-sistema/portal.html</b></a> — las solicitudes caen aquí y con un clic las conviertes en cotización.</p>
+      <div class="tbl-scroll"><table><thead><tr><th>Fecha</th><th>Cliente</th><th>Contacto</th><th>Entrega</th><th class="num">Partidas</th><th>Estado</th><th></th></tr></thead>
+      <tbody>${(sols||[]).map(s=>`<tr>
+        <td>${fechaHora(s.creado)}</td><td><b>${esc(s.nombre)}</b>${s.notas?`<br><span class="small muted">${esc(s.notas.slice(0,70))}</span>`:''}</td>
+        <td class="small">${esc(s.contacto)}</td><td class="small">${esc(s.entrega||'—')}</td>
+        <td class="num">${(s.items||[]).length}</td>
+        <td><span class="badge ${s.estado==='nueva'?'b-ambar':s.estado==='atendida'?'b-verde':'b-gris'}">${s.estado}</span></td>
+        <td style="white-space:nowrap">${puedeVender()?`<button class="btn sm" onclick="cotizarSolicitud(${s.id})">💰 Cotizar</button>
+          ${s.estado!=='descartada'?`<button class="btn sec sm" title="Descartar" onclick="estadoSolicitud(${s.id},'descartada')">🗑</button>`:''}`:''}</td>
+      </tr>`).join('') || '<tr><td colspan="7" class="muted">Sin solicitudes aún. Comparte el link del portal con tus clientes.</td></tr>'}</tbody></table></div></div>`}
     ${nLista===0?`<div class="card" style="border-left:4px solid var(--ambar)"><b>Aún no has cargado la lista de precios Indar.</b>
       <span class="small muted">Ve a <b>Importar</b> y sube el archivo ListaPrecios.xlsx (se descarga del portal Indar). Sin ella solo puedes cotizar tus ${''}productos en catálogo.</span></div>`:''}
     <div class="card"><h3>Cotizaciones ${nLista?`<span class="small muted">· lista Indar cargada: ${nLista.toLocaleString('es-MX')} productos</span>`:''}</h3>
@@ -541,6 +556,31 @@ async function borrarCot(id, folio){
   const {error} = await sb.from('cotizaciones').delete().eq('id', id);
   if(error){ toast(errMsg(error), true); return; }
   toast('Cotización C-'+folio+' borrada'); vCotizaciones();
+}
+async function estadoSolicitud(id, estado){
+  const {error} = await sb.from('solicitudes').update({estado}).eq('id', id);
+  toast(error ? errMsg(error) : 'Solicitud '+estado, !!error);
+  if(!error) vCotizaciones();
+}
+async function cotizarSolicitud(id){
+  const s = (window._sols||[]).find(x=>x.id===id);
+  if(!s){ toast('No encontré la solicitud', true); return; }
+  const items = s.items || [];
+  const cods = items.map(i=>i.codigo).filter(Boolean);
+  let M = new Map();
+  if(cods.length){
+    const {data:li} = await sb.from('lista_indar').select('codigo,descripcion,precio_lista,promo_pct,precio_sugerido').in('codigo', cods);
+    M = new Map((li||[]).map(x=>[x.codigo, x]));
+  }
+  window._preCot = items.map(i=>{
+    const x = M.get(i.codigo);
+    const costo = x ? +x.precio_lista * (1 - (+x.promo_pct||0)/100) : 0;
+    return {codigo:i.codigo, desc:i.desc || x?.descripcion || '', cantidad:+i.cantidad||1,
+      precio: x ? +x.precio_sugerido||0 : 0, costo, sugerido: x ? +x.precio_sugerido||0 : 0, producto_id:null};
+  });
+  await sb.from('solicitudes').update({estado:'atendida'}).eq('id', id);
+  toast('Solicitud de '+s.nombre+' cargada al cotizador ('+s.contacto+')');
+  nuevaCot();
 }
 let cotEditId = null;
 async function nuevaCot(editId){
