@@ -598,6 +598,12 @@ async function nuevaCot(editId){
   $('ct-buscar').focus();
 }
 let ctTimer = null;
+const DESC_DISENSA = 0.05; // descuento mínimo Disensa sobre lista Indar (confirmado en factura)
+function pzasDe(d){
+  const s = String(d||'');
+  const m = s.match(/(?:C\/|CON\s+|X\s+)(\d{1,4})\s*P(?:ZA|IEZA)S?/i) || s.match(/\((\d{1,4})\s*P(?:ZA|IEZA)S?\)/i);
+  return m ? +m[1] : null;
+}
 function buscarCot(){ clearTimeout(ctTimer); ctTimer = setTimeout(buscarCotYa, 300); }
 async function buscarCotYa(){
   const q = ($('ct-buscar')?.value||'').trim();
@@ -617,9 +623,10 @@ async function buscarCotYa(){
   html += (indar.data||[]).filter(p=>!miosCod.has(p.codigo)).map(p=>{
     const promo = +p.promo_pct > 0;
     const costo = Math.round(+p.precio_lista * (1 - (+p.promo_pct||0)) * 100)/100;
+    const pz = pzasDe(p.descripcion);
     return `<div class="it" onclick='agregarCot(${JSON.stringify({c:p.codigo, d:p.descripcion, pr:+p.precio_sugerido, co:costo, su:+p.precio_sugerido, pid:null}).replace(/'/g,"&#39;")})'>
       <span><b>${esc(p.codigo)}</b> ${esc((p.descripcion||'').slice(0,45))} <span class="badge b-azul">Indar${promo?' · '+Math.round(p.promo_pct*100)+'% promo':''}</span></span>
-      <span>${fmt(p.precio_sugerido)}</span></div>`;
+      <span style="white-space:nowrap">${fmt(p.precio_sugerido)}${pz?`<br><span class="small" style="color:var(--azul)">${fmt(+p.precio_sugerido/pz)}/pza</span>`:''}</span></div>`;
   }).join('');
   $('ct-res').innerHTML = html || '<div class="it muted">Sin resultados en catálogo ni en lista Indar.</div>';
 }
@@ -646,22 +653,25 @@ function cotPreset(i,v){
 }
 function pintarCot(){
   $('ct-carrito').innerHTML = cotCarrito.map((c,i)=>{
-    const pct = c.costo>0 ? ((c.precio/1.16 - c.costo)/c.costo*100) : null;
+    const costoD = c.costo>0 ? c.costo*(1-DESC_DISENSA) : 0;
+    const pct = costoD>0 ? ((c.precio/1.16 - costoD)/costoD*100) : null;
     const col = pct===null?'var(--gris)':(pct>=25?'var(--verde)':(pct>=12?'var(--ambar)':'var(--rojo)'));
+    const pz = pzasDe(c.desc);
     return `
     <tr><td style="max-width:165px"><b>${esc(c.codigo||'libre')}</b><br><span class="small muted">${esc(c.desc.slice(0,36))}</span></td>
     <td><input value="${c.cantidad}" onchange="cotCant(${i},this.value)"></td>
     <td><input value="${c.precio}" onchange="cotPrecio(${i},this.value)">
       <select onchange="cotPreset(${i},this.value);this.value=''" style="width:64px;padding:4px;border:1px solid var(--linea);border-radius:6px;font-size:11px">
-        <option value="">precio…</option><option value="pub">Público</option><option value="m25">May +25%</option><option value="m20">May +20%</option><option value="m15">May +15%</option><option value="m10">May +10%</option></select></td>
+        <option value="">precio…</option><option value="pub">Público</option><option value="m25">May +25%</option><option value="m20">May +20%</option><option value="m15">May +15%</option><option value="m10">May +10%</option></select>
+      ${pz?`<br><span class="small" style="color:var(--azul)">≈ ${fmt(c.precio/pz)} por pieza (${pz} pzas)</span>`:''}</td>
     <td class="num">${fmt(c.cantidad*c.precio)}<br>
-      <span class="small" style="color:${col}">${c.costo>0?`costo ${fmt(c.costo)} · marg ${pct.toFixed(0)}%`:'sin costo'}</span></td>
+      <span class="small" style="color:${col}">${costoD>0?`lista ${fmt(c.costo)} · Disensa ${fmt(costoD)} · marg ${pct.toFixed(0)}%`:'sin costo'}</span></td>
     <td><span class="x" onclick="cotCarrito.splice(${i},1);pintarCot()">✕</span></td></tr>`;
   }).join('') || '<tr><td class="muted" style="padding:12px 6px">Busca productos y da clic para agregarlos.</td></tr>';
   const tot = cotCarrito.reduce((s,c)=>s+c.cantidad*c.precio,0);
-  const cost = cotCarrito.reduce((s,c)=>s+c.cantidad*(c.costo||0),0);
+  const cost = cotCarrito.reduce((s,c)=>s+c.cantidad*(c.costo||0)*(1-DESC_DISENSA),0);
   const mg = cost>0 ? ((tot/1.16-cost)/cost*100) : null;
-  $('ct-total').innerHTML = fmt(tot) + (mg!==null?` <span class="small" style="color:var(--gris)">· margen total ${mg.toFixed(1)}% (no se imprime)</span>`:'');
+  $('ct-total').innerHTML = fmt(tot) + (mg!==null?` <span class="small" style="color:var(--gris)">· margen total ${mg.toFixed(1)}% con desc. Disensa 5% (no se imprime)</span>`:'');
 }
 async function guardarCot(){
   if(!cotCarrito.length){ toast('Agrega al menos una partida', true); return; }
