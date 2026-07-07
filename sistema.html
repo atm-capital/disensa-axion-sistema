@@ -247,6 +247,7 @@ async function cargarPerfil(){
     $('scr-pendiente').classList.remove('hidden'); return;
   }
   $('scr-app').classList.remove('hidden');
+  iniciarAvisos();
   $('foot-nombre').textContent = perfil.nombre || perfil.correo;
   $('foot-rol').textContent = 'Rol: ' + perfil.rol;
   montarNav();
@@ -561,15 +562,47 @@ async function borrarCot(id, folio){
 async function verAdjuntos(id){
   const s = (window._sols||[]).find(x=>x.id===id);
   if(!s || !(s.adjuntos||[]).length) return;
-  const links = [];
+  const links = [], urls = [];
   for(const a of s.adjuntos){
-    const {data} = await sb.storage.from('proyectos').createSignedUrl(a.ruta, 600);
-    if(data?.signedUrl) links.push(`<p style="margin:7px 0"><a href="${data.signedUrl}" target="_blank">📄 ${esc(a.nombre||a.ruta)}</a></p>`);
+    const {data} = await sb.storage.from('proyectos').createSignedUrl(a.ruta, 604800); // válidos 7 días para compartir
+    if(data?.signedUrl){
+      links.push(`<p style="margin:7px 0"><a href="${data.signedUrl}" target="_blank">📄 ${esc(a.nombre||a.ruta)}</a></p>`);
+      urls.push((a.nombre||a.ruta)+': '+data.signedUrl);
+    }
   }
+  window._compartirMsj = `Solicitud de cotización — ${s.nombre}\nContacto: ${s.contacto}\nEntrega: ${s.entrega||'-'}\n\n${s.notas||''}\n\nArchivos (válidos 7 días):\n${urls.join('\n')}`;
   abrirModal(`<h3>📁 Archivos de ${esc(s.nombre)}</h3>
     <p class="small muted" style="margin-bottom:8px">${esc(s.notas||'')}</p>
     ${links.join('') || '<p class="muted">No se pudieron abrir los archivos.</p>'}
-    <div class="acciones"><button class="btn" onclick="cerrarModal()">Cerrar</button></div>`);
+    <p class="small muted" style="margin-top:10px">Comparte el proyecto completo (descripción + ligas a los archivos, válidas 7 días) con Aceromaq, la constructora o tus contratistas:</p>
+    <div class="acciones">
+      <button class="btn sec" onclick="copiarProyecto()">📋 Copiar todo</button>
+      <button class="btn sec" onclick="compartirProyecto()">💬 WhatsApp</button>
+      <button class="btn" onclick="cerrarModal()">Cerrar</button>
+    </div>`);
+}
+function compartirProyecto(){ window.open('https://wa.me/?text='+encodeURIComponent(window._compartirMsj||''), '_blank'); }
+async function copiarProyecto(){
+  try{ await navigator.clipboard.writeText(window._compartirMsj||''); toast('Copiado — pégalo en correo o WhatsApp'); }
+  catch(e){ toast('No se pudo copiar', true); }
+}
+let _solPrev = null;
+function iniciarAvisos(){
+  if(!puedeVender()) return;
+  try{ if('Notification' in window && Notification.permission === 'default') Notification.requestPermission(); }catch(e){}
+  checarSolicitudes(); setInterval(checarSolicitudes, 60000);
+}
+async function checarSolicitudes(){
+  try{
+    const {count, error} = await sb.from('solicitudes').select('id', {count:'exact', head:true}).eq('estado','nueva');
+    if(error || count === null || count === undefined) return;
+    document.title = (count>0 ? '('+count+') ' : '') + 'Axion Tools · Sistema';
+    if(_solPrev !== null && count > _solPrev){
+      toast('🌐 ¡Nueva solicitud de cotización en el portal!');
+      try{ if(Notification.permission === 'granted') new Notification('Axion Tools', {body:'🌐 Nueva solicitud de cotización del portal — ve a Cotizaciones'}); }catch(e){}
+    }
+    _solPrev = count;
+  }catch(e){}
 }
 async function estadoSolicitud(id, estado){
   const {error} = await sb.from('solicitudes').update({estado}).eq('id', id);
