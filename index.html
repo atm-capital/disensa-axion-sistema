@@ -1436,35 +1436,39 @@ async function leerPedidoLibre(){
   if(!plRows.length){ toast('El archivo está vacío', true); return; }
   const nCols = Math.min(14, Math.max(...plRows.slice(0,15).map(r=>r.length)));
   plSig = 'axmap_' + normTxt(plRows.slice(0,3).flat().join('|')).replace(/\s+/g,'').slice(0,60);
-  const guardado = localStorage.getItem(plSig);
-  plPick = guardado ? JSON.parse(guardado) : {c:null, d:null};
-  $('pl-status').textContent = plPick.c!==null ? '✓ Formato conocido: cantidad y descripción ya asignadas — revisa y dale Cruzar.' : 'Paso 1: da CLIC en el encabezado de la columna de CANTIDAD.';
-  const letras = i => String.fromCharCode(65 + (i%26));
+  let guardado = null;
+  try{ guardado = JSON.parse(localStorage.getItem(plSig)); }catch(e){}
+  plPick = guardado && Array.isArray(guardado.ds) ? guardado : (guardado && guardado.d!==undefined ? {c:guardado.c, ds:guardado.d!==null?[guardado.d]:[]} : {c:null, ds:[]});
+  $('pl-status').textContent = plPick.c!==null ? '✓ Formato conocido — revisa las columnas asignadas y dale Cruzar (o pica columnas para cambiar).' : 'Paso 1: da CLIC en el encabezado de la columna de CANTIDAD.';
   $('pl-prev').innerHTML = `<table><thead><tr>${Array.from({length:nCols},(_,i)=>
-    `<th id="pl-col-${i}" style="cursor:pointer;background:${plPick.c===i?'#dcfce7':plPick.d===i?'#dbeafe':''}" onclick="plElegir(${i})">${letras(i)}${plPick.c===i?' =CANT':plPick.d===i?' =DESC':''}</th>`).join('')}</tr></thead>
+    `<th id="pl-col-${i}" style="cursor:pointer" onclick="plElegir(${i})"></th>`).join('')}</tr></thead>
     <tbody>${plRows.slice(0,10).map(r=>`<tr>${Array.from({length:nCols},(_,i)=>`<td class="small">${esc(String(r[i]??'').slice(0,22))}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
-  $('pl-res').innerHTML = plPick.c!==null&&plPick.d!==null ? `<button class="btn" style="margin-top:10px" onclick="cruzarPedidoLibre()">Cruzar contra catálogo</button>` : '';
+  leerPedidoLibreRefresca();
 }
 function plElegir(i){
-  if(plPick.c===null || (plPick.c!==null && plPick.d!==null)){ plPick = {c:i, d:null}; $('pl-status').textContent = 'Paso 2: ahora da CLIC en la columna de DESCRIPCIÓN.'; }
-  else if(plPick.d===null && i!==plPick.c){ plPick.d = i; $('pl-status').textContent = '✓ Listo — dale "Cruzar contra catálogo".'; localStorage.setItem(plSig, JSON.stringify(plPick)); }
+  if(plPick.c===null){ plPick.c = i; $('pl-status').textContent = 'Paso 2: da CLIC en la columna de DESCRIPCIÓN.'; }
+  else if(i===plPick.c){ plPick = {c:null, ds:[]}; $('pl-status').textContent = 'Paso 1: da CLIC en la columna de CANTIDAD.'; }
+  else if(plPick.ds.includes(i)){ plPick.ds = plPick.ds.filter(x=>x!==i); }
+  else { plPick.ds.push(i); $('pl-status').textContent = '✓ Listo. Opcional: pica MÁS columnas de texto (especificaciones, detalle…) para sumarlas a la búsqueda, o dale Cruzar. Pica una asignada para quitarla.'; }
+  if(plPick.c!==null && plPick.ds.length) localStorage.setItem(plSig, JSON.stringify(plPick));
   leerPedidoLibreRefresca();
 }
 function leerPedidoLibreRefresca(){
-  const nCols = Math.min(14, Math.max(...plRows.slice(0,15).map(r=>r.length)));
   const letras = i => String.fromCharCode(65 + (i%26));
   document.querySelectorAll('[id^=pl-col-]').forEach((th,i)=>{
-    th.style.background = plPick.c===i?'#dcfce7':plPick.d===i?'#dbeafe':'';
-    th.textContent = letras(i) + (plPick.c===i?' =CANT':plPick.d===i?' =DESC':'');
+    const nd = plPick.ds.indexOf(i);
+    th.style.background = plPick.c===i?'#dcfce7':(nd>=0?'#dbeafe':'');
+    th.textContent = letras(i) + (plPick.c===i?' =CANT':(nd===0?' =DESC':(nd>0?' +DESC'+(nd+1):'')));
   });
-  $('pl-res').innerHTML = (plPick.c!==null&&plPick.d!==null) ? `<button class="btn" style="margin-top:10px" onclick="cruzarPedidoLibre()">Cruzar contra catálogo</button>` : '';
+  $('pl-res').innerHTML = (plPick.c!==null && plPick.ds.length) ? `<button class="btn" style="margin-top:10px" onclick="cruzarPedidoLibre()">Cruzar contra catálogo</button>` : '';
 }
 async function cruzarPedidoLibre(){
   const partidas = [];
   for(const r of plRows){
     const cant = parseFloat(String(r[plPick.c]??'').replace(/[$,]/g,''));
-    const desc = String(r[plPick.d]??'').trim();
-    if(!isFinite(cant) || cant<=0 || desc.length<4 || !isNaN(parseFloat(desc))) continue;
+    const desc = plPick.ds.map(d=>String(r[d]??'').trim()).filter(Boolean).join(' · ');
+    const d0 = String(r[plPick.ds[0]]??'').trim();
+    if(!isFinite(cant) || cant<=0 || d0.length<4 || !isNaN(parseFloat(d0))) continue;
     partidas.push({cant, desc, pu:null});
   }
   if(!partidas.length){ toast('No encontré renglones válidos con ese mapeo — revisa las columnas', true); return; }
