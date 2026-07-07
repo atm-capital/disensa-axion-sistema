@@ -523,7 +523,7 @@ async function vCotizaciones(){
     ${sols===null ? '' : `<div class="card" style="border-left:4px solid ${nNuevas?'var(--ambar)':'var(--linea)'}"><h3>🌐 Solicitudes del portal de clientes ${nNuevas?`<span class="badge b-ambar">${nNuevas} nueva(s)</span>`:''}</h3>
       <p class="small muted" style="margin-bottom:8px">Comparte el catálogo público (sin precios): <a href="https://axiontools.mx" target="_blank"><b>axiontools.mx</b></a> — las solicitudes caen aquí y con un clic las conviertes en cotización.</p>
       <div class="tbl-scroll"><table><thead><tr><th>Fecha</th><th>Cliente</th><th>Contacto</th><th>Entrega</th><th class="num">Partidas</th><th>Estado</th><th></th></tr></thead>
-      <tbody>${(sols||[]).map(s=>`<tr>
+      <tbody>${(sols||[]).filter(s=>s.estado!=='descartada').map(s=>`<tr>
         <td>${fechaHora(s.creado)}</td><td><b>${esc(s.nombre)}</b>${s.notas?`<br><span class="small muted">${esc(s.notas.slice(0,70))}</span>`:''}</td>
         <td class="small">${esc(s.contacto)}</td><td class="small">${esc(s.entrega||'—')}</td>
         <td class="num">${s.tipo==='proyecto' ? '<span class="badge b-azul">🏗 proyecto</span>' : (s.items||[]).length + ((s.items||[]).some(i=>i.ficha) ? ' <span class="badge b-ambar" title="Pide fichas técnicas">📎</span>' : '')}
