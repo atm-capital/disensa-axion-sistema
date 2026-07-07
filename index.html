@@ -6,6 +6,7 @@
 <title>Axion Tools · Sistema</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
 :root{--rojo:#E8790F;--rojo-d:#c76408;--tinta:#33383b;--tinta-2:#26292b;--gris:#6b7280;
 --linea:#e7e2d8;--fondo:#f5f1e8;--blanco:#fff;--verde:#16a34a;--ambar:#d97706;--azul:#2563eb}
@@ -169,6 +170,7 @@ tr:hover td{background:#f9fafb}
     <div class="wrap">
       <div id="v-resumen" class="view"></div>
       <div id="v-ventas" class="view"></div>
+      <div id="v-cotizaciones" class="view"></div>
       <div id="v-inventario" class="view"></div>
       <div id="v-clientes" class="view"></div>
       <div id="v-pedidos" class="view"></div>
@@ -276,6 +278,7 @@ async function logout(){ await sb.auth.signOut(); location.reload(); }
 const VISTAS = [
   {id:'resumen',    icono:'📊', titulo:'Resumen',    roles:['admin','vendedor','consulta']},
   {id:'ventas',     icono:'🧾', titulo:'Ventas',     roles:['admin','vendedor','consulta']},
+  {id:'cotizaciones', icono:'📋', titulo:'Cotizaciones', roles:['admin','vendedor','consulta']},
   {id:'inventario', icono:'📦', titulo:'Inventario', roles:['admin','vendedor','consulta']},
   {id:'clientes',   icono:'👥', titulo:'Clientes',   roles:['admin','vendedor','consulta']},
   {id:'pedidos',    icono:'🚚', titulo:'Pedidos a proveedor', roles:['admin','vendedor','consulta']},
@@ -297,7 +300,7 @@ async function irA(id){
   $('vtitle').textContent = VISTAS.find(v=>v.id===id).titulo;
   $('vtools').innerHTML = '';
   $('sidebar').classList.remove('open');
-  try { await ({resumen:vResumen, ventas:vVentas, inventario:vInventario, clientes:vClientes,
+  try { await ({resumen:vResumen, ventas:vVentas, cotizaciones:vCotizaciones, inventario:vInventario, clientes:vClientes,
     pedidos:vPedidos, finanzas:vFinanzas, usuarios:vUsuarios, importar:vImportar})[id](); }
   catch(e){ toast(errMsg(e), true); }
 }
@@ -486,6 +489,177 @@ async function guardarVenta(){
   if(error){ toast(errMsg(error), true); $('nv-guardar').disabled = false; return; }
   cerrarModal(); toast(`Venta #${data.folio} registrada · ${fmt(data.total)}`);
   vVentas();
+}
+
+/* ============================================================
+   VISTA: COTIZACIONES
+============================================================ */
+let cotCarrito = [], cotClientes = [];
+async function vCotizaciones(){
+  if(puedeVender()) $('vtools').innerHTML = `<button class="btn" onclick="nuevaCot()">+ Nueva cotización</button>`;
+  const [c, li] = await Promise.all([
+    sb.from('cotizaciones').select('*, clientes(nombre), perfiles(nombre)').order('fecha',{ascending:false}).limit(100),
+    sb.from('lista_indar').select('codigo', {count:'exact', head:true}),
+  ]);
+  if(c.error) throw c.error;
+  const nLista = li.count || 0;
+  const bE = {borrador:'b-gris', enviada:'b-azul', aceptada:'b-verde', rechazada:'b-rojo', vencida:'b-ambar'};
+  $('v-cotizaciones').innerHTML = `
+    ${nLista===0?`<div class="card" style="border-left:4px solid var(--ambar)"><b>Aún no has cargado la lista de precios Indar.</b>
+      <span class="small muted">Ve a <b>Importar</b> y sube el archivo ListaPrecios.xlsx (se descarga del portal Indar). Sin ella solo puedes cotizar tus ${''}productos en catálogo.</span></div>`:''}
+    <div class="card"><h3>Cotizaciones ${nLista?`<span class="small muted">· lista Indar cargada: ${nLista.toLocaleString('es-MX')} productos</span>`:''}</h3>
+    <div class="tbl-scroll"><table><thead><tr><th>Folio</th><th>Fecha</th><th>Cliente</th><th>Hizo</th><th class="num">Total</th><th>Estado</th><th></th></tr></thead>
+    <tbody>${c.data.map(x=>`<tr>
+      <td><b>C-${x.folio}</b></td><td>${fechaHora(x.fecha)}</td>
+      <td>${esc(x.clientes?.nombre || x.cliente_texto || 'Sin cliente')}</td>
+      <td>${esc(x.perfiles?.nombre||'')}</td>
+      <td class="num"><b>${fmt(x.total)}</b></td>
+      <td><select onchange="cambiarEstadoCot(${x.id}, this.value)" ${puedeVender()?'':'disabled'}>
+        ${['borrador','enviada','aceptada','rechazada','vencida'].map(e=>`<option ${x.estado===e?'selected':''}>${e}</option>`).join('')}</select></td>
+      <td style="white-space:nowrap"><button class="btn sec sm" onclick="imprimirCot(${x.id})">🖨 Imprimir / PDF</button></td>
+    </tr>`).join('') || '<tr><td colspan="7" class="muted">Aún no hay cotizaciones. Crea la primera con "+ Nueva cotización".</td></tr>'}</tbody></table></div></div>`;
+}
+async function cambiarEstadoCot(id, estado){
+  const {error} = await sb.from('cotizaciones').update({estado}).eq('id', id);
+  toast(error ? errMsg(error) : 'Estado: '+estado, !!error);
+}
+async function nuevaCot(){
+  cotCarrito = [];
+  const c = await sb.from('clientes').select('id,nombre').order('nombre');
+  cotClientes = c.data || [];
+  abrirModal(`<h3>Nueva cotización</h3>
+    <div class="pos">
+      <div>
+        <div class="field"><label>Buscar producto (mi catálogo + lista Indar completa)</label>
+          <input id="ct-buscar" placeholder="Escribe 3+ letras: cemento, pinza, taquete..." oninput="buscarCot()"></div>
+        <div class="prod-res" id="ct-res"><div class="it muted">Escribe para buscar…</div></div>
+        <p class="small muted" style="margin-top:6px">También puedes agregar una <button class="link" onclick="agregarLibreCot()">partida libre</button> (texto y precio a mano).</p>
+      </div>
+      <div>
+        <div class="frow">
+          <div class="field"><label>Cliente registrado</label>
+            <select id="ct-cliente"><option value="">— ninguno —</option>${cotClientes.map(x=>`<option value="${x.id}">${esc(x.nombre)}</option>`).join('')}</select></div>
+          <div class="field"><label>O nombre libre (obra/empresa)</label><input id="ct-cliente-txt" placeholder="Ej. Totalplay obra GDL"></div>
+        </div>
+        <div class="frow">
+          <div class="field"><label>Vigencia (días)</label><input id="ct-vigencia" type="number" value="7"></div>
+          <div class="field"><label>Notas (van impresas)</label><input id="ct-notas" placeholder="Condiciones, entrega..."></div>
+        </div>
+        <table class="carrito" style="margin:8px 0"><tbody id="ct-carrito"></tbody></table>
+        <div class="tot-line grande"><span>Total (IVA incluido)</span><span id="ct-total">$0.00</span></div>
+        <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cancelar</button>
+          <button class="btn" id="ct-guardar" onclick="guardarCot()">Guardar cotización</button></div>
+      </div>
+    </div>`, true);
+  $('ct-buscar').focus();
+}
+let ctTimer = null;
+function buscarCot(){ clearTimeout(ctTimer); ctTimer = setTimeout(buscarCotYa, 300); }
+async function buscarCotYa(){
+  const q = ($('ct-buscar')?.value||'').trim();
+  if(q.length < 3){ $('ct-res').innerHTML = '<div class="it muted">Escribe 3+ letras…</div>'; return; }
+  const like = `%${q.replace(/[%,]/g,' ')}%`;
+  const [mios, indar] = await Promise.all([
+    sb.from('productos').select('id,codigo,descripcion,precio,stock').eq('activo',true)
+      .or(`codigo.ilike.${like},descripcion.ilike.${like}`).limit(10),
+    sb.from('lista_indar').select('codigo,descripcion,marca,unidad,precio_lista,promo_pct,precio_mayoreo,precio_sugerido')
+      .or(`codigo.ilike.${like},descripcion.ilike.${like}`).limit(20),
+  ]);
+  const miosCod = new Set((mios.data||[]).map(p=>p.codigo));
+  let html = (mios.data||[]).map(p=>`
+    <div class="it" onclick='agregarCot(${JSON.stringify({c:p.codigo, d:p.descripcion, pr:+p.precio, pid:p.id}).replace(/'/g,"&#39;")})'>
+      <span><b>${esc(p.codigo)}</b> ${esc(p.descripcion.slice(0,45))} <span class="badge b-verde">mío · ${+p.stock} pza</span></span>
+      <span>${fmt(p.precio)}</span></div>`).join('');
+  html += (indar.data||[]).filter(p=>!miosCod.has(p.codigo)).map(p=>{
+    const promo = +p.promo_pct > 0;
+    return `<div class="it" onclick='agregarCot(${JSON.stringify({c:p.codigo, d:p.descripcion, pr:+p.precio_sugerido, pid:null}).replace(/'/g,"&#39;")})'>
+      <span><b>${esc(p.codigo)}</b> ${esc((p.descripcion||'').slice(0,45))} <span class="badge b-azul">Indar${promo?' · '+Math.round(p.promo_pct*100)+'% promo':''}</span></span>
+      <span>${fmt(p.precio_sugerido)}</span></div>`;
+  }).join('');
+  $('ct-res').innerHTML = html || '<div class="it muted">Sin resultados en catálogo ni en lista Indar.</div>';
+}
+function agregarCot(p){
+  const ya = cotCarrito.find(x=>x.codigo===p.c);
+  if(ya) ya.cantidad++;
+  else cotCarrito.push({codigo:p.c, desc:p.d, cantidad:1, precio:+(p.pr||0), producto_id:p.pid});
+  pintarCot();
+}
+function agregarLibreCot(){
+  const d = prompt('Descripción de la partida:'); if(!d) return;
+  const pr = +(prompt('Precio unitario (con IVA):')||0);
+  cotCarrito.push({codigo:'', desc:d, cantidad:1, precio:pr, producto_id:null});
+  pintarCot();
+}
+function cotCant(i,v){ const n=+v||0; if(n<=0) cotCarrito.splice(i,1); else cotCarrito[i].cantidad=n; pintarCot(); }
+function cotPrecio(i,v){ cotCarrito[i].precio = Math.max(0,+v||0); pintarCot(); }
+function pintarCot(){
+  $('ct-carrito').innerHTML = cotCarrito.map((c,i)=>`
+    <tr><td style="max-width:170px"><b>${esc(c.codigo||'libre')}</b><br><span class="small muted">${esc(c.desc.slice(0,38))}</span></td>
+    <td><input value="${c.cantidad}" onchange="cotCant(${i},this.value)"></td>
+    <td><input value="${c.precio}" onchange="cotPrecio(${i},this.value)"></td>
+    <td class="num">${fmt(c.cantidad*c.precio)}</td>
+    <td><span class="x" onclick="cotCarrito.splice(${i},1);pintarCot()">✕</span></td></tr>`).join('')
+    || '<tr><td class="muted" style="padding:12px 6px">Busca productos y da clic para agregarlos.</td></tr>';
+  $('ct-total').textContent = fmt(cotCarrito.reduce((s,c)=>s+c.cantidad*c.precio,0));
+}
+async function guardarCot(){
+  if(!cotCarrito.length){ toast('Agrega al menos una partida', true); return; }
+  $('ct-guardar').disabled = true;
+  try{
+    const total = Math.round(cotCarrito.reduce((s,c)=>s+c.cantidad*c.precio,0)*100)/100;
+    const {data:cot, error:e1} = await sb.from('cotizaciones').insert({
+      cliente_id: $('ct-cliente').value ? +$('ct-cliente').value : null,
+      cliente_texto: $('ct-cliente-txt').value.trim(),
+      vigencia_dias: +$('ct-vigencia').value||7,
+      subtotal: Math.round(total/1.16*100)/100, total,
+      notas: $('ct-notas').value.trim(), usuario_id: sesion.user.id
+    }).select('id,folio').single();
+    if(e1) throw e1;
+    const {error:e2} = await sb.from('cotizacion_items').insert(cotCarrito.map(c=>({
+      cotizacion_id: cot.id, producto_id: c.producto_id, codigo: c.codigo,
+      descripcion: c.desc, cantidad: c.cantidad, precio_unit: c.precio,
+      importe: Math.round(c.cantidad*c.precio*100)/100 })));
+    if(e2) throw e2;
+    cerrarModal(); toast('Cotización C-'+cot.folio+' guardada');
+    vCotizaciones();
+    imprimirCot(cot.id);
+  }catch(e){ toast(errMsg(e), true); $('ct-guardar').disabled = false; }
+}
+async function imprimirCot(id){
+  const [c, it] = await Promise.all([
+    sb.from('cotizaciones').select('*, clientes(nombre,telefono,correo)').eq('id',id).single(),
+    sb.from('cotizacion_items').select('*').eq('cotizacion_id',id).order('id'),
+  ]);
+  if(c.error||it.error){ toast(errMsg(c.error||it.error),true); return; }
+  const q = c.data, items = it.data;
+  const cliente = q.clientes?.nombre || q.cliente_texto || 'Público en general';
+  const vence = new Date(q.fecha); vence.setDate(vence.getDate()+q.vigencia_dias);
+  const w = window.open('','_blank');
+  if(!w){ toast('Permite las ventanas emergentes para imprimir', true); return; }
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Cotización C-${q.folio} · Axion Tools</title>
+  <style>body{font-family:'Segoe UI',sans-serif;color:#26292b;margin:36px;font-size:13px}
+  .top{display:flex;justify-content:space-between;align-items:center;border-bottom:3px solid #E8790F;padding-bottom:12px}
+  h1{font-size:24px;margin:0}h1 b{color:#E8790F}.mut{color:#777;font-size:11.5px}
+  table{width:100%;border-collapse:collapse;margin-top:16px}
+  th{text-align:left;background:#26292b;color:#fff;padding:7px 9px;font-size:11px;text-transform:uppercase}
+  td{padding:7px 9px;border-bottom:1px solid #e5e5e5}
+  .num{text-align:right}.tot{font-size:17px;font-weight:bold}
+  .pie{margin-top:26px;font-size:11px;color:#777;border-top:1px solid #ddd;padding-top:10px}
+  @media print{.noprint{display:none}}</style></head><body>
+  <div class="top"><div><h1>AXI⬡N <b>TOOLS</b></h1><div class="mut">Distribuidora Axion · Ferretería y materiales · Disensa<br>
+  Av. Fidel Velázquez Sánchez 788, Santa Elena Estadio, Guadalajara, Jal. · Tel 33 1010 7423</div></div>
+  <div style="text-align:right"><div style="font-size:19px;font-weight:bold">COTIZACIÓN C-${q.folio}</div>
+  <div class="mut">Fecha: ${fecha(q.fecha)}<br>Válida hasta: <b>${fecha(vence)}</b></div></div></div>
+  <p style="margin-top:14px"><b>Cliente:</b> ${esc(cliente)}${q.clientes?.telefono?' · '+esc(q.clientes.telefono):''}</p>
+  <table><thead><tr><th>Código</th><th>Descripción</th><th class="num">Cantidad</th><th class="num">P. Unitario</th><th class="num">Importe</th></tr></thead>
+  <tbody>${items.map(i=>`<tr><td>${esc(i.codigo)}</td><td>${esc(i.descripcion)}</td>
+    <td class="num">${+i.cantidad}</td><td class="num">${fmt(i.precio_unit)}</td><td class="num">${fmt(i.importe)}</td></tr>`).join('')}</tbody>
+  <tfoot><tr><td colspan="4" class="num tot">TOTAL (IVA incluido)</td><td class="num tot">${fmt(q.total)}</td></tr></tfoot></table>
+  ${q.notas?`<p><b>Notas:</b> ${esc(q.notas)}</p>`:''}
+  <div class="pie">Precios en pesos mexicanos con IVA incluido, sujetos a cambio sin previo aviso después de la vigencia. Sujeto a disponibilidad de existencias.</div>
+  <p class="noprint" style="margin-top:20px"><button onclick="window.print()" style="padding:10px 18px;background:#E8790F;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer">🖨 Imprimir / Guardar PDF</button></p>
+  </body></html>`);
+  w.document.close();
 }
 
 /* ============================================================
@@ -888,9 +1062,10 @@ async function axBM(){
         I[c2].d=pd?pd.textContent.trim():c2;
       }catch(e2){I[c2].d=c2;}}
     var Y={v:1,tipo:'pedido',folio:String(F),fecha:new Date().toISOString().slice(0,10),serie:X,sos:U.map(function(x){return x.id;}),items:Object.values(I)};
-    M('abriendo Axion Tools...');
-    window.open(A+'\x23import='+B(JSON.stringify(Y)),'_blank');
-    setTimeout(function(){var e3=document.getElementById('axmsg');if(e3)e3.remove();},3000);
+    var Q=A+'\x23import='+B(JSON.stringify(Y));
+    var W=window.open(Q,'_blank');
+    if(W){M('abriendo Axion Tools...');setTimeout(function(){var e3=document.getElementById('axmsg');if(e3)e3.remove();},3000);}
+    else{var e4=document.getElementById('axmsg');if(e4){e4.innerHTML='';var ln=document.createElement('a');ln.href=Q;ln.target='_blank';ln.textContent='LISTO - da CLIC AQUI para abrirlo en Axion Tools';ln.style.cssText='color:#FBA33C;font-weight:bold;text-decoration:underline;cursor:pointer';ln.onclick=function(){setTimeout(function(){e4.remove();},1500);};e4.appendChild(ln);}}
   }catch(e){alert('Axion fallo: '+e.message+'. Reintenta o avisale a Claude.');}
 }
 const BOOKMARKLET = 'javascript:(' + axBM.toString().replace(/\r/g,'').replace(/\n\s*/g,' ') + ')();';
@@ -911,6 +1086,14 @@ async function vImportar(){
           onclick="toast('Arrástralo a la barra de marcadores, no le des clic aquí', true); return false;">🔧 Enviar a Axion</a></p>
         <p class="small muted"><b>Cómo se usa:</b> 1) Entra a indar.mx con tu usuario → Pedidos → Pedidos Anteriores.
         2) Da clic en el marcador "Enviar a Axion". 3) Elige la cotización. 4) Se abre esta pantalla con todo precargado y confirmas.</p>
+      </div>
+      <div class="card"><h3>📄 Actualizar lista de precios Indar (${'los 11 mil'})</h3>
+        <p class="small muted" style="margin-bottom:10px">1) En el portal Indar → Catálogo → <b>descarga la ListaPrecios.xlsx</b>. 2) Súbela aquí.
+        Se actualizan precios, promociones y vigencias de TODA la lista (lo que usa el cotizador), y opcionalmente los costos/precios de tus productos.</p>
+        <div class="field"><input type="file" id="lp-file" accept=".xlsx,.xls"></div>
+        <div class="field"><label><input type="checkbox" id="lp-mios" checked> También actualizar costo y precio de venta de MIS productos que aparezcan en la lista</label></div>
+        <button class="btn" id="lp-btn" onclick="subirListaPrecios()">Actualizar lista de precios</button>
+        <p class="small muted" id="lp-status" style="margin-top:8px"></p>
       </div>
       <div class="card"><h3>O pega los datos manualmente</h3>
         <div class="field"><textarea id="imp-manual" rows="3" placeholder="Pega aquí el texto que genera el botón (por si no se abre solo)"></textarea></div>
@@ -952,6 +1135,60 @@ async function vImportar(){
           <td>${existentes.has(i.c) ? '<span class="badge b-gris">existente</span>' : '<span class="badge b-azul">nuevo</span>'}</td>
         </tr>`).join('')}</tbody></table></div>
     </div>`;
+}
+async function subirListaPrecios(){
+  const f = $('lp-file').files[0];
+  if(!f){ toast('Elige el archivo ListaPrecios.xlsx', true); return; }
+  $('lp-btn').disabled = true;
+  const st = m => $('lp-status').textContent = m;
+  try{
+    st('Leyendo archivo...');
+    const buf = await f.arrayBuffer();
+    const wb = XLSX.read(buf, {type:'array'});
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:null});
+    // encontrar encabezado (fila que empieza con "Producto")
+    let h = -1;
+    for(let i=0;i<10;i++){ if(rows[i] && String(rows[i][0]).trim()==='Producto'){ h=i; break; } }
+    if(h<0) throw new Error('No encontré el encabezado "Producto" — ¿es el archivo ListaPrecios de Indar?');
+    const num = v => { const n = parseFloat(String(v??'').replace(/[$,]/g,'')); return isNaN(n)?0:n; };
+    const fch = v => { if(!v) return null;
+      if(v instanceof Date) return v.toISOString().slice(0,10);
+      const m = String(v).match(/(\d{2})\/(\d{2})\/(\d{4})/); return m ? `${m[3]}-${m[2]}-${m[1]}` : null; };
+    const regs = [];
+    for(let i=h+1;i<rows.length;i++){
+      const r = rows[i]; if(!r || !r[0]) continue;
+      regs.push({ codigo:String(r[0]).trim(), descripcion:String(r[1]||'').trim(), marca:String(r[2]||'').trim(),
+        categoria:String(r[3]||'').trim(), unidad:String(r[4]||'').trim(), multiplo:num(r[5])||1,
+        precio_lista:num(r[7]), promo_pct:num(r[8]), vigencia_promo:fch(r[9]),
+        precio_mayoreo:num(r[10]), precio_sugerido:Math.round(num(r[12])*100)/100,
+        actualizado:new Date().toISOString() });
+    }
+    if(!regs.length) throw new Error('No encontré productos en el archivo.');
+    st(`Subiendo ${regs.length.toLocaleString('es-MX')} productos en bloques...`);
+    for(let i=0;i<regs.length;i+=500){
+      const {error} = await sb.from('lista_indar').upsert(regs.slice(i,i+500), {onConflict:'codigo'});
+      if(error) throw error;
+      st(`Subiendo... ${Math.min(i+500,regs.length).toLocaleString('es-MX')} / ${regs.length.toLocaleString('es-MX')}`);
+    }
+    let actualizados = 0;
+    if($('lp-mios').checked){
+      st('Actualizando costos y precios de tus productos...');
+      const {data:mios} = await sb.from('productos').select('id,codigo');
+      const mapa = new Map(regs.map(r=>[r.codigo, r]));
+      for(const p of (mios||[])){
+        const r = mapa.get(p.codigo);
+        if(r && r.precio_lista > 0){
+          const costo = Math.round(r.precio_lista * (1 - (r.promo_pct||0)) * 100)/100;
+          await sb.from('productos').update({costo, precio: r.precio_sugerido || undefined}).eq('id', p.id);
+          actualizados++;
+        }
+      }
+    }
+    st('');
+    toast(`Lista actualizada: ${regs.length.toLocaleString('es-MX')} productos Indar` + (actualizados?` · ${actualizados} de tus productos con costo/precio nuevos`:''));
+  }catch(e){ st(''); toast(errMsg(e), true); }
+  $('lp-btn').disabled = false;
 }
 function impManual(){
   const v = $('imp-manual').value.trim();
