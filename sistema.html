@@ -2098,4 +2098,14 @@ async function vUsuarios(){
 }
 async function cambiarRol(id, rol){
   const {error} = await sb.from('perfiles').update({rol}).eq('id', id);
-  if(error){ toast(errMsg(error)
+  if(error){ toast(errMsg(error), true); return; }
+  toast('Rol actualizado a ' + rol);
+}
+async function cambiarActivo(id, activo){
+  const {error} = await sb.from('perfiles').update({activo}).eq('id', id);
+  if(error){ toast(errMsg(error), true); return; }
+  toast(activo ? 'Usuario activado' : 'Usuario desactivado');
+}
+</script>
+</body>
+</html>
