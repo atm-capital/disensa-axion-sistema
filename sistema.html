@@ -1158,30 +1158,53 @@ async function vPedidos(){
 }
 let pedItems = [];
 async function verPedido(id, estado){
-  const {data, error} = await sb.from('pedido_compra_items').select('*, productos(codigo,descripcion)').eq('pedido_id', id).order('id');
-  if(error){ toast(errMsg(error),true); return; }
+  const [it, fx] = await Promise.all([
+    sb.from('pedido_compra_items').select('*, productos(codigo,descripcion)').eq('pedido_id', id).order('id'),
+    sb.from('facturas').select('folio,total,pdf_path').eq('pedido_id', id).eq('tipo','I'),
+  ]);
+  if(it.error){ toast(errMsg(it.error),true); return; }
+  const data = it.data, facturas = fx.error ? [] : (fx.data||[]);
   pedItems = data;
   const tot = data.reduce((s,i)=>s+ +i.importe,0);
   const recibiendo = esAdmin() && ['enviado','parcial'].includes(estado);
-  abrirModal(`<h3>Partidas del pedido (${data.length})</h3>
-    ${recibiendo?`<p class="small muted" style="margin-bottom:8px">Cuando llegue una entrega, escribe cuántas piezas llegaron en <b>Recibir ahora</b> y da clic en <b>Registrar recepción</b>. Solo lo recibido se suma al inventario; el resto queda pendiente.</p>`:''}
-    <div class="tbl-scroll" style="max-height:400px;overflow-y:auto"><table>
-    <thead><tr><th>Producto</th><th class="num">Pedida</th><th class="num">Recibida</th>${recibiendo?'<th class="num">Recibir ahora</th>':''}<th class="num">Costo</th><th class="num">Importe</th>${recibiendo?'<th>Quitar</th>':''}</tr></thead>
-    <tbody>${data.map(i=>{
-      const rec = +(i.cantidad_recibida||0), pend = +i.cantidad - rec;
-      return `<tr><td>${esc(i.productos?.codigo)} · ${esc((i.productos?.descripcion||'').slice(0,45))}</td>
+  const nCols = recibiendo ? 7 : 5;
+  // agrupar por parte (sales order de Indar)
+  const grupos = new Map();
+  for(const i of data){ const p = i.parte || ''; if(!grupos.has(p)) grupos.set(p, []); grupos.get(p).push(i); }
+  const fila = i => {
+    const rec = +(i.cantidad_recibida||0), pend = +i.cantidad - rec;
+    return `<tr><td>${esc(i.productos?.codigo)} · ${esc((i.productos?.descripcion||'').slice(0,45))}</td>
       <td class="num">${recibiendo?`<input id="ped-cant-${i.id}" type="number" min="${Math.max(rec,1)}" value="${+i.cantidad}" style="width:64px;padding:5px;border:1px solid var(--linea);border-radius:6px;text-align:right">`:(+i.cantidad)}</td>
       <td class="num"><span class="badge ${pend<=0?'b-verde':(rec>0?'b-ambar':'b-gris')}">${rec}</span></td>
       ${recibiendo?`<td class="num">${pend>0?`<input id="rec-${i.id}" type="number" min="0" max="${pend}" value="0" style="width:64px;padding:5px;border:1px solid var(--linea);border-radius:6px;text-align:right">`:'✓'}</td>`:''}
       <td class="num">${fmt(i.costo_unit)}</td><td class="num">${fmt(i.importe)}</td>
       ${recibiendo?`<td style="text-align:center">${rec===0?`<input type="checkbox" id="ped-del-${i.id}">`:''}</td>`:''}</tr>`;
-    }).join('')}</tbody>
+  };
+  const badgesParte = its => {
+    const ped = its.reduce((s,i)=>s+ +i.cantidad,0), rec = its.reduce((s,i)=>s+ +(i.cantidad_recibida||0),0), fac = its.reduce((s,i)=>s+ +(i.cantidad_facturada||0),0);
+    return (rec>=ped ? '<span class="badge b-verde">recibida ✓</span>' : (rec>0 ? `<span class="badge b-ambar">parcial ${rec}/${ped}</span>` : '<span class="badge b-gris">pendiente</span>'))
+      + (fac>0 ? ' <span class="badge b-azul">🧾 facturada</span>' : ' <span class="badge b-gris" title="Aún no llega su factura XML">sin factura</span>');
+  };
+  const cuerpo = [...grupos.entries()].map(([p, its])=>`
+    <tr style="background:#eef1f5"><td colspan="${nCols}" style="padding:9px 8px"><b>${p ? 'Parte '+esc(p) : (grupos.size>1 ? 'Sin parte' : 'Pedido completo')}</b> · ${its.length} partida(s) · ${badgesParte(its)}
+      ${recibiendo && its.some(i=>+i.cantidad>+(i.cantidad_recibida||0)) ? `<button class="btn sm" style="margin-left:8px" onclick="llenarParte('${esc(p)}')">📦 Recibir esta parte</button>` : ''}</td></tr>
+    ${its.map(fila).join('')}`).join('');
+  abrirModal(`<h3>Partidas del pedido (${data.length}${grupos.size>1?` · ${grupos.size} partes`:''})</h3>
+    ${facturas.length ? `<p class="small" style="margin-bottom:6px">🧾 <b>Facturas de este pedido:</b> ${facturas.map(f=>`${esc(f.folio)} (${fmt(f.total)})${f.pdf_path?` <button class="btn sm sec" onclick="verPdfFactura('${esc(f.pdf_path)}')">📄 Ver</button>`:''}`).join(' · ')}</p>` : ''}
+    ${recibiendo?`<p class="small muted" style="margin-bottom:8px">Cuando llegue una entrega: dale <b>📦 Recibir esta parte</b> (llena las cantidades pendientes de esa parte), coteja contra la factura 📄, ajusta si algo no llegó, y da clic en <b>Registrar recepción</b>. Solo lo recibido se suma al inventario.</p>`:''}
+    <div class="tbl-scroll" style="max-height:400px;overflow-y:auto"><table>
+    <thead><tr><th>Producto</th><th class="num">Pedida</th><th class="num">Recibida</th>${recibiendo?'<th class="num">Recibir ahora</th>':''}<th class="num">Costo</th><th class="num">Importe</th>${recibiendo?'<th>Quitar</th>':''}</tr></thead>
+    <tbody>${cuerpo}</tbody>
     <tfoot><tr><th colspan="${recibiendo?6:4}" class="num">Suma</th><th class="num">${fmt(tot)}</th></tr></tfoot></table></div>
     <div class="acciones">
-      ${recibiendo?`<button class="btn sec" onclick="llenarPendiente()">Llenar con lo pendiente</button>
+      ${recibiendo?`<button class="btn sec" onclick="llenarPendiente()">Llenar TODO lo pendiente</button>
       <button class="btn" onclick="registrarRecepcion(${id})">Registrar recepción</button>
       <button class="btn sec" onclick="guardarCambiosPedido(${id})">💾 Guardar cambios (cantidades/quitar)</button>`:''}
       <button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
+}
+function llenarParte(p){
+  pedItems.forEach(i=>{ if((i.parte||'')===p){ const el=$('rec-'+i.id); if(el) el.value = Math.max(0, +i.cantidad - +(i.cantidad_recibida||0)); } });
+  toast('Cantidades de la parte llenadas — coteja contra la factura y registra la recepción');
 }
 async function guardarCambiosPedido(pedidoId){
   try{
@@ -1453,20 +1476,23 @@ async function axBM(){
     M('leyendo partidas de '+U.length+' parte(s)...');
     var I={},o,d1,t1,k;
     for(var a=0;a<U.length;a++){o=U[a];d1=await P('/pedidosAnteriores/getDetalleFacturado','id='+o.id);
-      if(Array.isArray(d1))for(var b=0;b<d1.length;b++){t1=d1[b];k=t1.itemid;if(!I[k])I[k]={c:k,q:0,e:0,f:0};I[k].q+=+t1.cantPedido||0;I[k].e+=+t1.cantEmpacada||0;I[k].f+=+t1.cantFacturada||0;}}
+      if(Array.isArray(d1))for(var b=0;b<d1.length;b++){t1=d1[b];k=o.id+'|'+t1.itemid;if(!I[k])I[k]={c:t1.itemid,so:String(o.id),q:0,e:0,f:0};I[k].q+=+t1.cantPedido||0;I[k].e+=+t1.cantEmpacada||0;I[k].f+=+t1.cantFacturada||0;}}
     var KS=Object.keys(I);
     if(!KS.length){alert('Las partes no regresaron partidas. Intenta mas tarde.');return;}
-    for(var n2=0;n2<KS.length;n2++){var c2=KS[n2];M('precios '+(n2+1)+'/'+KS.length+'...');
+    var PR={},CS=[];
+    for(var n1=0;n1<KS.length;n1++){var cx=I[KS[n1]].c;if(!PR[cx]){PR[cx]={};CS.push(cx);}}
+    for(var n2=0;n2<CS.length;n2++){var c2=CS[n2];M('precios '+(n2+1)+'/'+CS.length+'...');
       try{var h=await fetch('/portal/detallesProducto/'+encodeURIComponent(c2.replace(/ /g,'_'))).then(function(r){return r.text();});
         var dd=new DOMParser().parseFromString(h,'text/html');
         var l=(h.match(/Precio Lista:[\s\S]{0,120}?\$\s*([\d,]+\.?\d*)/)||[])[1];
         var sg=(h.match(/sugerido de venta:[\s\S]{0,120}?\$\s*([\d,]+\.?\d*)/)||[])[1];
-        I[c2].l=l?parseFloat(l.replace(/,/g,'')):null;
-        I[c2].s=sg?parseFloat(sg.replace(/,/g,'')):null;
+        PR[c2].l=l?parseFloat(l.replace(/,/g,'')):null;
+        PR[c2].s=sg?parseFloat(sg.replace(/,/g,'')):null;
         var pd=dd.querySelector('.purchasedescription');
-        I[c2].d=pd?pd.textContent.trim():c2;
-      }catch(e2){I[c2].d=c2;}}
-    var Y={v:1,tipo:'pedido',folio:String(F),fecha:new Date().toISOString().slice(0,10),serie:X,sos:U.map(function(x){return x.id;}),items:Object.values(I)};
+        PR[c2].d=pd?pd.textContent.trim():c2;
+      }catch(e2){PR[c2].d=c2;}}
+    for(var n3=0;n3<KS.length;n3++){var i3=I[KS[n3]];var p3=PR[i3.c]||{};i3.l=p3.l;i3.s=p3.s;i3.d=p3.d||i3.c;}
+    var Y={v:2,tipo:'pedido',folio:String(F),fecha:new Date().toISOString().slice(0,10),serie:X,sos:U.map(function(x){return x.id;}),items:Object.values(I)};
     var Q=A+'\x23import='+B(JSON.stringify(Y));
     var W=window.open(Q,'_blank');
     if(W){M('abriendo Axion Tools...');setTimeout(function(){var e3=document.getElementById('axmsg');if(e3)e3.remove();},3000);}
@@ -1587,7 +1613,7 @@ async function vImportar(){
       <div class="tbl-scroll" style="max-height:400px;overflow-y:auto"><table>
         <thead><tr><th>Código</th><th>Descripción</th><th class="num">Cant</th><th class="num">Costo lista</th><th class="num">Precio sug.</th><th></th></tr></thead>
         <tbody>${impData.items.map(i=>`<tr>
-          <td><b>${esc(i.c)}</b></td><td>${esc((i.d||'').slice(0,55))}</td>
+          <td><b>${esc(i.c)}</b>${i.so?`<br><span class="badge b-gris" title="Parte / sales order">${esc(i.so)}</span>`:''}</td><td>${esc((i.d||'').slice(0,55))}</td>
           <td class="num">${i.q}</td><td class="num">${fmt(i.l)}</td><td class="num">${fmt(i.s)}</td>
           <td>${existentes.has(i.c) ? '<span class="badge b-gris">existente</span>' : '<span class="badge b-azul">nuevo</span>'}</td>
         </tr>`).join('')}</tbody></table></div>
@@ -1991,24 +2017,27 @@ async function ejecutarImport(){
   if(!impData) return;
   $('imp-btn').disabled = true;
   try{
-    const codigos = impData.items.map(i=>i.c);
+    const codigos = [...new Set(impData.items.map(i=>i.c))]; // únicos: un producto puede venir en varias partes
     const {data:exis, error:e0} = await sb.from('productos').select('id,codigo').in('codigo', codigos);
     if(e0) throw e0;
     const mapa = new Map((exis||[]).map(p=>[p.codigo, p.id]));
-    // 1. productos nuevos
-    const nuevos = impData.items.filter(i=>!mapa.has(i.c)).map(i=>({
-      codigo:i.c, descripcion:i.d||i.c, categoria:'General',
-      costo:i.l||0, precio:i.s||i.l||0, stock:0, stock_min:3 }));
+    // 1. productos nuevos (por código único)
+    const nuevos = codigos.filter(c=>!mapa.has(c)).map(c=>{
+      const i = impData.items.find(x=>x.c===c);
+      return { codigo:c, descripcion:i.d||c, categoria:'General',
+        costo:i.l||0, precio:i.s||i.l||0, stock:0, stock_min:3 };
+    });
     if(nuevos.length){
       const {error} = await sb.from('productos').insert(nuevos);
       if(error) throw error;
       const {data:re} = await sb.from('productos').select('id,codigo').in('codigo', codigos);
       (re||[]).forEach(p=>mapa.set(p.codigo, p.id));
     }
-    // 2. actualizar precios de existentes al sugerido
+    // 2. actualizar precios de existentes al sugerido (una vez por código)
     if($('imp-precios').checked){
-      for(const i of impData.items){
-        if(mapa.has(i.c) && i.s) await sb.from('productos').update({precio:i.s, costo:i.l||undefined}).eq('id', mapa.get(i.c));
+      for(const c of codigos){
+        const i = impData.items.find(x=>x.c===c);
+        if(mapa.has(c) && i.s) await sb.from('productos').update({precio:i.s, costo:i.l||undefined}).eq('id', mapa.get(c));
       }
     }
     // 3. pedido + partidas
@@ -2021,9 +2050,12 @@ async function ejecutarImport(){
       notas:'Importado del portal Indar con el botón Enviar a Axion. Partes: '+(impData.sos||[]).join(', ')+' (serie /'+(impData.serie||'?')+'). Capturado a precio de lista; ajustar contra factura.'
     }).select('id').single();
     if(e1) throw e1;
-    const items = impData.items.map(i=>({ pedido_id: pc.id, producto_id: mapa.get(i.c),
+    const items = impData.items.map(i=>({ pedido_id: pc.id, producto_id: mapa.get(i.c), parte: i.so||'',
       cantidad: i.q, costo_unit: i.l||0, importe: Math.round(i.q*(i.l||0)*100)/100 }));
-    const {error:e2} = await sb.from('pedido_compra_items').insert(items);
+    let {error:e2} = await sb.from('pedido_compra_items').insert(items);
+    if(e2 && /parte/.test(e2.message||'')){ // columna parte aún no existe: guardar sin ella
+      ({error:e2} = await sb.from('pedido_compra_items').insert(items.map(({parte, ...r})=>r)));
+    }
     if(e2) throw e2;
     // 4. cuenta por pagar opcional
     if($('imp-cxp').checked){
