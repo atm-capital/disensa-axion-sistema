@@ -1757,7 +1757,12 @@ async function aplicarFacturas(){
         concepto:'Factura '+d.folio+(folioPed?' (pedido '+folioPed+')':''),
         referencia:'PPD crédito '+d.dias+' días · '+d.nombre.slice(0,30),
         fecha_emision:d.fecha, fecha_vencimiento:v.toISOString().slice(0,10), monto:d.total, saldo:d.total});
-      if(!eC){ cxpN++; d.reg = true; }
+      if(!eC){ cxpN++; d.reg = true;
+        if(folioPed){ // anular la CxP estimada del pedido: la sustituyen las facturas reales
+          await sb.from('cuentas_pagar').update({saldo:0, estado:'pagada', referencia:'Sustituida por facturas XML del pedido'})
+            .eq('concepto', 'Pedido Web #'+folioPed).neq('estado','pagada');
+        }
+      }
       const antes = d.enRegistro; await fxArchivar(d); if(!antes && d.enRegistro) archivadas++;
       aplicadas++;
     }
@@ -2093,14 +2098,4 @@ async function vUsuarios(){
 }
 async function cambiarRol(id, rol){
   const {error} = await sb.from('perfiles').update({rol}).eq('id', id);
-  if(error){ toast(errMsg(error), true); return; }
-  toast('Rol actualizado a ' + rol);
-}
-async function cambiarActivo(id, activo){
-  const {error} = await sb.from('perfiles').update({activo}).eq('id', id);
-  if(error){ toast(errMsg(error), true); return; }
-  toast(activo ? 'Usuario activado' : 'Usuario desactivado');
-}
-</script>
-</body>
-</html>
+  if(error){ toast(errMsg(error)
