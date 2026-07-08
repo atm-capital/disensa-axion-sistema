@@ -250,4 +250,44 @@ function abrirObra(){
     </div>`;
 }
 async function enviarObra(){
-  const nombre = $('o-nombre').value.trim(), co
+  const nombre = $('o-nombre').value.trim(), contacto = $('o-contacto').value.trim(), notas = $('o-notas').value.trim();
+  if(nombre.length < 2){ alert('Escribe tu nombre o empresa.'); return; }
+  if(contacto.length < 5){ alert('Déjanos un teléfono o correo para responderte.'); return; }
+  if(notas.length < 10){ alert('Cuéntanos un poco más de tu proyecto.'); return; }
+  if($('o-web')?.value){ exito(nombre); return; } // honeypot anti-bots
+  if(Date.now() - _t0 < 4000){ alert('Un segundo... vuelve a dar clic en Enviar.'); return; }
+  const files = [...($('o-files').files||[])].slice(0,5);
+  if(files.some(f=>f.size > 8*1024*1024)){ alert('Cada archivo debe pesar máximo 8MB.'); return; }
+  $('o-enviar').disabled = true; $('o-enviar').textContent = 'Enviando...';
+  const st = m => $('o-status').textContent = m;
+  const adjuntos = [];
+  for(let i=0;i<files.length;i++){
+    st(`Subiendo archivo ${i+1} de ${files.length}...`);
+    const f = files[i];
+    const ruta = Date.now() + '-' + Math.random().toString(36).slice(2,8) + '-' + f.name.replace(/[^A-Za-z0-9._-]/g,'_').slice(-60);
+    const {error:eS} = await sb.storage.from('proyectos').upload(ruta, f, {contentType: f.type || 'application/octet-stream'});
+    if(eS){ st(''); $('o-enviar').disabled = false; $('o-enviar').textContent = 'Enviar proyecto 📨'; alert('No se pudo subir "'+f.name+'". Intenta con archivos más ligeros.'); return; }
+    adjuntos.push({ruta, nombre: f.name});
+  }
+  st('Enviando solicitud...');
+  const origen = $('o-origen')?.value || '';
+  const {error} = await sb.from('solicitudes').insert({
+    nombre, contacto, tipo:'proyecto',
+    entrega: $('o-entrega').value.trim(),
+    notas: notas + (origen ? '\n[Nos conoció por: '+origen+']' : ''), items: [], adjuntos,
+  });
+  st('');
+  if(error){
+    $('o-enviar').disabled = false; $('o-enviar').textContent = 'Enviar proyecto 📨';
+    alert('No se pudo enviar. Intenta de nuevo.');
+    return;
+  }
+  exito(nombre);
+}
+function cerrar(){ $('panel').classList.remove('open'); }
+$('panel').addEventListener('click', e=>{ if(e.target.id==='panel') cerrar(); });
+if(WHATS){ const bw = $('btn-whats'); bw.href = 'https://wa.me/52' + WHATS + '?text=' + encodeURIComponent('Hola Axion Tools, quiero cotizar:'); bw.style.display = 'inline-block'; }
+guardar(); filtros(); buscar(true);
+</script>
+</body>
+</html>
