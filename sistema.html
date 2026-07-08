@@ -178,6 +178,7 @@ tr:hover td{background:#f9fafb}
       <div id="v-finanzas" class="view"></div>
       <div id="v-importar" class="view"></div>
       <div id="v-usuarios" class="view"></div>
+      <div id="v-actividad" class="view"></div>
     </div>
   </div>
 </div>
@@ -248,6 +249,7 @@ async function cargarPerfil(){
   }
   $('scr-app').classList.remove('hidden');
   iniciarAvisos();
+  logEv('sesion', 'entró al sistema');
   $('foot-nombre').textContent = perfil.nombre || perfil.correo;
   $('foot-rol').textContent = 'Rol: ' + perfil.rol;
   montarNav();
@@ -288,11 +290,12 @@ const VISTAS = [
   {id:'finanzas',   icono:'💰', titulo:'Finanzas',   roles:['admin','consulta']},
   {id:'importar',   icono:'📥', titulo:'Importar',   roles:['admin']},
   {id:'usuarios',   icono:'🔑', titulo:'Usuarios',   roles:['admin']},
+  {id:'actividad',  icono:'📈', titulo:'Actividad',  roles:['admin'], solo:'andres@aptelecom.mx'},
 ];
 const esAdmin = () => perfil.rol === 'admin';
 const puedeVender = () => ['admin','vendedor'].includes(perfil.rol);
 function montarNav(){
-  $('nav').innerHTML = VISTAS.filter(v=>v.roles.includes(perfil.rol))
+  $('nav').innerHTML = VISTAS.filter(v=>v.roles.includes(perfil.rol) && (!v.solo || v.solo===(perfil.correo||'')))
     .map(v=>`<a id="nav-${v.id}" onclick="irA('${v.id}')"><span>${v.icono}</span>${v.titulo}</a>`).join('');
 }
 async function irA(id){
@@ -303,9 +306,41 @@ async function irA(id){
   $('vtitle').textContent = VISTAS.find(v=>v.id===id).titulo;
   $('vtools').innerHTML = '';
   $('sidebar').classList.remove('open');
+  logEv('vista', id);
   try { await ({resumen:vResumen, ventas:vVentas, cotizaciones:vCotizaciones, catalogo:vCatalogo, inventario:vInventario, clientes:vClientes,
-    pedidos:vPedidos, finanzas:vFinanzas, usuarios:vUsuarios, importar:vImportar})[id](); }
+    pedidos:vPedidos, finanzas:vFinanzas, usuarios:vUsuarios, importar:vImportar, actividad:vActividad})[id](); }
   catch(e){ toast(errMsg(e), true); }
+}
+
+
+/* ===== Registro de actividad (solo Andres) ===== */
+function logEv(accion, detalle){
+  try{ sb.from('eventos').insert({correo:(typeof perfil!=='undefined'&&perfil&&perfil.correo)||'', accion:accion, detalle:String(detalle||'').slice(0,300)}).then(function(){},function(){}); }catch(e){}
+}
+async function vActividad(){
+  const r = await sb.from('eventos').select('*').order('ts',{ascending:false}).limit(500);
+  if(r.error){ $('v-actividad').innerHTML = '<div class="card">No pude leer la actividad: '+esc(errMsg(r.error))+'</div>'; return; }
+  const evs = r.data||[];
+  const usuarios = [...new Set(evs.map(function(e){ return e.correo||'(sin correo)'; }))];
+  const fU = window._actU||'';
+  const hoy0 = new Date(); hoy0.setHours(0,0,0,0);
+  const ic = {sesion:'🔓', vista:'👁', busqueda:'🔎', descarga:'📥'};
+  const resumen = usuarios.map(function(u){
+    const de = evs.filter(function(e){ return (e.correo||'(sin correo)')===u; });
+    const ult = de.length ? new Date(de[0].ts) : null;
+    const nHoy = de.filter(function(e){ return new Date(e.ts)>=hoy0; }).length;
+    return '<tr style="cursor:pointer" onclick="window._actU=\''+u+'\';vActividad()"><td>'+esc(u)+'</td><td>'+(ult?ult.toLocaleString('es-MX'):'-')+'</td><td>'+nHoy+'</td><td>'+de.length+'</td></tr>';
+  }).join('');
+  const filas = evs.filter(function(e){ return !fU || (e.correo||'(sin correo)')===fU; }).map(function(e){
+    const d = new Date(e.ts);
+    return '<tr><td class="small" style="white-space:nowrap">'+d.toLocaleDateString('es-MX')+' '+d.toLocaleTimeString('es-MX')+'</td><td>'+esc(e.correo)+'</td><td>'+(ic[e.accion]||'•')+' '+esc(e.accion)+'</td><td>'+esc(e.detalle)+'</td></tr>';
+  }).join('');
+  $('v-actividad').innerHTML =
+    '<div class="card" style="margin-bottom:14px"><h3 style="margin-bottom:8px">Usuarios · última actividad</h3>'+
+    '<table><thead><tr><th>Usuario</th><th>Última actividad</th><th>Hoy</th><th>Total (últ. 500)</th></tr></thead><tbody>'+resumen+'</tbody></table>'+
+    '<p class="small muted" style="margin-top:6px">Toca un usuario para filtrar sus eventos.</p></div>'+
+    '<div class="card"><h3 style="margin-bottom:8px">Eventos'+(fU?(' de '+esc(fU)+' &nbsp;<button class="btn sm sec" onclick="window._actU=\'\';vActividad()">ver todos</button>'):'')+'</h3>'+
+    '<div style="overflow:auto;max-height:65vh"><table><thead><tr><th>Fecha y hora</th><th>Usuario</th><th>Acción</th><th>Detalle</th></tr></thead><tbody>'+filas+'</tbody></table></div></div>';
 }
 
 /* ================= MODAL ================= */
@@ -570,6 +605,7 @@ async function verAdjuntos(id){
       urls.push((a.nombre||a.ruta)+': '+data.signedUrl);
     }
   }
+  logEv('descarga', 'archivos de solicitud: '+(s.nombre||id));
   window._compartirMsj = `Solicitud de cotización — ${s.nombre}\nContacto: ${s.contacto}\nEntrega: ${s.entrega||'-'}\n\n${s.notas||''}\n\nArchivos (válidos 7 días):\n${urls.join('\n')}`;
   abrirModal(`<h3>📁 Archivos de ${esc(s.nombre)}</h3>
     <p class="small muted" style="margin-bottom:8px">${esc(s.notas||'')}</p>
@@ -914,6 +950,7 @@ async function pintarCatalogo(agregar){
   const desde = catPagina*48;
   const {data, error} = await con.range(desde, desde+47);
   if(error){ toast(errMsg(error), true); return; }
+  if(q.length>=2 && !catPagina){ clearTimeout(window._evT); window._evT=setTimeout(function(){ logEv('busqueda', q); }, 1500); }
   const html = (data||[]).map(p=>{
     const costoD = Math.round(+p.precio_lista*(1-(+p.promo_pct||0))*0.95*100)/100;
     const sel = catSel.has(p.codigo);
@@ -1327,6 +1364,7 @@ async function vFinanzas(){
 async function verPdfFactura(path){
   const {data, error} = await sb.storage.from('facturas').createSignedUrl(path, 300);
   if(error || !data?.signedUrl){ toast('No pude abrir el PDF: '+errMsg(error||{}), true); return; }
+  logEv('descarga', 'PDF factura: '+path);
   window.open(data.signedUrl, '_blank');
 }
 function pagarCuenta(id){
