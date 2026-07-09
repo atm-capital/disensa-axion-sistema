@@ -453,6 +453,44 @@ async function procesarEstatusIndar(){
   }catch(e){ toast('No pude leer el estatus que regresó Indar', true); }
 }
 
+
+/* ===== Ajuste automático: renglones cancelados por Indar ===== */
+async function limpiarCanceladosIndar(pedTocados){
+  try{
+    let quitados = 0; const codigos = [];
+    for(const pid of pedTocados){
+      const r = await sb.from('pedido_compra_items').select('id,parte,cantidad,cantidad_recibida,cantidad_facturada,costo_unit,productos(codigo)').eq('pedido_id', pid);
+      const porParte = {};
+      for(const i of (r.data||[])){ const k = String(i.parte||''); if(!porParte[k]) porParte[k]=[]; porParte[k].push(i); }
+      let cambio = false;
+      for(const k in porParte){
+        const its = porParte[k];
+        if(!its.some(function(i){ return +(i.cantidad_facturada||0)>0; })) continue;
+        for(const i of its){
+          const fac = +(i.cantidad_facturada||0), ped = +i.cantidad, rec = +(i.cantidad_recibida||0);
+          if(fac===0 && rec===0){
+            const d = await sb.from('pedido_compra_items').delete().eq('id', i.id);
+            if(!d.error){ quitados++; codigos.push((i.productos&&i.productos.codigo)||'?'); cambio = true; }
+          } else if(fac>0 && fac<ped && rec<=fac){
+            const u = await sb.from('pedido_compra_items').update({cantidad:fac, importe: Math.round(fac*+i.costo_unit*100)/100}).eq('id', i.id);
+            if(!u.error){ quitados++; codigos.push(((i.productos&&i.productos.codigo)||'?')+' ('+ped+'→'+fac+')'); cambio = true; }
+          }
+        }
+      }
+      if(cambio){
+        const re = await sb.from('pedido_compra_items').select('importe').eq('pedido_id', pid);
+        const sub = Math.round((re.data||[]).reduce(function(s,i){ return s+ +i.importe; },0)*100)/100;
+        const iva = Math.round(sub*16)/100;
+        await sb.from('pedidos_compra').update({subtotal:sub, iva:iva, total:Math.round((sub+iva)*100)/100}).eq('id', pid);
+      }
+    }
+    if(quitados){
+      logEv('vista','ajuste auto por cancelados Indar: '+codigos.join(', '));
+      setTimeout(function(){ alert('🗑 Indar canceló '+quitados+' renglón(es) por falta de existencia:\n\n'+codigos.join('\n')+'\n\nEl pedido se ajustó automáticamente a lo facturado (no van a llegar; repídelos si los necesitas).'); }, 600);
+    }
+  }catch(e){}
+}
+
 /* ================= MODAL ================= */
 function abrirModal(html, lg=false){
   $('modal-root').innerHTML = `<div class="modal-bg" onclick="if(event.target===this)cerrarModal()"><div class="modal${lg?' lg':''}">${html}</div></div>`;
@@ -1894,7 +1932,7 @@ async function fxArchivar(d){ // guarda en tabla facturas + sube PDF (si existen
 async function aplicarFacturas(){
   $('fx-aplicar').disabled = true;
   const st = m => $('fx-status').textContent = m;
-  let aplicadas = 0, cxpN = 0, partidas = 0, archivadas = 0;
+  let aplicadas = 0, cxpN = 0, partidas = 0, archivadas = 0; const pedTocados = new Set();
   try{
     const {data:prov} = await sb.from('proveedores').select('id').eq('nombre','Indar').single();
     for(const d of fxDocs){
@@ -1906,7 +1944,7 @@ async function aplicarFacturas(){
       let folioPed = '';
       if(d.pedidoId){
         const ped = fxPedidos.find(p=>p.id===d.pedidoId);
-        folioPed = ped ? ped.folio : '';
+        folioPed = ped ? ped.folio : ''; pedTocados.add(d.pedidoId);
         const {data:its} = await sb.from('pedido_compra_items').select('id,cantidad,cantidad_facturada,productos(codigo)').eq('pedido_id', d.pedidoId);
         for(const c of d.items){
           const it = (its||[]).find(x=>x.productos?.codigo===c.cod);
@@ -1938,6 +1976,7 @@ async function aplicarFacturas(){
       aplicadas++;
     }
     st('');
+    await limpiarCanceladosIndar(pedTocados);
     toast(`✅ ${aplicadas} factura(s) aplicadas (${cxpN} CxP, ${partidas} partidas a precio de factura) · ${archivadas} archivada(s) en Finanzas → Facturas`);
     leerFacturas();
   }catch(e){ st(''); toast(errMsg(e), true); $('fx-aplicar').disabled = false; }
