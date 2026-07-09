@@ -411,7 +411,7 @@ function resumenPartes(grupos, facturas, data, pindar){
       vivo += '<br><span class="muted small">'+tiempoRel(pi.actualizado)+'</span>';
     }
     const fh = fs.length ? fs.map(function(f){ return '🧾 <b>'+esc(f.folio)+'</b> ('+fmt(f.total)+')'+(f.pdf_path?' <button class="btn sm sec" onclick="verPdfFactura(\''+esc(f.pdf_path)+'\')">📄 Ver</button>':''); }).join('<br>') : '<span class="muted small">sin factura aún</span>';
-    return '<tr><td style="white-space:nowrap"><b>'+(p?'Parte '+esc(p):'Sin parte')+'</b></td><td class="num">'+its.length+'</td><td class="num">'+fmt(Math.round(tot*116)/100)+'</td><td>'+est+'</td><td>'+fh+'</td><td>'+vivo+'</td></tr>';
+    return '<tr style="cursor:pointer" title="Clic: ir a esta parte en la lista" onclick="irAParte(\''+String(p)+'\')"><td style="white-space:nowrap"><b>'+(p?'Parte '+esc(p):'Sin parte')+'</b></td><td class="num">'+its.length+'</td><td class="num">'+fmt(Math.round(tot*116)/100)+'</td><td>'+est+'</td><td>'+fh+'</td><td>'+vivo+'</td></tr>';
   }).join('');
   return '<div class="tbl-scroll" style="margin:6px 0 10px"><table><thead><tr><th>Parte</th><th class="num">Partidas</th><th class="num">Total c/IVA</th><th>Estado</th><th>Factura(s)</th><th>Indar en vivo</th></tr></thead><tbody>'+filas+'</tbody></table></div>';
 }
@@ -489,6 +489,19 @@ async function limpiarCanceladosIndar(pedTocados){
       setTimeout(function(){ alert('🗑 Indar canceló '+quitados+' renglón(es) por falta de existencia:\n\n'+codigos.join('\n')+'\n\nEl pedido se ajustó automáticamente a lo facturado (no van a llegar; repídelos si los necesitas).'); }, 600);
     }
   }catch(e){}
+}
+
+
+/* ===== Ir a parte dentro del modal ===== */
+function irAParte(p){
+  const el = document.getElementById('pt-'+p);
+  if(el){
+    el.scrollIntoView({behavior:'smooth', block:'start'});
+    el.style.transition = 'background .3s';
+    const orig = el.style.background;
+    el.style.background = '#ffe2bd';
+    setTimeout(function(){ el.style.background = orig || '#eef1f5'; }, 2000);
+  }
 }
 
 /* ================= MODAL ================= */
@@ -1374,7 +1387,7 @@ async function verPedido(id, estado){
       + (fac>0 ? ' <span class="badge b-azul">🧾 facturada</span>' : ' <span class="badge b-gris" title="Aún no llega su factura XML">sin factura</span>');
   };
   const cuerpo = [...grupos.entries()].map(([p, its])=>`
-    <tr style="background:#eef1f5"><td colspan="${nCols}" style="padding:9px 8px"><b>${p ? 'Parte '+esc(p) : (grupos.size>1 ? 'Sin parte' : 'Pedido completo')}</b> · ${its.length} partida(s) · ${badgesParte(its)}
+    <tr id="pt-${esc(p)}" style="background:#eef1f5"><td colspan="${nCols}" style="padding:9px 8px"><b>${p ? 'Parte '+esc(p) : (grupos.size>1 ? 'Sin parte' : 'Pedido completo')}</b> · ${its.length} partida(s) · ${badgesParte(its)}
       ${recibiendo && its.some(i=>+i.cantidad>+(i.cantidad_recibida||0)) ? `<button class="btn sm" style="margin-left:8px" onclick="llenarParte('${esc(p)}')">📦 Recibir esta parte</button>` : ''}</td></tr>
     ${its.map(fila).join('')}`).join('');
   abrirModal(`<h3>Partidas del pedido (${data.length}${grupos.size>1?` · ${grupos.size} partes`:''})</h3>
