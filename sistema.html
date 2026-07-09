@@ -343,6 +343,28 @@ async function vActividad(){
     '<div style="overflow:auto;max-height:65vh"><table><thead><tr><th>Fecha y hora</th><th>Usuario</th><th>Acción</th><th>Detalle</th></tr></thead><tbody>'+filas+'</tbody></table></div></div>';
 }
 
+
+/* ===== Resumen de partes en lista de pedidos ===== */
+async function pedPartesStats(ids){
+  const r = await sb.from('pedido_compra_items').select('pedido_id,parte,cantidad,cantidad_recibida,cantidad_facturada').in('pedido_id', ids).range(0,9999);
+  const m = {};
+  for(const i of (r.data||[])){ const k=i.pedido_id, pt=i.parte||''; if(!m[k]) m[k]={}; if(!m[k][pt]) m[k][pt]={ped:0,rec:0,fac:0}; m[k][pt].ped+=+i.cantidad; m[k][pt].rec+=+(i.cantidad_recibida||0); m[k][pt].fac+=+(i.cantidad_facturada||0); }
+  return m;
+}
+function resParteHTML(g){
+  if(!g) return '<span class="muted small">sin partidas</span>';
+  const vs = Object.values(g); const n = vs.length;
+  const r = vs.filter(function(x){ return x.ped>0 && x.rec>=x.ped; }).length;
+  const pa = vs.filter(function(x){ return x.rec>0 && x.rec<x.ped; }).length;
+  const f = vs.filter(function(x){ return x.fac>0; }).length;
+  const pend = n-r-pa;
+  return '<b>'+n+'</b> parte'+(n>1?'s':'')+' &nbsp;'
+    +(r?'<span class="badge b-verde">'+r+' recibida'+(r>1?'s':'')+'</span> ':'')
+    +(pa?'<span class="badge b-ambar">'+pa+' parcial'+(pa>1?'es':'')+'</span> ':'')
+    +(pend?'<span class="badge b-gris">'+pend+' pendiente'+(pend>1?'s':'')+'</span> ':'')
+    +'<span class="badge b-azul" title="Partes que ya tienen factura XML">🧾 '+f+'/'+n+'</span>';
+}
+
 /* ================= MODAL ================= */
 function abrirModal(html, lg=false){
   $('modal-root').innerHTML = `<div class="modal-bg" onclick="if(event.target===this)cerrarModal()"><div class="modal${lg?' lg':''}">${html}</div></div>`;
@@ -1163,6 +1185,7 @@ async function guardarCliente(id){
 async function vPedidos(){
   const {data, error} = await sb.from('pedidos_compra').select('*, proveedores(nombre)').order('fecha',{ascending:false});
   if(error) throw error;
+  window._pp = await pedPartesStats(data.map(p=>p.id));
   const badges = {borrador:'b-gris', enviado:'b-azul', parcial:'b-ambar', recibido:'b-verde', cancelado:'b-rojo'};
   const porEstado = {};
   for(const p of data){ if(!porEstado[p.estado]) porEstado[p.estado] = {n:0, t:0}; porEstado[p.estado].n++; porEstado[p.estado].t += +p.total; }
@@ -1177,14 +1200,14 @@ async function vPedidos(){
     <div class="card"><h3>Pedidos de compra${window._pedFiltro?` · filtro: <span class="badge ${badges[window._pedFiltro]}">${window._pedFiltro}</span>`:''}</h3>
     <p class="small muted" style="margin-bottom:10px">Los pedidos se capturan en el portal del proveedor (Indar / Holcim) y aquí se registran para dar seguimiento. Al marcar <b>Recibido</b>, las cantidades se suman al inventario automáticamente.</p>
     <div class="tbl-scroll"><table>
-      <thead><tr><th>Folio</th><th>Proveedor</th><th>Fecha</th><th>Estado</th><th>Plazo</th><th class="num">Total</th><th></th></tr></thead>
-      <tbody>${dataF.map(p=>`<tr>
+      <thead><tr><th>Folio</th><th>Proveedor</th><th>Fecha</th><th>Estado</th><th>Partes / avance</th><th>Plazo</th><th class="num">Total</th><th></th></tr></thead>
+      <tbody>${dataF.map(p=>`<tr style="cursor:pointer" title="Clic: ver partes, cotejar factura y recibir" onclick="verPedido(${p.id}, '${p.estado}')">
         <td><b>${esc(p.folio_externo)||('#'+p.id)}</b></td><td>${esc(p.proveedores?.nombre)}</td>
         <td>${fecha(p.fecha)}</td><td><span class="badge ${badges[p.estado]}">${p.estado}</span></td>
-        <td>${p.plazo_dias||0} días</td><td class="num"><b>${fmt(p.total)}</b></td>
-        <td style="white-space:nowrap"><button class="btn sec sm" onclick="verPedido(${p.id}, '${p.estado}')">Ver / Recibir</button>
+        <td class="small" style="white-space:nowrap">${resParteHTML(window._pp[p.id])}</td><td>${p.plazo_dias||0} días</td><td class="num"><b>${fmt(p.total)}</b></td>
+        <td style="white-space:nowrap" onclick="event.stopPropagation()"><button class="btn sec sm" onclick="verPedido(${p.id}, '${p.estado}')">Ver / Recibir</button>
         ${esAdmin() && ['enviado','parcial'].includes(p.estado) ? `<button class="btn sm" onclick="recibirPedido(${p.id})">Recibir todo ✓</button>`:''}</td>
-      </tr>`).join('') || '<tr><td colspan="7" class="muted">Sin pedidos registrados.</td></tr>'}</tbody></table></div></div>
+      </tr>`).join('') || '<tr><td colspan="8" class="muted">Sin pedidos registrados.</td></tr>'}</tbody></table></div></div>
     <div class="card"><h3>Portales de proveedores</h3><div class="tbl-scroll"><table id="prov-tabla"></table></div></div>`;
   const pr = await sb.from('proveedores').select('*').order('nombre');
   if(!pr.error) $('prov-tabla').innerHTML = `
