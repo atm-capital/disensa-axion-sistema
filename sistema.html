@@ -388,9 +388,9 @@ function resumenPartes(grupos, facturas, data){
     const est = rec>=ped ? '<span class="badge b-verde">recibida ✓</span>' : (rec>0 ? '<span class="badge b-ambar">parcial '+rec+'/'+ped+'</span>' : '<span class="badge b-gris">pendiente</span>');
     const fs = facParte.get(p)||[];
     const fh = fs.length ? fs.map(function(f){ return '🧾 <b>'+esc(f.folio)+'</b> ('+fmt(f.total)+')'+(f.pdf_path?' <button class="btn sm sec" onclick="verPdfFactura(\''+esc(f.pdf_path)+'\')">📄 Ver</button>':''); }).join('<br>') : '<span class="muted small">sin factura aún</span>';
-    return '<tr><td style="white-space:nowrap"><b>'+(p?'Parte '+esc(p):'Sin parte')+'</b></td><td class="num">'+its.length+'</td><td class="num">'+fmt(tot)+'</td><td>'+est+'</td><td>'+fh+'</td></tr>';
+    return '<tr><td style="white-space:nowrap"><b>'+(p?'Parte '+esc(p):'Sin parte')+'</b></td><td class="num">'+its.length+'</td><td class="num">'+fmt(Math.round(tot*116)/100)+'</td><td>'+est+'</td><td>'+fh+'</td></tr>';
   }).join('');
-  return '<div class="tbl-scroll" style="margin:6px 0 10px"><table><thead><tr><th>Parte</th><th class="num">Partidas</th><th class="num">Total</th><th>Estado</th><th>Factura(s)</th></tr></thead><tbody>'+filas+'</tbody></table></div>';
+  return '<div class="tbl-scroll" style="margin:6px 0 10px"><table><thead><tr><th>Parte</th><th class="num">Partidas</th><th class="num">Total c/IVA</th><th>Estado</th><th>Factura(s)</th></tr></thead><tbody>'+filas+'</tbody></table></div>';
 }
 
 /* ================= MODAL ================= */
