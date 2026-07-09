@@ -365,6 +365,34 @@ function resParteHTML(g){
     +'<span class="badge b-azul" title="Partes que ya tienen factura XML">🧾 '+f+'/'+n+'</span>';
 }
 
+
+/* ===== Resumen partes + facturas en modal de pedido ===== */
+function resumenPartes(grupos, facturas, data){
+  const codParte = new Map();
+  for(const i of data){ codParte.set(i.productos && i.productos.codigo, i.parte||''); }
+  const facParte = new Map();
+  for(const f of facturas){
+    const cnt = {};
+    for(const fi of (f.items||[])){ const p = codParte.get(fi.cod); if(p!==undefined) cnt[p]=(cnt[p]||0)+1; }
+    let best = null, bn = 0;
+    for(const k in cnt){ if(cnt[k]>bn){ bn=cnt[k]; best=k; } }
+    const key = best===null ? '' : best;
+    if(!facParte.has(key)) facParte.set(key, []);
+    facParte.get(key).push(f);
+  }
+  if(grupos.size < 1) return '';
+  const filas = [...grupos.entries()].map(function(par){
+    const p = par[0], its = par[1];
+    const ped = its.reduce(function(s,i){return s+ +i.cantidad;},0), rec = its.reduce(function(s,i){return s+ +(i.cantidad_recibida||0);},0);
+    const tot = its.reduce(function(s,i){return s+ +i.importe;},0);
+    const est = rec>=ped ? '<span class="badge b-verde">recibida ✓</span>' : (rec>0 ? '<span class="badge b-ambar">parcial '+rec+'/'+ped+'</span>' : '<span class="badge b-gris">pendiente</span>');
+    const fs = facParte.get(p)||[];
+    const fh = fs.length ? fs.map(function(f){ return '🧾 <b>'+esc(f.folio)+'</b> ('+fmt(f.total)+')'+(f.pdf_path?' <button class="btn sm sec" onclick="verPdfFactura(\''+esc(f.pdf_path)+'\')">📄 Ver</button>':''); }).join('<br>') : '<span class="muted small">sin factura aún</span>';
+    return '<tr><td style="white-space:nowrap"><b>'+(p?'Parte '+esc(p):'Sin parte')+'</b></td><td class="num">'+its.length+'</td><td class="num">'+fmt(tot)+'</td><td>'+est+'</td><td>'+fh+'</td></tr>';
+  }).join('');
+  return '<div class="tbl-scroll" style="margin:6px 0 10px"><table><thead><tr><th>Parte</th><th class="num">Partidas</th><th class="num">Total</th><th>Estado</th><th>Factura(s)</th></tr></thead><tbody>'+filas+'</tbody></table></div>';
+}
+
 /* ================= MODAL ================= */
 function abrirModal(html, lg=false){
   $('modal-root').innerHTML = `<div class="modal-bg" onclick="if(event.target===this)cerrarModal()"><div class="modal${lg?' lg':''}">${html}</div></div>`;
@@ -1220,7 +1248,7 @@ let pedItems = [];
 async function verPedido(id, estado){
   const [it, fx] = await Promise.all([
     sb.from('pedido_compra_items').select('*, productos(codigo,descripcion)').eq('pedido_id', id).order('id'),
-    sb.from('facturas').select('folio,total,pdf_path').eq('pedido_id', id).eq('tipo','I'),
+    sb.from('facturas').select('folio,total,pdf_path,items').eq('pedido_id', id).eq('tipo','I'),
   ]);
   if(it.error){ toast(errMsg(it.error),true); return; }
   const data = it.data, facturas = fx.error ? [] : (fx.data||[]);
@@ -1250,6 +1278,7 @@ async function verPedido(id, estado){
       ${recibiendo && its.some(i=>+i.cantidad>+(i.cantidad_recibida||0)) ? `<button class="btn sm" style="margin-left:8px" onclick="llenarParte('${esc(p)}')">📦 Recibir esta parte</button>` : ''}</td></tr>
     ${its.map(fila).join('')}`).join('');
   abrirModal(`<h3>Partidas del pedido (${data.length}${grupos.size>1?` · ${grupos.size} partes`:''})</h3>
+    ${resumenPartes(grupos, facturas, data)}
     ${facturas.length ? `<p class="small" style="margin-bottom:6px">🧾 <b>Facturas de este pedido:</b> ${facturas.map(f=>`${esc(f.folio)} (${fmt(f.total)})${f.pdf_path?` <button class="btn sm sec" onclick="verPdfFactura('${esc(f.pdf_path)}')">📄 Ver</button>`:''}`).join(' · ')}</p>` : ''}
     ${recibiendo?`<p class="small muted" style="margin-bottom:8px">Cuando llegue una entrega: dale <b>📦 Recibir esta parte</b> (llena las cantidades pendientes de esa parte), coteja contra la factura 📄, ajusta si algo no llegó, y da clic en <b>Registrar recepción</b>. Solo lo recibido se suma al inventario.</p>`:''}
     <div class="tbl-scroll" style="max-height:400px;overflow-y:auto"><table>
