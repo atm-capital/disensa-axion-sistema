@@ -250,7 +250,7 @@ async function cargarPerfil(){
   }
   $('scr-app').classList.remove('hidden');
   iniciarAvisos();
-  procesarEstatusIndar(); logEv('sesion', 'entró al sistema');
+  procesarEstatusIndar(); procesarFacturasIndar(); logEv('sesion', 'entró al sistema');
   $('foot-nombre').textContent = perfil.nombre || perfil.correo;
   $('foot-rol').textContent = 'Rol: ' + perfil.rol;
   montarNav();
@@ -316,7 +316,6 @@ async function irA(id){
   catch(e){ toast(errMsg(e), true); }
 }
 
-
 /* ===== Registro de actividad (solo Andres) ===== */
 function logEv(accion, detalle){
   try{ sb.from('eventos').insert({correo:(typeof perfil!=='undefined'&&perfil&&perfil.correo)||'', accion:accion, detalle:String(detalle||'').slice(0,300)}).then(function(){},function(){}); }catch(e){}
@@ -346,7 +345,6 @@ async function vActividad(){
     '<div class="card"><h3 style="margin-bottom:8px">Eventos'+(fU?(' de '+esc(fU)+' &nbsp;<button class="btn sm sec" onclick="window._actU=\'\';vActividad()">ver todos</button>'):'')+'</h3>'+
     '<div style="overflow:auto;max-height:65vh"><table><thead><tr><th>Fecha y hora</th><th>Usuario</th><th>Acción</th><th>Detalle</th></tr></thead><tbody>'+filas+'</tbody></table></div></div>';
 }
-
 
 /* ===== Resumen de partes en lista de pedidos ===== */
 async function pedPartesStats(ids){
@@ -380,7 +378,6 @@ function resParteHTML(g, pind){
     +(pend?'<span class="badge b-gris">'+pend+' pendiente'+(pend>1?'s':'')+'</span> ':'')
     +'<span class="badge b-azul" title="Partes que ya tienen factura XML">🧾 '+f+'/'+n+'</span>'+extra;
 }
-
 
 /* ===== Resumen partes + facturas en modal de pedido ===== */
 function resumenPartes(grupos, facturas, data, pindar){
@@ -420,7 +417,6 @@ function resumenPartes(grupos, facturas, data, pindar){
   return '<div class="tbl-scroll" style="margin:6px 0 10px"><table><thead><tr><th>Parte</th><th class="num">Partidas</th><th class="num">Total c/IVA</th><th>Estado</th><th>Factura(s)</th><th>Indar en vivo</th></tr></thead><tbody>'+filas+'</tbody></table></div>';
 }
 
-
 /* ===== Estatus en vivo de Indar (partes_indar) ===== */
 function tiempoRel(ts){
   try{ const d = (Date.now()-new Date(ts).getTime())/60000; if(d<1) return 'justo ahora'; if(d<60) return 'hace '+Math.round(d)+' min'; if(d<1440) return 'hace '+Math.round(d/60)+' h'; return 'hace '+Math.round(d/1440)+' días'; }catch(e){ return ''; }
@@ -457,6 +453,48 @@ async function procesarEstatusIndar(){
   }catch(e){ toast('No pude leer el estatus que regresó Indar', true); }
 }
 
+/* ===== Traer facturas (XML+PDF) de Indar con el botón ===== */
+async function traerFacturasIndar(){
+  const pr = await sb.from('pedidos_compra').select('id,folio_externo,estado').neq('estado','cancelado');
+  if(pr.error){ toast(errMsg(pr.error),true); return; }
+  const folios = [...new Set((pr.data||[]).map(function(x){ return String(x.folio_externo||'').trim(); }).filter(Boolean))];
+  if(!folios.length){ toast('No hay pedidos registrados'); return; }
+  const fr = await sb.from('facturas').select('folio');
+  const ya = (fr.data||[]).map(function(x){ return String(x.folio); });
+  const h = btoa(unescape(encodeURIComponent(JSON.stringify({v:1, pedidos:folios, ya:ya})))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+  logEv('vista','traer facturas Indar: '+folios.length+' pedidos');
+  window.open('https://indar.mx/pedidosAnteriores#axfx='+h, '_blank');
+  abrirModal('<h3>🧾 Traer facturas de Indar</h3><p>Se abrió Indar en otra pestaña.</p><ol style="margin:10px 0 10px 18px;line-height:1.9"><li>Si te pide sesión, iníciala.</li><li>Dale clic a tu botón <b>🔧 Enviar a Axion</b>.</li><li>El botón busca facturas nuevas, trae sus XML y PDF, y regresa aquí solito — nomás confirmas con <b>Aplicar y archivar</b>.</li></ol><div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>');
+}
+async function procesarFacturasIndar(){
+  try{
+    const h = location.hash || '';
+    if(h.indexOf('#fxindar=') !== 0) return;
+    history.replaceState(null, '', location.pathname + location.search);
+    const data = JSON.parse(deB64(h.slice(9)));
+    const lista = data.facturas || [];
+    if(!lista.length){ toast('Indar no regresó facturas nuevas', true); return; }
+    toast('Descargando '+lista.length+' factura(s) de Indar...');
+    await irA('importar');
+    const files = [];
+    for(let i=0;i<lista.length;i++){
+      const f = lista[i];
+      if($('fx-status')) $('fx-status').textContent = 'Descargando factura '+f.f+' ('+(i+1)+'/'+lista.length+')...';
+      const pares = [[f.x,'.xml','text/xml'],[f.p,'.pdf','application/pdf']];
+      for(const par of pares){
+        if(!par[0]) continue;
+        const r = await sb.functions.invoke('fetch-doc', {body:{url:par[0]}});
+        if(r.error || !r.data || !r.data.b64){ toast('No pude bajar '+f.f+par[1], true); continue; }
+        const bin = atob(r.data.b64); const bytes = new Uint8Array(bin.length);
+        for(let j=0;j<bin.length;j++) bytes[j] = bin.charCodeAt(j);
+        files.push(new File([bytes], f.f+par[1], {type:par[2]}));
+      }
+    }
+    if(!files.length){ toast('No se pudo descargar ninguna factura', true); return; }
+    await leerFacturas(files);
+    toast('Facturas de Indar descargadas ✓ Revisa la tabla y dale "Aplicar y archivar"');
+  }catch(e){ toast('No pude procesar las facturas que regresó Indar', true); }
+}
 
 /* ===== Ajuste automático: renglones cancelados por Indar ===== */
 async function limpiarCanceladosIndar(pedTocados){
@@ -494,20 +532,6 @@ async function limpiarCanceladosIndar(pedTocados){
     }
   }catch(e){}
 }
-
-
-/* ===== Ir a parte dentro del modal ===== */
-function irAParte(p){
-  const el = document.getElementById('pt-'+p);
-  if(el){
-    el.scrollIntoView({behavior:'smooth', block:'start'});
-    el.style.transition = 'background .3s';
-    const orig = el.style.background;
-    el.style.background = '#ffe2bd';
-    setTimeout(function(){ el.style.background = orig || '#eef1f5'; }, 2000);
-  }
-}
-
 
 /* ===== Finanzas: compartir factura + agrupado y filtros ===== */
 function compartirFactura(medio, path, folio, total, ped){
@@ -562,7 +586,6 @@ function finFiltroFact(f){
   });
 }
 
-
 /* ===== Compartir varias facturas ===== */
 async function compartirFacturasSel(medio){
   const sel = Array.prototype.slice.call(document.querySelectorAll('input.fsel:checked'));
@@ -577,6 +600,18 @@ async function compartirFacturasSel(medio){
   logEv('descarga', 'Compartir '+sel.length+' facturas ('+medio+')');
   if(medio==='wa') window.open('https://wa.me/?text='+encodeURIComponent(msg), '_blank');
   else location.href = 'mailto:?subject='+encodeURIComponent(sel.length+' facturas Indar')+'&body='+encodeURIComponent(msg);
+}
+
+/* ===== Ir a parte dentro del modal ===== */
+function irAParte(p){
+  const el = document.getElementById('pt-'+p);
+  if(el){
+    el.scrollIntoView({behavior:'smooth', block:'start'});
+    el.style.transition = 'background .3s';
+    const orig = el.style.background;
+    el.style.background = '#ffe2bd';
+    setTimeout(function(){ el.style.background = orig || '#eef1f5'; }, 2000);
+  }
 }
 
 /* ================= MODAL ================= */
@@ -1447,7 +1482,7 @@ async function vPedidos(){
       <div class="kpi" style="cursor:pointer;${!window._pedFiltro?'':'opacity:.75'}" title="Ver todos" onclick="window._pedFiltro=null; vPedidos()"><div class="l">Total pedidos (${data.filter(p=>p.estado!=='cancelado').length})</div><div class="v">${fmt(totalGral)}</div></div>
     </div>` + `
     <div class="card"><h3>Pedidos de compra${window._pedFiltro?` · filtro: <span class="badge ${badges[window._pedFiltro]}">${window._pedFiltro}</span>`:''}</h3>
-    <button class="btn sm" style="float:right;margin-left:10px" onclick="syncIndar()">🔄 Actualizar estatus Indar</button><p class="small muted" style="margin-bottom:10px">Los pedidos se capturan en el portal del proveedor (Indar / Holcim) y aquí se registran para dar seguimiento. Al marcar <b>Recibido</b>, las cantidades se suman al inventario automáticamente.</p>
+    <button class="btn sm" style="float:right;margin-left:10px" onclick="syncIndar()">🔄 Actualizar estatus Indar</button><button class="btn sm sec" style="float:right" onclick="traerFacturasIndar()">🧾 Traer facturas de Indar</button><p class="small muted" style="margin-bottom:10px">Los pedidos se capturan en el portal del proveedor (Indar / Holcim) y aquí se registran para dar seguimiento. Al marcar <b>Recibido</b>, las cantidades se suman al inventario automáticamente.</p>
     <div class="tbl-scroll"><table>
       <thead><tr><th>Folio</th><th>Proveedor</th><th>Fecha</th><th>Estado</th><th>Partes / avance</th><th>Plazo</th><th class="num">Total</th><th></th></tr></thead>
       <tbody>${dataF.map(p=>`<tr style="cursor:pointer" title="Clic: ver partes, cotejar factura y recibir" onclick="verPedido(${p.id}, '${p.estado}')">
@@ -1501,6 +1536,7 @@ async function verPedido(id, estado){
     ${its.map(fila).join('')}`).join('');
   abrirModal(`<h3>Partidas del pedido (${data.length}${grupos.size>1?` · ${grupos.size} partes`:''})</h3>
     ${resumenPartes(grupos, facturas, data, pindar)}
+    <div id="ev-ped" class="small" style="margin:0 0 8px"></div>
     ${facturas.length ? `<p class="small" style="margin-bottom:6px">🧾 <b>Facturas de este pedido:</b> ${facturas.map(f=>`${esc(f.folio)} (${fmt(f.total)})${f.pdf_path?` <button class="btn sm sec" onclick="verPdfFactura('${esc(f.pdf_path)}')">📄 Ver</button>`:''}`).join(' · ')}</p>` : ''}
     ${recibiendo?`<p class="small muted" style="margin-bottom:8px">Cuando llegue una entrega: dale <b>📦 Recibir esta parte</b> (llena las cantidades pendientes de esa parte), coteja contra la factura 📄, ajusta si algo no llegó, y da clic en <b>Registrar recepción</b>. Solo lo recibido se suma al inventario.</p>`:''}
     <div class="tbl-scroll" style="max-height:400px;overflow-y:auto"><table>
@@ -1512,6 +1548,29 @@ async function verPedido(id, estado){
       <button class="btn" onclick="registrarRecepcion(${id})">Registrar recepción</button>
       <button class="btn sec" onclick="guardarCambiosPedido(${id})">💾 Guardar cambios (cantidades/quitar)</button>`:''}
       <button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
+  cargarEvidencias(id);
+}
+async function cargarEvidencias(pedidoId){
+  const el = $('ev-ped'); if(!el) return;
+  const {data, error} = await sb.storage.from('facturas').list('evidencias/'+pedidoId, {limit:50, sortBy:{column:'name', order:'desc'}});
+  const archivos = (error||!data) ? [] : data.filter(f=>f.name && !f.name.startsWith('.'));
+  el.innerHTML = `📎 <b>Evidencias de entrega</b> (foto o escaneo del papel firmado): ${archivos.length ? archivos.map(f=>`<button class="btn sm sec" onclick="verEvidencia('evidencias/${pedidoId}/${esc(f.name)}')">${/\.pdf$/i.test(f.name)?'📄':'📷'} ${esc(f.name.replace(/^\d+_/,'').slice(0,28))}</button>`).join(' ') : '<span class="muted">ninguna todavía</span>'}
+    <label class="btn sm" style="margin-left:6px;cursor:pointer">⬆️ Subir<input type="file" accept="image/*,.pdf" style="display:none" onchange="subirEvidencia(${pedidoId}, this)"></label>`;
+}
+async function subirEvidencia(pedidoId, inp){
+  const f = inp.files && inp.files[0]; if(!f) return;
+  toast('Subiendo evidencia...');
+  const limpio = f.name.replace(/[^A-Za-z0-9_.-]/g,'_').slice(-60);
+  const path = 'evidencias/'+pedidoId+'/'+Date.now()+'_'+limpio;
+  const {error} = await sb.storage.from('facturas').upload(path, f, {contentType: f.type || 'application/octet-stream'});
+  if(error){ toast(errMsg(error), true); return; }
+  logEv('evidencia', 'pedido '+pedidoId+': '+limpio);
+  toast('Evidencia guardada ✓'); cargarEvidencias(pedidoId);
+}
+async function verEvidencia(path){
+  const {data, error} = await sb.storage.from('facturas').createSignedUrl(path, 300);
+  if(error){ toast(errMsg(error), true); return; }
+  window.open(data.signedUrl, '_blank');
 }
 function llenarParte(p){
   pedItems.forEach(i=>{ if((i.parte||'')===p){ const el=$('rec-'+i.id); if(el) el.value = Math.max(0, +i.cantidad - +(i.cantidad_recibida||0)); } });
@@ -1718,6 +1777,34 @@ async function axBM(){
     if(!/indar\.mx$/.test(location.hostname)){alert('Este boton se usa dentro de indar.mx (con tu sesion iniciada).');return;}
     var K=document.querySelector('meta[name=csrf-token]');
     var T=K?K.getAttribute('content'):'';
+    if(location.hash.indexOf('\x23axfx=')===0){
+      var MF=function(t){var e=document.getElementById('axmsg');if(!e){e=document.createElement('div');e.id='axmsg';e.style.cssText='position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:99999;background:#26292b;color:#fff;padding:12px 22px;border-radius:10px;font:14px sans-serif;border-left:5px solid #E8790F';document.body.appendChild(e);}e.textContent='Axion: '+t;};
+      var qf=JSON.parse(decodeURIComponent(escape(atob(location.hash.slice(6).replace(/-/g,'+').replace(/_/g,'/')))));
+      var yaF={};(qf.ya||[]).forEach(function(x){yaF[String(x)]=1;});
+      var vistosF={},outF=[],pedsF=qf.pedidos||[];
+      var getU=async function(nf,tp){var rr=await fetch('/pedidosAnteriores/descargarDocumento',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','X-CSRF-TOKEN':T,'X-Requested-With':'XMLHttpRequest'},body:'numFactura='+nf+'&type='+tp});var tt=(await rr.text()).trim().replace(/^"|"$/g,'');return /^https?:/.test(tt)?tt:'';};
+      for(var f1=0;f1<pedsF.length;f1++){
+        MF('buscando facturas del pedido '+pedsF[f1]+' ('+(f1+1)+'/'+pedsF.length+')...');
+        try{
+          if(typeof showCotizacionModal==='function'){showCotizacionModal(+pedsF[f1]);await new Promise(function(r){setTimeout(r,1300);});}
+          var cajasF=[].slice.call(document.querySelectorAll('[onclick*=openDetail]'));
+          for(var f2=0;f2<cajasF.length;f2++){
+            var mF=(cajasF[f2].getAttribute('onclick')||'').match(/openDetail\('?(\d+)'?\s*,\s*'?(\d+)'?/);
+            if(!mF)continue;
+            var soF=mF[1],nfF=mF[2];
+            if(!nfF||yaF[nfF]||vistosF[nfF])continue;
+            vistosF[nfF]=1;
+            MF('pidiendo ligas de la factura '+nfF+'...');
+            var xU=await getU(nfF,'xml');var pU=await getU(nfF,'pdf');
+            if(xU||pU)outF.push({f:nfF,so:soF,x:xU,p:pU});
+          }
+        }catch(e8){}
+      }
+      if(!outF.length){MF('no hay facturas nuevas que traer');setTimeout(function(){var eZ=document.getElementById('axmsg');if(eZ)eZ.remove();},4000);return;}
+      MF(outF.length+' factura(s) nuevas, regresando a Axion...');
+      location.href='https://axiontools.mx/sistema.html'+'\x23fxindar='+B(JSON.stringify({ts:Date.now(),facturas:outF}));
+      return;
+    }
     if(location.hash.indexOf('\x23axq=')===0){
       var MQ=function(t){var e=document.getElementById('axmsg');if(!e){e=document.createElement('div');e.id='axmsg';e.style.cssText='position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:99999;background:#26292b;color:#fff;padding:12px 22px;border-radius:10px;font:14px sans-serif;border-left:5px solid #E8790F';document.body.appendChild(e);}e.textContent='Axion: '+t;};
       var q0=JSON.parse(decodeURIComponent(escape(atob(location.hash.slice(5).replace(/-/g,'+').replace(/_/g,'/')))));
@@ -1967,10 +2054,10 @@ function fxParseXML(texto, nombre){
     subtotal: parseFloat(comp.getAttribute('SubTotal')||'0'), dias, items };
 }
 let fxPdfs = {};
-async function leerFacturas(){
-  const files = [...$('fx-files').files];
+async function leerFacturas(archivos){
+  const files = (archivos && archivos.length) ? archivos : [...$('fx-files').files];
   if(!files.length){ toast('Elige los XML (y PDF) de las facturas', true); return; }
-  $('fx-btn').disabled = true;
+  if($('fx-btn')) $('fx-btn').disabled = true;
   const st = m => $('fx-status').textContent = m;
   try{
     st('Leyendo archivos...');
@@ -2030,7 +2117,7 @@ async function leerFacturas(){
       </tr>`).join('')}</tbody></table></div>
       ${fxDocs.some(pendiente) ? `<div style="margin-top:12px"><button class="btn" id="fx-aplicar" onclick="aplicarFacturas()">✅ Aplicar y archivar</button></div>` : '<p class="small muted" style="margin-top:10px">Todo está aplicado y archivado. Las ves en <b>Finanzas → Facturas</b>.</p>'}`;
   }catch(e){ st(''); toast(errMsg(e), true); }
-  $('fx-btn').disabled = false;
+  if($('fx-btn')) $('fx-btn').disabled = false;
 }
 async function fxArchivar(d){ // guarda en tabla facturas + sube PDF (si existen tabla/bucket)
   if(!window._fxTabla || d.enRegistro) return;
