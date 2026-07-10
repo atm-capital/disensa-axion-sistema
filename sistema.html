@@ -1233,12 +1233,14 @@ let invData = [];
 async function vInventario(){
   if(esAdmin()) $('vtools').innerHTML = `<button class="btn" onclick="editarProducto(null)">+ Producto</button>
     <button class="btn sec" onclick="verResurtido()">🛒 Resurtido</button>
+    <button class="btn sec" onclick="etiquetasPrecios()">🏷️ Precios tienda</button>
     <button class="btn sec" onclick="exportarInv()">Exportar CSV</button>`;
   const {data, error} = await sb.from('productos').select('*').order('descripcion');
   if(error) throw error;
   invData = data;
   const cats = [...new Set(data.map(p=>p.categoria))].sort();
   $('v-inventario').innerHTML = `
+    ${esAdmin()?'<div class="kpis" id="inv-kpis" style="margin-bottom:14px"></div>':''}
     <div class="toolbar">
       <input type="search" id="inv-q" placeholder="Buscar por código o descripción..." oninput="pintarInv()">
       <select id="inv-cat" onchange="pintarInv()"><option value="">Todas las categorías</option>
@@ -1275,7 +1277,13 @@ function pintarInv(){
   }).join('') || '<tr><td colspan="8" class="muted">Sin resultados.</td></tr>';
   const valorC = rows.reduce((s,p)=>s+ +p.costo * +p.stock,0);
   const valorV = rows.reduce((s,p)=>s+ +p.precio * +p.stock,0);
-  $('inv-pie').textContent = `${rows.length} producto(s) · valor a costo ${fmt(valorC)} · valor a precio de venta ${fmt(valorV)} · Margen = (precio ÷ 1.16 − costo) ÷ costo, porque el precio de venta incluye IVA y el costo no`;
+  const ganancia = valorV/1.16 - valorC;
+  const k = $('inv-kpis');
+  if(k) k.innerHTML = `
+    <div class="kpi"><div class="l">Valor a costo (sin IVA)</div><div class="v">${fmt(valorC)}</div><div class="s">con IVA: <b>${fmt(Math.round(valorC*116)/100)}</b></div></div>
+    <div class="kpi"><div class="l">Valor a precio de venta</div><div class="v">${fmt(valorV)}</div><div class="s">ya con IVA incluido</div></div>
+    <div class="kpi"><div class="l">Ganancia si se vende todo</div><div class="v">${fmt(Math.round(ganancia*100)/100)}</div><div class="s">venta sin IVA − costo</div></div>`;
+  $('inv-pie').textContent = `${rows.length} producto(s) mostrados — las tarjetas de arriba se recalculan con los filtros`;
 }
 function editarProducto(id){
   const p = id ? invData.find(x=>x.id===id) : {codigo:'',descripcion:'',categoria:'General',costo:0,precio:0,stock:0,stock_min:3,activo:true};
@@ -1343,6 +1351,32 @@ async function guardarProducto(id){
   }
   if(error){ toast(errMsg(error), true); return; }
   cerrarModal(); toast('Producto guardado'); vInventario();
+}
+function etiquetasPrecios(){
+  const q = ($('inv-q').value||'').toLowerCase().trim();
+  const cat = $('inv-cat').value;
+  const rows = invData.filter(p => p.activo && +p.precio>0 &&
+    (!q || p.codigo.toLowerCase().includes(q) || p.descripcion.toLowerCase().includes(q)) &&
+    (!cat || p.categoria === cat))
+    .sort((a,b)=>a.categoria.localeCompare(b.categoria)||a.descripcion.localeCompare(b.descripcion));
+  if(!rows.length){ toast('No hay productos con precio con los filtros actuales', true); return; }
+  const w = window.open('','_blank');
+  if(!w){ toast('Permite las ventanas emergentes para imprimir', true); return; }
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Precios tienda · Axion Tools</title>
+  <style>body{font-family:'Segoe UI',sans-serif;margin:8mm;color:#26292b}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr)}
+  .tag{border:1px dashed #bbb;padding:7px 10px;height:33mm;box-sizing:border-box;display:flex;flex-direction:column;justify-content:space-between;page-break-inside:avoid;overflow:hidden}
+  .cod{font-size:9.5px;color:#888}.desc{font-size:12px;font-weight:600;line-height:1.25;max-height:31px;overflow:hidden}
+  .pre{font-size:24px;font-weight:800}.pre small{font-size:9px;font-weight:400;color:#888;display:block}
+  .marca{font-size:9px;color:#E8790F;font-weight:700;text-align:right}
+  @media print{.noprint{display:none}}</style></head><body>
+  <p class="noprint" style="margin:0 0 10px"><button onclick="window.print()" style="padding:10px 18px;background:#E8790F;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer">🖨 Imprimir</button> <span style="font-size:12px;color:#777">${rows.length} etiquetas (recorta por la línea punteada)</span></p>
+  <div class="grid">${rows.map(p=>`<div class="tag">
+    <div><div class="cod">${esc(p.codigo)} · ${esc(p.categoria)}</div><div class="desc">${esc(p.descripcion)}</div></div>
+    <div class="pre">${fmt(p.precio)}<small>IVA incluido</small></div>
+    <div class="marca">AXION TOOLS</div></div>`).join('')}</div>
+  </body></html>`);
+  w.document.close();
 }
 function exportarInv(){
   const enc = ['codigo','descripcion','categoria','costo','precio','stock','stock_min','activo'];
