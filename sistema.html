@@ -254,7 +254,9 @@ async function cargarPerfil(){
   $('foot-nombre').textContent = perfil.nombre || perfil.correo;
   $('foot-rol').textContent = 'Rol: ' + perfil.rol;
   montarNav();
-  irA(localStorage.getItem('ax_import') && perfil.rol === 'admin' ? 'importar' : 'resumen');
+  const vGuardada = localStorage.getItem('ax_vista');
+  const vValida = vGuardada && VISTAS.some(v=>v.id===vGuardada && v.roles.includes(perfil.rol) && (!v.solo || v.solo===(perfil.correo||'')));
+  irA(localStorage.getItem('ax_import') && perfil.rol === 'admin' ? 'importar' : (vValida ? vGuardada : 'resumen'));
 }
 
 /* ================= AUTH ================= */
@@ -307,6 +309,7 @@ async function irA(id){
   $('vtitle').textContent = VISTAS.find(v=>v.id===id).titulo;
   $('vtools').innerHTML = '';
   $('sidebar').classList.remove('open');
+  try{ localStorage.setItem('ax_vista', id); }catch(e){}
   logEv('vista', id);
   try { await ({resumen:vResumen, ventas:vVentas, cotizaciones:vCotizaciones, catalogo:vCatalogo, inventario:vInventario, clientes:vClientes,
     pedidos:vPedidos, finanzas:vFinanzas, usuarios:vUsuarios, importar:vImportar, actividad:vActividad})[id](); }
@@ -608,7 +611,7 @@ async function vResumen(){
     <div class="kpis">
       <div class="kpi" style="cursor:pointer" title="Ir a Ventas" onclick="irA('ventas')"><div class="l">Ventas de hoy</div><div class="v">${fmt(totHoy)}</div><div class="s">${vHoy.length} venta(s)</div></div>
       <div class="kpi" style="cursor:pointer" title="Ir a Ventas" onclick="irA('ventas')"><div class="l">Ventas del mes</div><div class="v">${fmt(totMes)}</div><div class="s">${ventasMes.data.length} venta(s)</div></div>
-      <div class="kpi" style="cursor:pointer" title="Ir a Inventario" onclick="irA('inventario')"><div class="l">Valor de inventario</div><div class="v">${fmt(valInv)}</div><div class="s">a costo · ${prods.data.length} productos</div></div>
+      <div class="kpi" style="cursor:pointer" title="Ir a Inventario" onclick="irA('inventario')"><div class="l">Valor de inventario (sin IVA)</div><div class="v">${fmt(valInv)}</div><div class="s">con IVA: <b>${fmt(Math.round(valInv*116)/100)}</b> · a costo · ${prods.data.length} productos</div></div>
       <div class="kpi" style="cursor:pointer" title="Ir a Inventario" onclick="irA('inventario')"><div class="l">Stock bajo</div><div class="v">${bajos}</div><div class="s">productos en o bajo mínimo</div></div>
       <div class="kpi" style="cursor:pointer" title="Ir a Finanzas" onclick="irA('finanzas')"><div class="l">Por pagar</div><div class="v">${fmt(porPagar)}</div>
         <div class="s">${prox ? 'próximo: '+fecha(prox.fecha_vencimiento) : 'sin pendientes'}</div></div>
