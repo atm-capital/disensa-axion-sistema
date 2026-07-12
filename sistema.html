@@ -728,7 +728,7 @@ async function nuevaVenta(){
   carrito = [];
   const [p, c] = await Promise.all([
     sb.from('productos').select('id,codigo,descripcion,precio,stock').eq('activo',true).order('descripcion'),
-    sb.from('clientes').select('id,nombre').order('nombre'),
+    sb.from('clientes').select('id,nombre,oficio,desc_pct').order('nombre'),
   ]);
   if(p.error||c.error){ toast(errMsg(p.error||c.error),true); return; }
   prodCache = p.data; cliCache = c.data;
@@ -741,8 +741,9 @@ async function nuevaVenta(){
       </div>
       <div>
         <div class="field"><label>Cliente</label>
-          <select id="nv-cliente"><option value="">Mostrador (sin cliente)</option>
-          ${cliCache.map(x=>`<option value="${x.id}">${esc(x.nombre)}</option>`).join('')}</select></div>
+          <select id="nv-cliente" onchange="aplicarMaestro()"><option value="">Mostrador (sin cliente)</option>
+          ${cliCache.map(x=>`<option value="${x.id}">${esc(x.nombre)}${x.oficio?' 🔧':''}</option>`).join('')}</select></div>
+        <p id="nv-maestro" class="small" style="margin:-6px 0 8px;color:var(--verde,#15803d);font-weight:600"></p>
         <div class="field"><label>Método de pago</label>
           <select id="nv-metodo"><option value="efectivo">Efectivo</option><option value="tarjeta">Tarjeta</option>
           <option value="transferencia">Transferencia</option><option value="ak_pago">AK Pago</option><option value="credito">Crédito</option></select></div>
@@ -770,7 +771,7 @@ function agregarProd(id){
   if(+p.stock <= 0){ toast('Sin stock de ese producto', true); return; }
   const ya = carrito.find(x=>x.producto_id===id);
   if(ya){ if(ya.cantidad + 1 > +p.stock){ toast('No hay más stock', true); return; } ya.cantidad++; }
-  else carrito.push({producto_id:id, codigo:p.codigo, desc:p.descripcion, cantidad:1, precio_unit:+p.precio, max:+p.stock});
+  else { const pm = pctMaestro(); carrito.push({producto_id:id, codigo:p.codigo, desc:p.descripcion, cantidad:1, base:+p.precio, precio_unit: Math.round(+p.precio*(100-pm))/100, max:+p.stock}); }
   pintarCarrito();
 }
 function cambiarCant(i, v){
@@ -780,6 +781,14 @@ function cambiarCant(i, v){
 }
 function cambiarPrecio(i, v){ carrito[i].precio_unit = Math.max(0, +v||0); pintarCarrito(); }
 function quitarProd(i){ carrito.splice(i,1); pintarCarrito(); }
+function pctMaestro(){ const id = +($('nv-cliente')?.value||0); const c = (cliCache||[]).find(x=>x.id===id); return (c && +c.desc_pct>0) ? Math.min(20, +c.desc_pct) : 0; }
+function aplicarMaestro(){
+  const p = pctMaestro();
+  carrito.forEach(c=>{ if(c.base) c.precio_unit = Math.round(c.base*(100-p))/100; });
+  const el = $('nv-maestro');
+  if(el) el.innerHTML = p>0 ? `🔧 Precio maestro: −${p}% aplicado a toda la venta (puedes ajustar renglones a mano)` : '';
+  pintarCarrito();
+}
 function pintarCarrito(){
   $('nv-carrito').innerHTML = carrito.map((c,i)=>`
     <tr><td style="max-width:180px"><b>${esc(c.codigo)}</b><br><span class="small muted">${esc(c.desc.slice(0,40))}</span></td>
@@ -1430,16 +1439,34 @@ async function vClientes(){
   if(error) throw error;
   cliData = data;
   $('v-clientes').innerHTML = `
+    <div class="toolbar">
+      <input type="search" id="cl-q" placeholder="Buscar por nombre, teléfono u oficio..." oninput="pintarClientes()">
+      <label class="small"><input type="checkbox" id="cl-solo-maestros" onchange="pintarClientes()"> Solo maestros 🔧</label>
+    </div>
     <div class="card"><div class="tbl-scroll"><table>
-      <thead><tr><th>Nombre</th><th>Teléfono</th><th>Correo</th><th>RFC</th><th>Notas</th><th></th></tr></thead>
-      <tbody>${data.map(c=>`<tr>
-        <td><b>${esc(c.nombre)}</b></td><td>${esc(c.telefono)}</td><td>${esc(c.correo)}</td>
-        <td>${esc(c.rfc)}</td><td class="small muted">${esc(c.notas)}</td>
-        <td>${puedeVender()?`<button class="btn sec sm" onclick="editarCliente(${c.id})">Editar</button>`:''}</td></tr>`).join('')
-        || '<tr><td colspan="6" class="muted">Aún no hay clientes. Los clientes son opcionales: puedes vender a "Mostrador".</td></tr>'}</tbody></table></div></div>`;
+      <thead><tr><th>Nombre</th><th>Oficio</th><th>Teléfono</th><th>Correo</th><th>RFC</th><th>Notas</th><th></th></tr></thead>
+      <tbody id="cl-body"></tbody></table></div>
+      <p class="small muted" id="cl-pie" style="margin-top:10px"></p></div>`;
+  pintarClientes();
+}
+function pintarClientes(){
+  const q = ($('cl-q').value||'').toLowerCase().trim();
+  const solo = $('cl-solo-maestros').checked;
+  const rows = cliData.filter(c=>
+    (!q || (c.nombre||'').toLowerCase().includes(q) || (c.telefono||'').includes(q) || (c.oficio||'').toLowerCase().includes(q)) &&
+    (!solo || (c.oficio||'')));
+  $('cl-body').innerHTML = rows.map(c=>`<tr>
+    <td><b>${esc(c.nombre)}</b></td>
+    <td>${c.oficio?`<span class="badge b-azul">🔧 ${esc(c.oficio)}</span>${+c.desc_pct>0?` <span class="badge b-verde">−${+c.desc_pct}%</span>`:''}`:''}</td>
+    <td>${esc(c.telefono)}</td><td>${esc(c.correo)}</td>
+    <td>${esc(c.rfc)}</td><td class="small muted">${esc(c.notas)}</td>
+    <td>${puedeVender()?`<button class="btn sec sm" onclick="editarCliente(${c.id})">Editar</button>`:''}</td></tr>`).join('')
+    || '<tr><td colspan="7" class="muted">Aún no hay clientes. Los clientes son opcionales: puedes vender a "Mostrador".</td></tr>';
+  const nM = cliData.filter(c=>c.oficio).length;
+  $('cl-pie').textContent = `${rows.length} cliente(s) · ${nM} maestro(s) registrados 🔧`;
 }
 function editarCliente(id){
-  const c = id ? cliData.find(x=>x.id===id) : {nombre:'',telefono:'',correo:'',rfc:'',direccion:'',notas:''};
+  const c = id ? cliData.find(x=>x.id===id) : {nombre:'',telefono:'',correo:'',rfc:'',direccion:'',notas:'',oficio:'',desc_pct:0};
   abrirModal(`<h3>${id?'Editar':'Nuevo'} cliente</h3>
     <div class="field"><label>Nombre *</label><input id="cl-nombre" value="${esc(c.nombre)}"></div>
     <div class="frow">
@@ -1448,6 +1475,10 @@ function editarCliente(id){
       <div class="field"><label>RFC</label><input id="cl-rfc" value="${esc(c.rfc)}"></div>
       <div class="field"><label>Dirección</label><input id="cl-dir" value="${esc(c.direccion)}"></div>
     </div>
+    <div class="frow">
+      <div class="field"><label>🔧 Oficio (si es maestro)</label><input id="cl-oficio" list="cl-oficios" value="${esc(c.oficio||'')}" placeholder="— cliente normal —"><datalist id="cl-oficios"><option>Albañil</option><option>Plomero</option><option>Eléctrico</option><option>Herrero</option><option>Carpintero</option><option>Pintor</option><option>Yesero / Tablaroquero</option><option>Contratista</option><option>Ferretería</option><option>Jardinero</option></datalist></div>
+      ${esAdmin()?`<div class="field"><label>Descuento maestro % (se aplica en ventas)</label><input id="cl-desc" type="number" min="0" max="20" step="1" value="${+(c.desc_pct||0)}"></div>`:''}
+    </div>
     <div class="field"><label>Notas</label><textarea id="cl-notas" rows="2">${esc(c.notas)}</textarea></div>
     <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cancelar</button>
       <button class="btn" onclick="guardarCliente(${id||'null'})">Guardar</button></div>`);
@@ -1455,7 +1486,8 @@ function editarCliente(id){
 async function guardarCliente(id){
   const obj = {nombre:$('cl-nombre').value.trim(), telefono:$('cl-tel').value.trim(),
     correo:$('cl-correo').value.trim(), rfc:$('cl-rfc').value.trim(),
-    direccion:$('cl-dir').value.trim(), notas:$('cl-notas').value.trim()};
+    direccion:$('cl-dir').value.trim(), notas:$('cl-notas').value.trim(), oficio:$('cl-oficio').value.trim()};
+  if($('cl-desc')) obj.desc_pct = Math.max(0, Math.min(20, +($('cl-desc').value||0)));
   if(!obj.nombre){ toast('Falta el nombre', true); return; }
   const {error} = id ? await sb.from('clientes').update(obj).eq('id',id) : await sb.from('clientes').insert(obj);
   if(error){ toast(errMsg(error), true); return; }
