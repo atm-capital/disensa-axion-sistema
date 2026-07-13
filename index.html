@@ -36,6 +36,12 @@ main{max-width:1200px; margin:0 auto; padding:16px}
 .prod img{width:100%; height:110px; object-fit:contain}
 .prod .noimg{width:100%; height:110px; display:flex; flex-direction:column; gap:7px; align-items:center; justify-content:center; color:#b7bec9; font-size:12.5px; background:#f7f8fa; border-radius:8px}
 .prod .noimg::before{content:''; width:40px; height:40px; background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 1.5l9.1 5.25v10.5L12 22.5l-9.1-5.25V6.75z' fill='%23dde2ea'/%3E%3Ccircle cx='12' cy='12' r='4.2' fill='%23f7f8fa'/%3E%3C/svg%3E") center/contain no-repeat}
+.fmod{position:fixed; inset:0; background:rgba(20,22,26,.55); display:none; align-items:center; justify-content:center; z-index:80; padding:16px}
+.fmod.on{display:flex}
+.fcard{background:#fff; border-radius:14px; max-width:520px; width:100%; padding:20px 20px 18px; position:relative; max-height:92vh; overflow:auto}
+.fcard>img{width:100%; height:270px; object-fit:contain}
+.fcard .noimg{height:200px}
+.fx{position:absolute; top:8px; right:14px; font-size:22px; cursor:pointer; color:#98a0ac; line-height:1}
 .prod .marca{font-size:11px; color:var(--naranja); font-weight:700; text-transform:uppercase}
 .prod .desc{font-size:13px; line-height:1.35; flex:1}
 .prod .cod{font-size:11px; color:var(--muted)}
@@ -143,12 +149,13 @@ async function buscar(reinicia){
   const {data, error} = await sb.rpc('portal_busca', {q:$('q').value.trim(), r:rubroSel, m:$('f-marca').value, lim:48, off});
   if(error){ $('grid').innerHTML = '<p>No se pudo cargar el catálogo. Intenta de nuevo.</p>'; return; }
   const total = data.length ? +data[0].total : 0;
+  data.forEach(p=>{ fichaData[p.codigo] = p; });
   $('total-res').textContent = total ? total.toLocaleString('es-MX') + ' producto(s)' : 'Sin resultados — prueba con otra palabra';
   const html = data.map(p=>`
     <div class="prod">
-      <img src="${img(p.codigo)}" loading="lazy" onerror="this.outerHTML='<div class=noimg>Foto no disponible</div>'">
+      <img src="${img(p.codigo)}" loading="lazy" style="cursor:zoom-in" onclick='ficha(${JSON.stringify(p.codigo)})' onerror="this.outerHTML='<div class=noimg>Foto no disponible</div>'">
       <div class="marca">${esc(p.marca||'')}</div>
-      <div class="desc">${esc(p.descripcion)}</div>
+      <div class="desc" style="cursor:pointer" onclick='ficha(${JSON.stringify(p.codigo)})'>${esc(p.descripcion)}</div>
       <div class="cod">${esc(p.codigo)}</div>
       ${p.precio ? `<div style="font-size:15px"><b>${fmt(p.precio)}</b> <span style="font-size:11px;color:var(--muted)">IVA incl. · lista</span></div>` : ''}
       <div class="addrow">
@@ -159,6 +166,25 @@ async function buscar(reinicia){
   if(reinicia) $('grid').innerHTML = html; else $('grid').insertAdjacentHTML('beforeend', html);
   off += data.length;
   $('mas').style.display = off < total ? 'block' : 'none';
+}
+let fichaData = {};
+function ficha(codigo){
+  const p = fichaData[codigo]; if(!p) return;
+  let m = document.getElementById('fmod');
+  if(!m){ m = document.createElement('div'); m.id='fmod'; m.className='fmod'; m.addEventListener('click', e=>{ if(e.target===m) m.classList.remove('on'); }); document.body.appendChild(m); }
+  m.innerHTML = `<div class="fcard">
+    <span class="fx" onclick="document.getElementById('fmod').classList.remove('on')">✕</span>
+    <img src="${img(p.codigo)}" onerror="this.outerHTML='<div class=noimg>Foto no disponible</div>'">
+    <div class="marca" style="margin-top:10px">${esc(p.marca||'')}</div>
+    <h3 style="font-size:17px; line-height:1.4; margin:4px 0 6px">${esc(p.descripcion)}</h3>
+    <div class="cod">Código: ${esc(p.codigo)}</div>
+    ${p.precio ? `<div style="font-size:20px; margin:10px 0 2px"><b>${fmt(p.precio)}</b> <span style="font-size:12px; color:var(--muted)">IVA incl. · precio de lista</span></div>
+    <div style="font-size:12px; color:var(--muted)">Al cotizar te damos tu precio de proyecto/mayoreo</div>` : ''}
+    <div class="addrow" style="margin-top:14px">
+      <input type="number" min="1" value="1">
+      <button class="btn" onclick='agregar(${JSON.stringify(p.codigo)}, ${JSON.stringify(p.descripcion)}, this)'>Agregar a mi solicitud</button>
+    </div></div>`;
+  m.classList.add('on');
 }
 function agregar(codigo, desc, btn){
   const inp = btn.parentElement.querySelector('input');
