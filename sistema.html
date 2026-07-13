@@ -1230,6 +1230,7 @@ async function pintarCatalogo(agregar){
   const desde = catPagina*48;
   const {data, error} = await con.range(desde, desde+47);
   if(error){ toast(errMsg(error), true); return; }
+  window._catData = window._catData || {}; (data||[]).forEach(p=>{ window._catData[p.codigo] = p; });
   if(q.length>=2 && !catPagina){ clearTimeout(window._evT); window._evT=setTimeout(function(){ logEv('busqueda', q); }, 1500); }
   const html = (data||[]).map(p=>{
     const costoD = Math.round(+p.precio_lista*(1-(+p.promo_pct||0))*0.95*100)/100;
@@ -1237,8 +1238,8 @@ async function pintarCatalogo(agregar){
     const pz = pzasDe(p.descripcion);
     return `<div class="card" style="margin:0;padding:12px;${sel?'outline:2px solid var(--rojo)':''}">
       <img src="https://storage.googleapis.com/indararticulos/${encodeURIComponent(p.codigo.replace(/[^A-Za-z0-9]/g,'_'))}_MD.webp"
-        style="width:100%;height:110px;object-fit:contain" onerror="this.style.display='none'" loading="lazy">
-      <div class="small" style="min-height:48px"><b>${esc(p.codigo)}</b> <span class="badge b-gris">${esc(p.marca||'')}</span> <a href="https://indar.mx/portal/detallesProducto/${encodeURIComponent(p.codigo.replace(/ /g,'_'))}" target="_blank" class="link" title="Ver producto y ficha técnica en Indar (con tu sesión iniciada)">📎ficha</a><br>${esc((p.descripcion||'').slice(0,60))}</div>
+        style="width:100%;height:110px;object-fit:contain;cursor:zoom-in" onclick='fichaCat(${JSON.stringify(p.codigo).replace(/'/g,"&#39;")})' onerror="this.style.display='none'" loading="lazy">
+      <div class="small" style="min-height:48px;cursor:pointer" onclick='fichaCat(${JSON.stringify(p.codigo).replace(/'/g,"&#39;")})'><b>${esc(p.codigo)}</b> <span class="badge b-gris">${esc(p.marca||'')}</span> <a href="https://indar.mx/portal/detallesProducto/${encodeURIComponent(p.codigo.replace(/ /g,'_'))}" target="_blank" class="link" title="Ver producto y ficha técnica en Indar (con tu sesión iniciada)" onclick="event.stopPropagation()">📎ficha</a><br>${esc((p.descripcion||'').slice(0,60))}</div>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">
         <div><b>${fmt(p.precio_sugerido)}</b>${pz?`<br><span class="small muted">${fmt(p.precio_sugerido/pz)}/pza</span>`:''}
           ${esAdmin()?`<br><span class="small muted">costo −5%: ${fmt(costoD)}</span>`:''}</div>
@@ -1253,6 +1254,19 @@ async function pintarCatalogo(agregar){
 function toggleCat(p){
   if(catSel.has(p.c)) catSel.delete(p.c); else catSel.set(p.c, p);
   pintarCatalogo(false);
+}
+function fichaCat(cod){
+  const p = (window._catData||{})[cod]; if(!p) return;
+  const pz = pzasDe(p.descripcion);
+  const costoD = Math.round(+p.precio_lista*(1-(+p.promo_pct||0))*0.95*100)/100;
+  abrirModal(`<div style="text-align:center"><img src="https://storage.googleapis.com/indararticulos/${encodeURIComponent(p.codigo.replace(/[^A-Za-z0-9]/g,'_'))}_MD.webp" style="width:100%;max-width:380px;height:280px;object-fit:contain" onerror="this.style.display='none'"></div>
+    <p class="small" style="margin:8px 0 2px"><span class="badge b-gris">${esc(p.marca||'sin marca')}</span> · <b>${esc(p.codigo)}</b> · <a href="https://indar.mx/portal/detallesProducto/${encodeURIComponent(p.codigo.replace(/ /g,'_'))}" target="_blank" class="link">📎 ficha técnica en Indar</a></p>
+    <h3 style="margin:6px 0;line-height:1.4">${esc(p.descripcion)}</h3>
+    <p style="font-size:19px;margin:8px 0"><b>${fmt(p.precio_sugerido)}</b> <span class="small muted">sugerido con IVA${pz?` · ${fmt(p.precio_sugerido/pz)}/pza`:''}</span>
+    ${esAdmin()?`<br><span class="small muted">costo −5%: ${fmt(costoD)} · lista: ${fmt(p.precio_lista)}${+p.promo_pct?` · promo ${Math.round(+p.promo_pct*100)}%`:''}</span>`:''}</p>
+    <div class="acciones">
+      <button class="btn" onclick='toggleCat(${JSON.stringify({c:p.codigo,d:p.descripcion,pr:+p.precio_sugerido,co:Math.round(+p.precio_lista*(1-(+p.promo_pct||0))*100)/100,su:+p.precio_sugerido}).replace(/'/g,"&#39;")}); cerrarModal();'>➕ Seleccionar para cotizar</button>
+      <button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
 }
 function pintarSelBar(){
   const bar = $('cat-sel-bar'); if(!bar) return;
