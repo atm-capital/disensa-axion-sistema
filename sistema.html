@@ -697,16 +697,23 @@ async function vVentas(){
     .order('fecha',{ascending:false}).limit(100);
   if(error) throw error;
   $('v-ventas').innerHTML = `
+    ${esAdmin() && data.some(v=>v.cancel_solicitada && !v.cancelada) ? `<div class="card" style="border-left:4px solid #d97706"><b>⚠️ ${data.filter(v=>v.cancel_solicitada && !v.cancelada).length} venta(s) con cancelación solicitada por un vendedor</b> — abajo puedes Aprobar o Rechazar cada una.</div>`:''}
     <div class="card"><h3>Historial (últimas 100)</h3>
     <div class="tbl-scroll"><table><thead><tr><th>Folio</th><th>Fecha</th><th>Cliente</th><th>Vendedor</th><th>Pago</th><th class="num">Total</th><th></th></tr></thead>
     <tbody>${data.map(v=>`
       <tr style="${v.cancelada?'opacity:.5;text-decoration:line-through':''}">
         <td><b>#${v.folio}</b></td><td>${fechaHora(v.fecha)}</td>
         <td>${esc(v.clientes?.nombre || 'Mostrador')}</td><td>${esc(v.perfiles?.nombre||'')}</td>
-        <td><span class="badge b-gris">${esc(v.metodo_pago)}</span></td>
+        <td><span class="badge b-gris">${esc(v.metodo_pago)}</span>${!v.cancelada && v.cancel_solicitada ? ` <span class="badge b-ambar" title="${esc(v.cancel_motivo||'sin motivo')}">⚠️ canc. solicitada</span>`:''}</td>
         <td class="num"><b>${fmt(v.total)}</b></td>
         <td style="white-space:nowrap"><button class="btn sec sm" onclick="verVenta(${v.id})">Ver</button>
-        ${esAdmin() && !v.cancelada ? `<button class="btn sec sm" onclick="cancelarVenta(${v.id})">Cancelar</button>`:''}</td>
+        ${!v.cancelada ? (esAdmin()
+          ? (v.cancel_solicitada
+            ? `<button class="btn sm" onclick="cancelarVenta(${v.id})">✅ Aprobar</button><button class="btn sec sm" onclick="rechazarCanc(${v.id})">Rechazar</button>`
+            : `<button class="btn sec sm" onclick="cancelarVenta(${v.id})">Cancelar</button>`)
+          : (v.cancel_solicitada
+            ? '<span class="small muted">esperando admin ⏳</span>'
+            : (puedeVender() ? `<button class="btn sec sm" onclick="cancelarVenta(${v.id})">Cancelar</button>` : ''))) : ''}</td>
       </tr>`).join('') || '<tr><td colspan="7" class="muted">Aún no hay ventas registradas.</td></tr>'}</tbody></table></div></div>`;
 }
 async function verVenta(id){
@@ -720,9 +727,21 @@ async function verVenta(id){
 }
 async function cancelarVenta(id){
   if(!confirm('¿Cancelar esta venta? El stock se regresa al inventario.')) return;
-  const {error} = await sb.rpc('cancelar_venta', {p_venta_id:id});
+  let motivo = '';
+  if(!esAdmin()) motivo = prompt('Motivo de la cancelación (por si requiere autorización del admin):','') || '';
+  const {data, error} = await sb.rpc('cancelar_venta_seguro', {p_venta_id:id, p_motivo:motivo});
   if(error){ toast(errMsg(error),true); return; }
-  toast('Venta cancelada, stock devuelto.'); vVentas();
+  if(data==='cancelada') toast('Venta cancelada, stock devuelto ✓');
+  else if(data==='solicitada') toast('Ya pasaron más de 15 minutos: se mandó la solicitud a un administrador ⏳');
+  else toast('Esa venta ya estaba cancelada');
+  logEv('venta', 'cancelación '+data+' · venta id '+id);
+  vVentas();
+}
+async function rechazarCanc(id){
+  if(!confirm('¿Rechazar la solicitud? La venta se queda como está.')) return;
+  const {error} = await sb.rpc('rechazar_cancelacion', {p_venta_id:id});
+  if(error){ toast(errMsg(error),true); return; }
+  toast('Solicitud rechazada'); logEv('venta','cancelación rechazada · venta id '+id); vVentas();
 }
 async function nuevaVenta(){
   carrito = [];
