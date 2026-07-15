@@ -627,13 +627,22 @@ async function vResumen(){
   const hoy = new Date(); hoy.setHours(0,0,0,0);
   const mes = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
   const hace14 = new Date(hoy); hace14.setDate(hace14.getDate()-13);
-  const [ventasMes, prods, cxp, pedCurso] = await Promise.all([
-    sb.from('ventas').select('fecha,total,cancelada').gte('fecha', mes.toISOString()).eq('cancelada', false),
+  const [ventasMes, prods, cxp, pedCurso, itemsMes] = await Promise.all([
+    sb.from('ventas').select('fecha,total,descuento,cancelada').gte('fecha', mes.toISOString()).eq('cancelada', false),
     sb.from('productos').select('costo,precio,stock,stock_min,activo').eq('activo', true),
     sb.from('cuentas_pagar').select('*, proveedores(nombre)').neq('estado','pagada').order('fecha_vencimiento'),
     sb.from('pedidos_compra').select('folio_externo,fecha,estado,total,proveedores(nombre)').in('estado',['borrador','enviado','parcial']).order('fecha',{ascending:false}),
+    esAdmin() ? sb.from('venta_items').select('cantidad,precio_unit,costo_unit,ventas!inner(fecha,cancelada)').gte('ventas.fecha', mes.toISOString()).eq('ventas.cancelada', false) : Promise.resolve({data:null, error:null}),
   ]);
   for(const r of [ventasMes,prods,cxp,pedCurso]) if(r.error) throw r.error;
+  let utilMes = null, margenPct = 0;
+  if(esAdmin() && itemsMes.data){
+    const costoTot = itemsMes.data.reduce((s,i)=>s+ +i.costo_unit * +i.cantidad, 0);
+    const netoTot = itemsMes.data.reduce((s,i)=>s+ (+i.precio_unit/1.16) * +i.cantidad, 0);
+    const descTot = ventasMes.data.reduce((s,v)=>s+ +(v.descuento||0), 0)/1.16;
+    utilMes = Math.round((netoTot - costoTot - descTot)*100)/100;
+    margenPct = costoTot > 0 ? (utilMes/costoTot*100) : 0;
+  }
   const vHoy = ventasMes.data.filter(v=>new Date(v.fecha)>=hoy);
   const totHoy = vHoy.reduce((s,v)=>s+ +v.total,0);
   const totMes = ventasMes.data.reduce((s,v)=>s+ +v.total,0);
@@ -646,6 +655,7 @@ async function vResumen(){
     <div class="kpis">
       <div class="kpi" style="cursor:pointer" title="Ir a Ventas" onclick="irA('ventas')"><div class="l">Ventas de hoy</div><div class="v">${fmt(totHoy)}</div><div class="s">${vHoy.length} venta(s)</div></div>
       <div class="kpi" style="cursor:pointer" title="Ir a Ventas" onclick="irA('ventas')"><div class="l">Ventas del mes</div><div class="v">${fmt(totMes)}</div><div class="s">${ventasMes.data.length} venta(s)</div></div>
+      ${utilMes!==null ? `<div class="kpi" style="cursor:pointer" title="Ir a Ventas" onclick="irA('ventas')"><div class="l">Utilidad del mes</div><div class="v" style="color:${utilMes>=0?'#15803d':'#b91c1c'}">${fmt(utilMes)}</div><div class="s">margen <b>${margenPct.toFixed(0)}%</b> sobre costo · sin IVA</div></div>` : ''}
       <div class="kpi" style="cursor:pointer" title="Ir a Inventario" onclick="irA('inventario')"><div class="l">Valor de inventario (sin IVA)</div><div class="v">${fmt(valInv)}</div><div class="s">con IVA: <b>${fmt(Math.round(valInv*116)/100)}</b> · a costo · ${prods.data.length} productos</div></div>
       <div class="kpi" style="cursor:pointer" title="Ir a Inventario" onclick="irA('inventario')"><div class="l">Stock bajo</div><div class="v">${bajos}</div><div class="s">productos en o bajo mínimo</div></div>
       <div class="kpi" style="cursor:pointer" title="Ir a Finanzas" onclick="irA('finanzas')"><div class="l">Por pagar</div><div class="v">${fmt(porPagar)}</div>
@@ -696,16 +706,23 @@ async function vVentas(){
     .select('*, clientes(nombre), perfiles(nombre)')
     .order('fecha',{ascending:false}).limit(100);
   if(error) throw error;
+  const utilPor = {};
+  if(esAdmin() && data.length){
+    const it = await sb.from('venta_items').select('venta_id,cantidad,precio_unit,costo_unit').in('venta_id', data.map(v=>v.id));
+    (it.data||[]).forEach(i=>{ utilPor[i.venta_id] = (utilPor[i.venta_id]||0) + (+i.precio_unit/1.16 - +i.costo_unit) * +i.cantidad; });
+    data.forEach(v=>{ if(utilPor[v.id]!==undefined) utilPor[v.id] = Math.round((utilPor[v.id] - +(v.descuento||0)/1.16)*100)/100; });
+  }
   $('v-ventas').innerHTML = `
     ${esAdmin() && data.some(v=>v.cancel_solicitada && !v.cancelada) ? `<div class="card" style="border-left:4px solid #d97706"><b>⚠️ ${data.filter(v=>v.cancel_solicitada && !v.cancelada).length} venta(s) con cancelación solicitada por un vendedor</b> — abajo puedes Aprobar o Rechazar cada una.</div>`:''}
     <div class="card"><h3>Historial (últimas 100)</h3>
-    <div class="tbl-scroll"><table><thead><tr><th>Folio</th><th>Fecha</th><th>Cliente</th><th>Vendedor</th><th>Pago</th><th class="num">Total</th><th></th></tr></thead>
+    <div class="tbl-scroll"><table><thead><tr><th>Folio</th><th>Fecha</th><th>Cliente</th><th>Vendedor</th><th>Pago</th><th class="num">Total</th>${esAdmin()?'<th class="num">Utilidad</th>':''}<th></th></tr></thead>
     <tbody>${data.map(v=>`
       <tr style="${v.cancelada?'opacity:.5;text-decoration:line-through':''}">
         <td><b>#${v.folio}</b></td><td>${fechaHora(v.fecha)}</td>
         <td>${esc(v.clientes?.nombre || 'Mostrador')}</td><td>${esc(v.perfiles?.nombre||'')}</td>
         <td><span class="badge b-gris">${esc(v.metodo_pago)}</span>${!v.cancelada && v.cancel_solicitada ? ` <span class="badge b-ambar" title="${esc(v.cancel_motivo||'sin motivo')}">⚠️ canc. solicitada</span>`:''}</td>
         <td class="num"><b>${fmt(v.total)}</b></td>
+        ${esAdmin()?`<td class="num">${(!v.cancelada && utilPor[v.id]!==undefined)?`<span class="badge ${utilPor[v.id]>=0?'b-verde':'b-rojo'}">${fmt(utilPor[v.id])}</span>`:''}</td>`:''}
         <td style="white-space:nowrap"><button class="btn sec sm" onclick="verVenta(${v.id})">Ver</button>
         ${!v.cancelada ? (esAdmin()
           ? (v.cancel_solicitada
@@ -714,15 +731,18 @@ async function vVentas(){
           : (v.cancel_solicitada
             ? '<span class="small muted">esperando admin ⏳</span>'
             : (puedeVender() ? `<button class="btn sec sm" onclick="cancelarVenta(${v.id})">Cancelar</button>` : ''))) : ''}</td>
-      </tr>`).join('') || '<tr><td colspan="7" class="muted">Aún no hay ventas registradas.</td></tr>'}</tbody></table></div></div>`;
+      </tr>`).join('') || `<tr><td colspan="${esAdmin()?8:7}" class="muted">Aún no hay ventas registradas.</td></tr>`}</tbody></table></div></div>`;
 }
 async function verVenta(id){
   const {data, error} = await sb.from('venta_items').select('*, productos(codigo,descripcion)').eq('venta_id', id);
   if(error){ toast(errMsg(error),true); return; }
+  const utilTot = data.reduce((s,i)=>s+ (+i.precio_unit/1.16 - +(i.costo_unit||0)) * +i.cantidad, 0);
   abrirModal(`<h3>Detalle de venta</h3>
-    <div class="tbl-scroll"><table><thead><tr><th>Producto</th><th class="num">Cant</th><th class="num">Precio</th><th class="num">Importe</th></tr></thead>
+    <div class="tbl-scroll"><table><thead><tr><th>Producto</th><th class="num">Cant</th><th class="num">Precio</th><th class="num">Importe</th>${esAdmin()?'<th class="num">Costo</th><th class="num">Utilidad</th>':''}</tr></thead>
     <tbody>${data.map(i=>`<tr><td>${esc(i.productos?.codigo)} · ${esc(i.productos?.descripcion)}</td>
-      <td class="num">${+i.cantidad}</td><td class="num">${fmt(i.precio_unit)}</td><td class="num">${fmt(i.importe)}</td></tr>`).join('')}</tbody></table></div>
+      <td class="num">${+i.cantidad}</td><td class="num">${fmt(i.precio_unit)}</td><td class="num">${fmt(i.importe)}</td>
+      ${esAdmin()?`<td class="num small muted">${fmt(i.costo_unit||0)}</td><td class="num">${fmt((+i.precio_unit/1.16 - +(i.costo_unit||0)) * +i.cantidad)}</td>`:''}</tr>`).join('')}</tbody>
+    ${esAdmin()?`<tfoot><tr><th colspan="5" class="num">Utilidad de la venta (sin IVA, antes de descuento)</th><th class="num">${fmt(Math.round(utilTot*100)/100)}</th></tr></tfoot>`:''}</table></div>
     <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
 }
 async function cancelarVenta(id){
@@ -1312,9 +1332,15 @@ async function vInventario(){
     <button class="btn sec" onclick="verResurtido()">🛒 Resurtido</button>
     <button class="btn sec" onclick="etiquetasPrecios()">🏷️ Precios tienda</button>
     <button class="btn sec" onclick="exportarInv()">Exportar CSV</button>`;
-  const {data, error} = await sb.from('productos').select('*').order('descripcion');
+  const [{data, error}, mv, mr] = await Promise.all([
+    sb.from('productos').select('*').order('descripcion'),
+    sb.from('venta_items').select('producto_id').range(0,9999),
+    sb.from('pedido_compra_items').select('producto_id').gt('cantidad_recibida', 0).range(0,9999)
+  ]);
   if(error) throw error;
   invData = data;
+  window._invVend = new Set((mv.data||[]).map(x=>x.producto_id));
+  window._invRec = new Set((mr.data||[]).map(x=>x.producto_id));
   const cats = [...new Set(data.map(p=>p.categoria))].sort();
   $('v-inventario').innerHTML = `
     ${esAdmin()?'<div class="kpis" id="inv-kpis" style="margin-bottom:14px"></div>':''}
@@ -1322,6 +1348,7 @@ async function vInventario(){
       <input type="search" id="inv-q" placeholder="Buscar por código o descripción..." oninput="pintarInv()">
       <select id="inv-cat" onchange="pintarInv()"><option value="">Todas las categorías</option>
         ${cats.map(c=>`<option>${esc(c)}</option>`).join('')}</select>
+      <select id="inv-est" onchange="pintarInv()"><option value="">Todos</option><option value="con">Con stock</option><option value="agotado">Agotados</option><option value="sinmov">Sin movimiento</option></select>
       <label class="small"><input type="checkbox" id="inv-bajo" onchange="pintarInv()"> Solo stock bajo</label>
     </div>
     <div class="card"><div class="tbl-scroll"><table>
@@ -1335,22 +1362,25 @@ function pintarInv(){
   const q = ($('inv-q').value||'').toLowerCase().trim();
   const cat = $('inv-cat').value;
   const soloBajo = $('inv-bajo').checked;
+  const est = $('inv-est')?.value || '';
+  const sinMov = p => !(window._invVend||new Set()).has(p.id) && !(window._invRec||new Set()).has(p.id);
   const rows = invData.filter(p =>
     (!q || p.codigo.toLowerCase().includes(q) || p.descripcion.toLowerCase().includes(q)) &&
-    (!cat || p.categoria === cat) && (!soloBajo || +p.stock <= +p.stock_min));
+    (!cat || p.categoria === cat) && (!soloBajo || +p.stock <= +p.stock_min) &&
+    (est==='' || (est==='con' && +p.stock>0) || (est==='agotado' && +p.stock<=0) || (est==='sinmov' && sinMov(p))));
   $('inv-body').innerHTML = rows.slice(0,400).map(p=>{
     const bajo = +p.stock <= +p.stock_min;
     const neto = +p.precio/1.16, marg = neto - +p.costo;
     const pct = +p.costo>0 ? marg/ +p.costo*100 : 0;
     const bm = pct>=30?'b-verde':(pct>=15?'b-ambar':'b-rojo');
-    return `<tr style="${p.activo?'':'opacity:.45'}">
-      <td><b>${esc(p.codigo)}</b></td><td>${esc(p.descripcion)}</td>
+    return `<tr style="cursor:pointer;${p.activo?(+p.stock<=0?'opacity:.7':''):'opacity:.45'}" onclick="fichaProducto(${p.id})" title="Ver historial del producto">
+      <td><b>${esc(p.codigo)}</b></td><td>${esc(p.descripcion)}${+p.stock<=0?' <span class="badge b-rojo">agotado</span>':''}${sinMov(p)?' <span class="badge b-gris" title="Nunca ha tenido venta ni recepción">sin movimiento</span>':''}</td>
       <td><span class="badge b-gris">${esc(p.categoria)}</span></td>
       ${esAdmin()?`<td class="num">${fmt(p.costo)}</td>`:''}
       <td class="num"><b>${fmt(p.precio)}</b></td>
       ${esAdmin()?`<td class="num"><span class="badge ${bm}">${pct.toFixed(0)}%</span> <span class="small muted">${fmt(marg)}</span></td>`:''}
       <td class="num"><span class="badge ${bajo?'b-rojo':'b-verde'}">${+p.stock}</span> <span class="small muted">${esc(p.unidad||'pza')}</span></td>
-      <td>${esAdmin()?`<button class="btn sec sm" onclick="editarProducto(${p.id})">Editar</button>`:''}</td></tr>`;
+      <td>${esAdmin()?`<button class="btn sec sm" onclick="event.stopPropagation();editarProducto(${p.id})">Editar</button>`:''}</td></tr>`;
   }).join('') || '<tr><td colspan="8" class="muted">Sin resultados.</td></tr>';
   const valorC = rows.reduce((s,p)=>s+ +p.costo * +p.stock,0);
   const valorV = rows.reduce((s,p)=>s+ +p.precio * +p.stock,0);
@@ -1361,6 +1391,42 @@ function pintarInv(){
     <div class="kpi"><div class="l">Valor a precio de venta</div><div class="v">${fmt(valorV)}</div><div class="s">ya con IVA incluido</div></div>
     <div class="kpi"><div class="l">Ganancia si se vende todo</div><div class="v">${fmt(Math.round(ganancia*100)/100)}</div><div class="s">venta sin IVA − costo</div></div>`;
   $('inv-pie').textContent = `${rows.length} producto(s) mostrados — las tarjetas de arriba se recalculan con los filtros`;
+}
+async function fichaProducto(id){
+  const p = invData.find(x=>x.id===id); if(!p) return;
+  const [vi, ci] = await Promise.all([
+    sb.from('venta_items').select('cantidad,precio_unit,costo_unit,ventas(folio,fecha,cancelada)').eq('producto_id', id).order('id',{ascending:false}).limit(100),
+    sb.from('pedido_compra_items').select('cantidad_recibida,costo_unit,pedidos_compra(folio_externo,fecha)').eq('producto_id', id)
+  ]);
+  const ventas = (vi.data||[]).filter(x=>x.ventas && !x.ventas.cancelada);
+  const totVend = ventas.reduce((s,x)=>s+ +x.cantidad, 0);
+  const ult = ventas.length ? ventas[0].ventas.fecha : null;
+  const hace30 = Date.now() - 30*864e5;
+  const v30 = ventas.filter(x=>new Date(x.ventas.fecha).getTime()>=hace30).reduce((s,x)=>s+ +x.cantidad, 0);
+  const recs = (ci.data||[]).filter(x=>+(x.cantidad_recibida||0)>0);
+  const totRec = recs.reduce((s,x)=>s+ +x.cantidad_recibida, 0);
+  const movs = [
+    ...ventas.map(x=>({f:x.ventas.fecha, t:'🛒 Venta #'+x.ventas.folio, c:-x.cantidad, extra: fmt(x.precio_unit)+(esAdmin()?' · utilidad '+fmt(Math.round(((+x.precio_unit/1.16)-+(x.costo_unit||0))*+x.cantidad*100)/100):'')})),
+    ...recs.map(x=>({f:x.pedidos_compra?.fecha, t:'📦 Recepción · pedido '+esc(x.pedidos_compra?.folio_externo||''), c:+x.cantidad_recibida, extra: esAdmin()?('costo '+fmt(x.costo_unit)):''}))
+  ].sort((a,b)=>new Date(b.f)-new Date(a.f)).slice(0,40);
+  abrirModal(`
+    <div style="display:flex;gap:14px;align-items:flex-start">
+      <img src="https://storage.googleapis.com/indararticulos/${encodeURIComponent(p.codigo.replace(/[^A-Za-z0-9]/g,'_'))}_MD.webp" style="width:100px;height:100px;object-fit:contain" onerror="this.style.display='none'">
+      <div>
+        <h3 style="margin:0 0 4px;line-height:1.3">${esc(p.descripcion)}</h3>
+        <p class="small muted" style="margin:0"><b>${esc(p.codigo)}</b> · ${esc(p.categoria)} · por ${esc(p.unidad||'pza')}${p.activo?'':' · <span class="badge b-gris">inactivo</span>'}</p>
+        <p style="margin:8px 0 0">Stock: <b>${+p.stock}</b> ${esc(p.unidad||'pza')} · Precio: <b>${fmt(p.precio)}</b>${esAdmin()?` · <span class="small muted">costo ${fmt(p.costo)}</span>`:''}</p>
+      </div>
+    </div>
+    <div class="kpis" style="margin:12px 0">
+      <div class="kpi"><div class="l">Vendidas (total)</div><div class="v">${totVend}</div><div class="s">en ${ventas.length} venta(s)</div></div>
+      <div class="kpi"><div class="l">Últimos 30 días</div><div class="v">${v30}</div><div class="s">${v30>0?('~'+(v30/4.3).toFixed(1)+' por semana'):'sin ventas este mes'}</div></div>
+      <div class="kpi"><div class="l">Última venta</div><div class="v" style="font-size:17px">${ult?fecha(ult):'—'}</div><div class="s">recibidas en total: ${totRec}</div></div>
+    </div>
+    ${movs.length?`<div class="tbl-scroll" style="max-height:280px;overflow-y:auto"><table><thead><tr><th>Fecha</th><th>Movimiento</th><th class="num">Cant</th><th>Detalle</th></tr></thead>
+      <tbody>${movs.map(m=>`<tr><td class="small">${m.f?fechaHora(m.f):'—'}</td><td>${m.t}</td><td class="num"><b style="color:${m.c<0?'#b91c1c':'#15803d'}">${m.c>0?'+':''}${m.c}</b></td><td class="small muted">${m.extra}</td></tr>`).join('')}</tbody></table></div>`
+      : '<p class="muted" style="margin:8px 0">Sin movimientos todavía — este producto no ha tenido ni ventas ni recepciones (como los que nunca llegaron de Indar).</p>'}
+    <div class="acciones">${esAdmin()?`<button class="btn sec" onclick="cerrarModal();editarProducto(${p.id})">✏️ Editar</button>`:''}<button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
 }
 function editarProducto(id){
   const p = id ? invData.find(x=>x.id===id) : {codigo:'',descripcion:'',categoria:'General',costo:0,precio:0,stock:0,stock_min:3,activo:true,unidad:'pza'};
