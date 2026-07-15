@@ -746,7 +746,7 @@ async function rechazarCanc(id){
 async function nuevaVenta(){
   carrito = [];
   const [p, c] = await Promise.all([
-    sb.from('productos').select('id,codigo,descripcion,precio,stock').eq('activo',true).order('descripcion'),
+    sb.from('productos').select('*').eq('activo',true).order('descripcion'),
     sb.from('clientes').select('id,nombre,oficio,desc_pct').order('nombre'),
   ]);
   if(p.error||c.error){ toast(errMsg(p.error||c.error),true); return; }
@@ -782,7 +782,7 @@ function buscarProd(){
   $('nv-res').innerHTML = res.map(p=>`
     <div class="it" onclick="agregarProd(${p.id})">
       <span><b>${esc(p.codigo)}</b> ${esc(p.descripcion)}</span>
-      <span style="white-space:nowrap">${fmt(p.precio)} · <span class="muted">${+p.stock} disp</span></span>
+      <span style="white-space:nowrap">${fmt(p.precio)} · <span class="muted">${+p.stock} ${esc(p.unidad||'pza')}</span></span>
     </div>`).join('') || '<div class="it muted">Sin resultados</div>';
 }
 function agregarProd(id){
@@ -1349,7 +1349,7 @@ function pintarInv(){
       ${esAdmin()?`<td class="num">${fmt(p.costo)}</td>`:''}
       <td class="num"><b>${fmt(p.precio)}</b></td>
       ${esAdmin()?`<td class="num"><span class="badge ${bm}">${pct.toFixed(0)}%</span> <span class="small muted">${fmt(marg)}</span></td>`:''}
-      <td class="num"><span class="badge ${bajo?'b-rojo':'b-verde'}">${+p.stock}</span></td>
+      <td class="num"><span class="badge ${bajo?'b-rojo':'b-verde'}">${+p.stock}</span> <span class="small muted">${esc(p.unidad||'pza')}</span></td>
       <td>${esAdmin()?`<button class="btn sec sm" onclick="editarProducto(${p.id})">Editar</button>`:''}</td></tr>`;
   }).join('') || '<tr><td colspan="8" class="muted">Sin resultados.</td></tr>';
   const valorC = rows.reduce((s,p)=>s+ +p.costo * +p.stock,0);
@@ -1363,7 +1363,7 @@ function pintarInv(){
   $('inv-pie').textContent = `${rows.length} producto(s) mostrados — las tarjetas de arriba se recalculan con los filtros`;
 }
 function editarProducto(id){
-  const p = id ? invData.find(x=>x.id===id) : {codigo:'',descripcion:'',categoria:'General',costo:0,precio:0,stock:0,stock_min:3,activo:true};
+  const p = id ? invData.find(x=>x.id===id) : {codigo:'',descripcion:'',categoria:'General',costo:0,precio:0,stock:0,stock_min:3,activo:true,unidad:'pza'};
   abrirModal(`<h3>${id?'Editar':'Nuevo'} producto</h3>
     <div class="frow">
       <div class="field"><label>Código</label><input id="pr-codigo" value="${esc(p.codigo)}" ${id?'disabled':''}></div>
@@ -1375,6 +1375,7 @@ function editarProducto(id){
       <div class="field"><label>Precio de venta (con IVA)</label><input id="pr-precio" type="number" step="0.01" value="${p.precio}" oninput="calcMargen()"></div>
       <div class="field"><label>Stock actual</label><input id="pr-stock" type="number" step="1" value="${+p.stock}"></div>
       <div class="field"><label>Stock mínimo (alerta)</label><input id="pr-min" type="number" step="1" value="${+p.stock_min}"></div>
+      <div class="field"><label>Unidad</label><input id="pr-unidad" list="pr-unidades" value="${esc(p.unidad||'pza')}"><datalist id="pr-unidades"><option>pza</option><option>bolsa</option><option>caja</option><option>kilo</option><option>saco</option><option>bulto</option><option>metro</option><option>rollo</option><option>litro</option><option>cubeta</option><option>par</option><option>juego</option></datalist></div>
     </div>
     <p id="pr-margen" class="small" style="margin:2px 0 10px"></p>
     <div class="field"><label><input type="checkbox" id="pr-activo" ${p.activo?'checked':''}> Activo (aparece en ventas)</label></div>
@@ -1416,16 +1417,17 @@ async function guardarProducto(id){
     descripcion: $('pr-desc').value.trim(), categoria: $('pr-cat').value.trim() || 'General',
     costo: +$('pr-costo').value||0, precio: +$('pr-precio').value||0,
     stock: +$('pr-stock').value||0, stock_min: +$('pr-min').value||0,
+    unidad: ($('pr-unidad').value.trim()||'pza'),
     activo: $('pr-activo').checked
   };
   if(!obj.descripcion){ toast('Falta la descripción', true); return; }
-  let error;
-  if(id) ({error} = await sb.from('productos').update(obj).eq('id', id));
-  else {
+  if(!id){
     obj.codigo = $('pr-codigo').value.trim();
     if(!obj.codigo){ toast('Falta el código', true); return; }
-    ({error} = await sb.from('productos').insert(obj));
   }
+  async function intenta(o){ return id ? (await sb.from('productos').update(o).eq('id', id)).error : (await sb.from('productos').insert(o)).error; }
+  let error = await intenta(obj);
+  if(error && /unidad/i.test(error.message||'')){ const o2 = {...obj}; delete o2.unidad; error = await intenta(o2); }
   if(error){ toast(errMsg(error), true); return; }
   cerrarModal(); toast('Producto guardado'); vInventario();
 }
@@ -1450,13 +1452,13 @@ function etiquetasPrecios(){
   <p class="noprint" style="margin:0 0 10px"><button onclick="window.print()" style="padding:10px 18px;background:#E8790F;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer">🖨 Imprimir</button> <span style="font-size:12px;color:#777">${rows.length} etiquetas (recorta por la línea punteada)</span></p>
   <div class="grid">${rows.map(p=>`<div class="tag">
     <div><div class="cod">${esc(p.codigo)} · ${esc(p.categoria)}</div><div class="desc">${esc(p.descripcion)}</div></div>
-    <div class="pre">${fmt(p.precio)}<small>IVA incluido</small></div>
+    <div class="pre">${fmt(p.precio)}<small>IVA incluido · por ${esc(p.unidad||'pza')}</small></div>
     <div class="marca">AXION TOOLS</div></div>`).join('')}</div>
   </body></html>`);
   w.document.close();
 }
 function exportarInv(){
-  const enc = ['codigo','descripcion','categoria','costo','precio','stock','stock_min','activo'];
+  const enc = ['codigo','descripcion','categoria','unidad','costo','precio','stock','stock_min','activo'];
   const csv = [enc.join(',')].concat(invData.map(p=>enc.map(k=>`"${String(p[k]??'').replace(/"/g,'""')}"`).join(','))).join('\n');
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob(['﻿'+csv], {type:'text/csv'}));
