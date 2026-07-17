@@ -844,6 +844,34 @@ async function asignarCB(pid){
   else if(data==='sin_permiso') toast('Tu usuario no puede registrar códigos', true);
   else toast('Código inválido', true);
 }
+function capturarCB(pid){
+  const p = invData.find(x=>x.id===pid) || (typeof prodCache!=='undefined' && prodCache.find(x=>x.id===pid));
+  if(!p) return;
+  abrirModal(`<h3>📎 Registrar código de barras</h3>
+    <p style="margin:10px 0"><b>${esc(p.codigo)}</b> · ${esc(p.descripcion.slice(0,60))}</p>
+    <div class="field"><label>Escanea el código con la pistola (o tecléalo)</label>
+      <input id="cb-inp" placeholder="Escanea aquí..." onkeydown="if(event.key==='Enter'){event.preventDefault();guardarCB(${pid});}"></div>
+    <div class="acciones">
+      <button class="btn sec" onclick="cerrarModal()">Cancelar</button>
+      <button class="btn" onclick="guardarCB(${pid})">Guardar</button></div>`);
+  setTimeout(()=>$('cb-inp')?.focus(),150);
+}
+async function guardarCB(pid){
+  const cb = ($('cb-inp').value||'').trim();
+  if(!cb){ toast('Escanea o escribe el código', true); return; }
+  const {data, error} = await sb.rpc('asignar_codigo_barras', { pid, cb });
+  if(error){ toast('Error: '+error.message, true); return; }
+  if(data==='ok'){
+    const a = invData.find(x=>x.id===pid); if(a) a.codigo_barras = cb;
+    if(typeof prodCache!=='undefined'){ const b = prodCache.find(x=>x.id===pid); if(b) b.codigo_barras = cb; }
+    toast('Código guardado ✅'); cerrarModal();
+    if($('inv-body')) pintarInv();
+  }
+  else if(data==='duplicado') toast('Ese código ya lo tiene otro producto', true);
+  else if(data==='tiene_codigo') toast('Este producto ya tiene código — un admin puede cambiarlo', true);
+  else if(data==='sin_permiso') toast('Tu usuario no puede registrar códigos', true);
+  else toast('Código inválido (muy corto)', true);
+}
 function buscarProd(){
   const q = ($('nv-buscar').value||'').toLowerCase().trim();
   const nq = nbarra(q);
@@ -1491,7 +1519,7 @@ function pintarInv(){
       <td class="num"><b>${fmt(p.precio)}</b></td>
       ${esAdmin()?`<td class="num"><span class="badge ${bm}">${pct.toFixed(0)}%</span> <span class="small muted">${fmt(marg)}</span></td>`:''}
       <td class="num"><span class="badge ${bajo?'b-rojo':'b-verde'}">${+p.stock}</span> <span class="small muted">${esc(p.unidad||'pza')}</span></td>
-      <td>${esAdmin()?`<button class="btn sec sm" onclick="event.stopPropagation();editarProducto(${p.id})">Editar</button>`:''}</td></tr>`;
+      <td style="white-space:nowrap">${!(p.codigo_barras||'').trim()?`<button class="btn sec sm" title="Registrar código de barras con la pistola" onclick="event.stopPropagation();capturarCB(${p.id})">📎 Código</button> `:''}${esAdmin()?`<button class="btn sec sm" onclick="event.stopPropagation();editarProducto(${p.id})">Editar</button>`:''}</td></tr>`;
   }).join('') || '<tr><td colspan="8" class="muted">Sin resultados.</td></tr>';
   const valorC = rows.reduce((s,p)=>s+ +p.costo * +p.stock,0);
   const valorV = rows.reduce((s,p)=>s+ +p.precio * +p.stock,0);
