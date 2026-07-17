@@ -1540,13 +1540,28 @@ async function verResurtido(){
         <td class="num">${+p.stock}</td><td class="num">${+p.stock_min}</td>
         <td class="num"><b>${p.sugerido}</b></td><td class="num">${fmt(p.sugerido * +p.costo)}</td></tr>`).join('')}</tbody></table></div>
     <div class="acciones">
-      <button class="btn sec" onclick="copiarResurtido()">Copiar lista (para el carrito de Indar)</button>
+      <button class="btn" onclick="exportarPedidoIndar()">📥 Excel para Indar (plantilla)</button>
+      <button class="btn sec" onclick="copiarResurtido()">Copiar lista</button>
       <button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
   window._resurtido = filas;
 }
 function copiarResurtido(){
   const txt = window._resurtido.map(p=>p.codigo + '\t' + p.sugerido).join('\n');
   navigator.clipboard.writeText(txt).then(()=>toast('Lista copiada: código y cantidad por renglón'));
+}
+async function exportarPedidoIndar(){
+  const filas = (window._resurtido||[]).map(p=>({ Codigos: p.codigo, Cantidad: p.sugerido }));
+  if(!filas.length){ toast('No hay productos en la lista de resurtido', true); return; }
+  if(!window.XLSX){
+    try{
+      await new Promise((res,rej)=>{ const s=document.createElement('scr'+'ipt'); s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'; s.onload=res; s.onerror=()=>rej(new Error('sin internet')); document.head.appendChild(s); });
+    }catch(e){ toast('No pude cargar el exportador de Excel — revisa tu internet', true); return; }
+  }
+  const ws = XLSX.utils.json_to_sheet(filas, { header:['Codigos','Cantidad'] });
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Hoja1');
+  XLSX.writeFile(wb, 'Pedido_Indar_' + new Date().toISOString().slice(0,10) + '.xlsx');
+  toast('Excel listo 📥 En Indar: Pedidos → Carrito → cargar plantilla');
 }
 async function guardarProducto(id){
   const obj = {
