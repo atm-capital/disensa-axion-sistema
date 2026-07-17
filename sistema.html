@@ -1473,21 +1473,43 @@ async function vInventario(){
     <button class="btn sec" onclick="exportarInv()">Exportar CSV</button>`;
   const [{data, error}, mv, mr] = await Promise.all([
     sb.from('productos').select('*').order('descripcion'),
-    sb.from('venta_items').select('producto_id').range(0,9999),
+    sb.from('venta_items').select('producto_id,cantidad,ventas!inner(cancelada)').eq('ventas.cancelada', false).range(0,9999),
     sb.from('pedido_compra_items').select('producto_id').gt('cantidad_recibida', 0).range(0,9999)
   ]);
   if(error) throw error;
   invData = data;
   window._invVend = new Set((mv.data||[]).map(x=>x.producto_id));
   window._invRec = new Set((mr.data||[]).map(x=>x.producto_id));
+  window._invVendCnt = {};
+  (mv.data||[]).forEach(x=>{ window._invVendCnt[x.producto_id] = (window._invVendCnt[x.producto_id]||0) + (+x.cantidad||0); });
   const cats = [...new Set(data.map(p=>p.categoria))].sort();
+  const noMov = p => !window._invVend.has(p.id) && !window._invRec.has(p.id);
+  const nTot = data.length,
+        nCon = data.filter(p=>+p.stock>0).length,
+        nAgo = data.filter(p=>+p.stock<=0).length,
+        nMov = data.filter(noMov).length,
+        nCB  = data.filter(p=>!(p.codigo_barras||'').trim()).length;
   $('v-inventario').innerHTML = `
     ${esAdmin()?'<div class="kpis" id="inv-kpis" style="margin-bottom:14px"></div>':''}
     <div class="toolbar">
       <input type="search" id="inv-q" placeholder="Buscar por código o descripción..." oninput="pintarInv()">
       <select id="inv-cat" onchange="pintarInv()"><option value="">Todas las categorías</option>
         ${cats.map(c=>`<option>${esc(c)}</option>`).join('')}</select>
-      <select id="inv-est" onchange="pintarInv()"><option value="">Todos</option><option value="con">Con stock</option><option value="agotado">Agotados</option><option value="sinmov">Sin movimiento</option><option value="sincb">Sin código de barras</option></select>
+      <select id="inv-est" onchange="pintarInv()">
+        <option value="">Todos (${nTot})</option>
+        <option value="con">Con stock (${nCon})</option>
+        <option value="agotado">Agotados (${nAgo})</option>
+        <option value="sinmov">Sin movimiento (${nMov})</option>
+        <option value="sincb">Sin código de barras (${nCB})</option>
+        <option value="vendidos">Con ventas (${Object.keys(window._invVendCnt).length})</option>
+      </select>
+      <select id="inv-orden" onchange="pintarInv()">
+        <option value="az">Orden: A–Z</option>
+        <option value="vendidos">Más vendidos</option>
+        <option value="stockmax">Mayor stock</option>
+        <option value="stockmin">Menor stock</option>
+        ${esAdmin()?'<option value="margen">Mayor margen %</option><option value="valor">Mayor valor en stock</option>':''}
+      </select>
       <label class="small"><input type="checkbox" id="inv-bajo" onchange="pintarInv()"> Solo stock bajo</label>
     </div>
     <div class="card"><div class="tbl-scroll"><table>
@@ -1506,14 +1528,22 @@ function pintarInv(){
   const rows = invData.filter(p =>
     (!q || p.codigo.toLowerCase().includes(q) || p.descripcion.toLowerCase().includes(q) || (p.codigo_barras && nbarra(p.codigo_barras).includes(nbarra(q)))) &&
     (!cat || p.categoria === cat) && (!soloBajo || +p.stock <= +p.stock_min) &&
-    (est==='' || (est==='con' && +p.stock>0) || (est==='agotado' && +p.stock<=0) || (est==='sinmov' && sinMov(p)) || (est==='sincb' && !(p.codigo_barras||'').trim())));
+    (est==='' || (est==='con' && +p.stock>0) || (est==='agotado' && +p.stock<=0) || (est==='sinmov' && sinMov(p)) || (est==='sincb' && !(p.codigo_barras||'').trim()) || (est==='vendidos' && ((window._invVendCnt||{})[p.id]||0)>0)));
+  const orden = $('inv-orden')?.value || 'az';
+  const vc = window._invVendCnt || {};
+  if(orden==='vendidos') rows.sort((a,b)=>(vc[b.id]||0)-(vc[a.id]||0));
+  else if(orden==='stockmax') rows.sort((a,b)=>+b.stock - +a.stock);
+  else if(orden==='stockmin') rows.sort((a,b)=>+a.stock - +b.stock);
+  else if(orden==='margen') rows.sort((a,b)=>{ const m=p=>+p.costo>0?((+p.precio/1.16-+p.costo)/+p.costo):0; return m(b)-m(a); });
+  else if(orden==='valor') rows.sort((a,b)=>(+b.costo * +b.stock)-(+a.costo * +a.stock));
+  const verVend = orden==='vendidos' || est==='vendidos';
   $('inv-body').innerHTML = rows.slice(0,400).map(p=>{
     const bajo = +p.stock <= +p.stock_min;
     const neto = +p.precio/1.16, marg = neto - +p.costo;
     const pct = +p.costo>0 ? marg/ +p.costo*100 : 0;
     const bm = pct>=30?'b-verde':(pct>=15?'b-ambar':'b-rojo');
     return `<tr style="cursor:pointer;${p.activo?(+p.stock<=0?'opacity:.7':''):'opacity:.45'}" onclick="fichaProducto(${p.id})" title="Ver historial del producto">
-      <td><b>${esc(p.codigo)}</b></td><td>${esc(p.descripcion)}${+p.stock<=0?' <span class="badge b-rojo">agotado</span>':''}${sinMov(p)?' <span class="badge b-gris" title="Nunca ha tenido venta ni recepción">sin movimiento</span>':''}</td>
+      <td><b>${esc(p.codigo)}</b></td><td>${esc(p.descripcion)}${+p.stock<=0?' <span class="badge b-rojo">agotado</span>':''}${sinMov(p)?' <span class="badge b-gris" title="Nunca ha tenido venta ni recepción">sin movimiento</span>':''}${verVend&&(vc[p.id]||0)>0?` <span class="badge b-verde" title="Piezas vendidas">🛒 ${vc[p.id]}</span>`:''}</td>
       <td><span class="badge b-gris">${esc(p.categoria)}</span></td>
       ${esAdmin()?`<td class="num">${fmt(p.costo)}</td>`:''}
       <td class="num"><b>${fmt(p.precio)}</b></td>
@@ -1529,7 +1559,7 @@ function pintarInv(){
     <div class="kpi"><div class="l">Valor a costo (sin IVA)</div><div class="v">${fmt(valorC)}</div><div class="s">con IVA: <b>${fmt(Math.round(valorC*116)/100)}</b></div></div>
     <div class="kpi"><div class="l">Valor a precio de venta</div><div class="v">${fmt(valorV)}</div><div class="s">ya con IVA incluido</div></div>
     <div class="kpi"><div class="l">Ganancia si se vende todo</div><div class="v">${fmt(Math.round(ganancia*100)/100)}</div><div class="s">venta sin IVA − costo</div></div>`;
-  $('inv-pie').textContent = `${rows.length} producto(s) mostrados — las tarjetas de arriba se recalculan con los filtros`;
+  $('inv-pie').textContent = `Mostrando ${Math.min(rows.length,400)} de ${rows.length} filtrado(s) · ${invData.length} productos en total — las tarjetas de arriba se recalculan con los filtros`;
 }
 async function fichaProducto(id){
   const p = invData.find(x=>x.id===id); if(!p) return;
