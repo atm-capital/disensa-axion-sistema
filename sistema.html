@@ -796,16 +796,58 @@ async function nuevaVenta(){
   buscarProd(); pintarCarrito();
   $('nv-buscar').focus();
 }
+function nbarra(s){ return String(s||'').trim().replace(/^0+/,''); }
 function escanear(inp){
   const v = (inp.value||'').trim();
   if(!v) return;
-  const p = prodCache.find(x=>(x.codigo_barras && x.codigo_barras===v) || x.codigo.toLowerCase()===v.toLowerCase());
+  const nv = nbarra(v);
+  const p = prodCache.find(x=>(x.codigo_barras && nbarra(x.codigo_barras)===nv) || x.codigo.toLowerCase()===v.toLowerCase());
   if(p){ agregarProd(p.id); inp.value=''; buscarProd(); inp.focus(); }
+  else if(/^\d{6,}$/.test(nv)){ mostrarAsignarCB(v); }
   else { toast('No encontré el código '+v.slice(0,22)+' — revisa o búscalo por nombre', true); inp.select(); }
+}
+function mostrarAsignarCB(cb){
+  window._cbNuevo = cb;
+  $('nv-res').innerHTML = `
+    <div class="it" style="display:block;background:#fff7ed;border:1px solid #fdba74;border-radius:8px;cursor:default">
+      <b>📎 Código ${esc(cb)} no registrado.</b><br>
+      <span class="small">Escribe el nombre del producto al que pertenece y elígelo para guardarle este código:</span>
+      <input id="cb-buscar" placeholder="broca, martillo..." oninput="buscarProdCB()" style="width:100%;margin:6px 0;padding:7px;border:1px solid var(--linea);border-radius:6px">
+      <div id="cb-res" style="max-height:180px;overflow-y:auto"></div>
+      <button class="btn sec sm" style="margin-top:6px" onclick="$('nv-buscar').value='';buscarProd();$('nv-buscar').focus()">Cancelar</button>
+    </div>`;
+  setTimeout(()=>$('cb-buscar')?.focus(),100);
+}
+function buscarProdCB(){
+  const q = ($('cb-buscar').value||'').toLowerCase().trim();
+  if(!q){ $('cb-res').innerHTML=''; return; }
+  const res = prodCache.filter(p => p.codigo.toLowerCase().includes(q) || p.descripcion.toLowerCase().includes(q)).slice(0,15);
+  $('cb-res').innerHTML = res.map(p=>`
+    <div class="it" onclick="asignarCB(${p.id})">
+      <span><b>${esc(p.codigo)}</b> ${esc(p.descripcion.slice(0,50))}</span>
+      <span class="muted small">${p.codigo_barras?'ya tiene CB':''}</span>
+    </div>`).join('') || '<div class="it muted">Sin resultados</div>';
+}
+async function asignarCB(pid){
+  const cb = window._cbNuevo;
+  const {data, error} = await sb.rpc('asignar_codigo_barras', { pid, cb });
+  if(error){ toast('Error: '+error.message, true); return; }
+  if(data==='ok'){
+    const p = prodCache.find(x=>x.id===pid);
+    if(p) p.codigo_barras = cb;
+    toast('Código guardado ✅ '+(p?p.codigo:''));
+    agregarProd(pid);
+    $('nv-buscar').value=''; buscarProd(); $('nv-buscar').focus();
+  }
+  else if(data==='duplicado') toast('Ese código ya lo tiene otro producto', true);
+  else if(data==='tiene_codigo') toast('Ese producto ya tiene código — un admin puede cambiarlo en Editar', true);
+  else if(data==='sin_permiso') toast('Tu usuario no puede registrar códigos', true);
+  else toast('Código inválido', true);
 }
 function buscarProd(){
   const q = ($('nv-buscar').value||'').toLowerCase().trim();
-  const res = prodCache.filter(p => !q || p.codigo.toLowerCase().includes(q) || p.descripcion.toLowerCase().includes(q) || (p.codigo_barras||'').includes(q)).slice(0,40);
+  const nq = nbarra(q);
+  const res = prodCache.filter(p => !q || p.codigo.toLowerCase().includes(q) || p.descripcion.toLowerCase().includes(q) || (p.codigo_barras && nq && nbarra(p.codigo_barras).includes(nq))).slice(0,40);
   $('nv-res').innerHTML = res.map(p=>`
     <div class="it" onclick="agregarProd(${p.id})">
       <span><b>${esc(p.codigo)}</b> ${esc(p.descripcion)}</span>
@@ -1434,7 +1476,7 @@ function pintarInv(){
   const est = $('inv-est')?.value || '';
   const sinMov = p => !(window._invVend||new Set()).has(p.id) && !(window._invRec||new Set()).has(p.id);
   const rows = invData.filter(p =>
-    (!q || p.codigo.toLowerCase().includes(q) || p.descripcion.toLowerCase().includes(q) || (p.codigo_barras||'').includes(q)) &&
+    (!q || p.codigo.toLowerCase().includes(q) || p.descripcion.toLowerCase().includes(q) || (p.codigo_barras && nbarra(p.codigo_barras).includes(nbarra(q)))) &&
     (!cat || p.categoria === cat) && (!soloBajo || +p.stock <= +p.stock_min) &&
     (est==='' || (est==='con' && +p.stock>0) || (est==='agotado' && +p.stock<=0) || (est==='sinmov' && sinMov(p)) || (est==='sincb' && !(p.codigo_barras||'').trim())));
   $('inv-body').innerHTML = rows.slice(0,400).map(p=>{
