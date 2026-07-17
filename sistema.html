@@ -723,7 +723,7 @@ async function vVentas(){
         <td><span class="badge b-gris">${esc(v.metodo_pago)}</span>${!v.cancelada && v.cancel_solicitada ? ` <span class="badge b-ambar" title="${esc(v.cancel_motivo||'sin motivo')}">⚠️ canc. solicitada</span>`:''}</td>
         <td class="num"><b>${fmt(v.total)}</b></td>
         ${esAdmin()?`<td class="num">${(!v.cancelada && utilPor[v.id]!==undefined)?`<span class="badge ${utilPor[v.id]>=0?'b-verde':'b-rojo'}">${fmt(utilPor[v.id])}</span>`:''}</td>`:''}
-        <td style="white-space:nowrap"><button class="btn sec sm" onclick="verVenta(${v.id})">Ver</button>
+        <td style="white-space:nowrap"><button class="btn sec sm" onclick="verVenta(${v.id})">Ver</button><button class="btn sec sm" title="Reimprimir ticket" onclick="reimprimirTicket(${v.id})">🖨</button>
         ${!v.cancelada ? (esAdmin()
           ? (v.cancel_solicitada
             ? `<button class="btn sm" onclick="cancelarVenta(${v.id})">✅ Aprobar</button><button class="btn sec sm" onclick="rechazarCanc(${v.id})">Rechazar</button>`
@@ -775,7 +775,7 @@ async function nuevaVenta(){
     <div class="pos">
       <div>
         <div class="field"><label>Buscar producto (código o descripción)</label>
-          <input id="nv-buscar" placeholder="Ej. broca, martillo, T3..." oninput="buscarProd()"></div>
+          <input id="nv-buscar" placeholder="Escanea con la pistola o escribe: broca, martillo..." oninput="buscarProd()" onkeydown="if(event.key==='Enter'){event.preventDefault();escanear(this);}"></div>
         <div class="prod-res" id="nv-res"></div>
       </div>
       <div>
@@ -796,9 +796,16 @@ async function nuevaVenta(){
   buscarProd(); pintarCarrito();
   $('nv-buscar').focus();
 }
+function escanear(inp){
+  const v = (inp.value||'').trim();
+  if(!v) return;
+  const p = prodCache.find(x=>(x.codigo_barras && x.codigo_barras===v) || x.codigo.toLowerCase()===v.toLowerCase());
+  if(p){ agregarProd(p.id); inp.value=''; buscarProd(); inp.focus(); }
+  else { toast('No encontré el código '+v.slice(0,22)+' — revisa o búscalo por nombre', true); inp.select(); }
+}
 function buscarProd(){
   const q = ($('nv-buscar').value||'').toLowerCase().trim();
-  const res = prodCache.filter(p => !q || p.codigo.toLowerCase().includes(q) || p.descripcion.toLowerCase().includes(q)).slice(0,40);
+  const res = prodCache.filter(p => !q || p.codigo.toLowerCase().includes(q) || p.descripcion.toLowerCase().includes(q) || (p.codigo_barras||'').includes(q)).slice(0,40);
   $('nv-res').innerHTML = res.map(p=>`
     <div class="it" onclick="agregarProd(${p.id})">
       <span><b>${esc(p.codigo)}</b> ${esc(p.descripcion)}</span>
@@ -852,8 +859,70 @@ async function guardarVenta(){
     p_notas: ''
   });
   if(error){ toast(errMsg(error), true); $('nv-guardar').disabled = false; return; }
+  const cliSel = $('nv-cliente');
+  const tk = {
+    folio: data.folio, fecha: fechaHora(new Date().toISOString()),
+    cliente: cliSel.value ? cliSel.options[cliSel.selectedIndex].text.replace(' 🔧','') : 'Mostrador',
+    vendedor: (typeof perfil!=='undefined' && perfil ? (perfil.nombre||'') : ''),
+    metodo: $('nv-metodo').value,
+    items: carrito.map(c=>({desc: c.codigo+' · '+c.desc.slice(0,40), cant: c.cantidad, precio: c.precio_unit, importe: Math.round(c.cantidad*c.precio_unit*100)/100})),
+    subtotal: Math.round(carrito.reduce((s,c)=>s+c.cantidad*c.precio_unit,0)*100)/100,
+    descuento: +($('nv-desc').value||0), total: data.total
+  };
   cerrarModal(); toast(`Venta #${data.folio} registrada · ${fmt(data.total)}`);
+  imprimirTicket(tk);
   vVentas();
+}
+function imprimirTicket(v){
+  const w = window.open('','_blank','width=420,height=680');
+  if(!w){ toast('Permite las ventanas emergentes para imprimir el ticket', true); return; }
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Ticket #${v.folio} · Axion Tools</title>
+  <style>
+    body{font-family:'Courier New',monospace;font-size:12px;color:#000;margin:0;padding:8px;width:270px}
+    .c{text-align:center}.b{font-weight:bold}
+    img{width:150px;display:block;margin:0 auto 4px}
+    hr{border:none;border-top:1px dashed #000;margin:6px 0}
+    table{width:100%;border-collapse:collapse;font-size:12px}
+    td{padding:1px 0;vertical-align:top}
+    .n{text-align:right;white-space:nowrap}
+    .tot{font-size:14px;font-weight:bold}
+    @media print{.noprint{display:none}}
+  </style></head><body>
+  <img src="https://axiontools.mx/logo-axion.png" onerror="this.style.display='none'">
+  <div class="c">Materiales y Ferretería · Disensa<br>Av. Fidel Velázquez Sánchez 788<br>Santa Elena Estadio, Guadalajara, Jal.<br>Tel 33 1010 7423 · axiontools.mx</div>
+  <hr>
+  <div>Ticket: <b>#${v.folio}</b><br>Fecha: ${v.fecha}<br>Cliente: ${esc(v.cliente)}<br>Le atendió: ${esc(v.vendedor)} · Pago: ${esc(v.metodo)}</div>
+  <hr>
+  <table>${v.items.map(i=>`<tr><td colspan="2">${esc(i.desc)}</td></tr><tr><td>&nbsp;&nbsp;${i.cant} x ${fmt(i.precio)}</td><td class="n">${fmt(i.importe)}</td></tr>`).join('')}</table>
+  <hr>
+  <table>
+    <tr><td>Subtotal</td><td class="n">${fmt(v.subtotal)}</td></tr>
+    ${+v.descuento>0?`<tr><td>Descuento</td><td class="n">-${fmt(v.descuento)}</td></tr>`:''}
+    <tr><td class="tot">TOTAL</td><td class="n tot">${fmt(v.total)}</td></tr>
+  </table>
+  <div class="c" style="margin-top:4px">Precios con IVA incluido</div>
+  <hr>
+  <div class="c b">¡Gracias por su compra!</div>
+  <div class="c">Cotiza tu obra o proyecto en<br>axiontools.mx</div>
+  <p class="noprint c" style="margin-top:10px"><button onclick="window.print()" style="padding:8px 18px;font-size:13px">🖨 Imprimir</button></p>
+  <scr`+`ipt>setTimeout(function(){ window.print(); }, 500);</scr`+`ipt>
+  </body></html>`);
+  w.document.close();
+}
+async function reimprimirTicket(id){
+  const [vr, ir] = await Promise.all([
+    sb.from('ventas').select('*, clientes(nombre), perfiles(nombre)').eq('id', id).single(),
+    sb.from('venta_items').select('cantidad,precio_unit,importe,productos(codigo,descripcion)').eq('venta_id', id)
+  ]);
+  const v = vr.data;
+  if(!v){ toast('No encontré esa venta', true); return; }
+  imprimirTicket({
+    folio: v.folio, fecha: fechaHora(v.fecha),
+    cliente: v.clientes?.nombre || 'Mostrador', vendedor: v.perfiles?.nombre || '',
+    metodo: v.metodo_pago,
+    items: (ir.data||[]).map(i=>({desc: (i.productos?.codigo||'')+' · '+(i.productos?.descripcion||'').slice(0,40), cant:+i.cantidad, precio:+i.precio_unit, importe:+i.importe})),
+    subtotal: +v.subtotal, descuento: +v.descuento, total: +v.total
+  });
 }
 
 /* ============================================================
@@ -1365,7 +1434,7 @@ function pintarInv(){
   const est = $('inv-est')?.value || '';
   const sinMov = p => !(window._invVend||new Set()).has(p.id) && !(window._invRec||new Set()).has(p.id);
   const rows = invData.filter(p =>
-    (!q || p.codigo.toLowerCase().includes(q) || p.descripcion.toLowerCase().includes(q)) &&
+    (!q || p.codigo.toLowerCase().includes(q) || p.descripcion.toLowerCase().includes(q) || (p.codigo_barras||'').includes(q)) &&
     (!cat || p.categoria === cat) && (!soloBajo || +p.stock <= +p.stock_min) &&
     (est==='' || (est==='con' && +p.stock>0) || (est==='agotado' && +p.stock<=0) || (est==='sinmov' && sinMov(p))));
   $('inv-body').innerHTML = rows.slice(0,400).map(p=>{
@@ -1414,7 +1483,7 @@ async function fichaProducto(id){
       <img src="https://storage.googleapis.com/indararticulos/${encodeURIComponent(p.codigo.replace(/[^A-Za-z0-9]/g,'_'))}_MD.webp" style="width:100px;height:100px;object-fit:contain" onerror="this.style.display='none'">
       <div>
         <h3 style="margin:0 0 4px;line-height:1.3">${esc(p.descripcion)}</h3>
-        <p class="small muted" style="margin:0"><b>${esc(p.codigo)}</b> · ${esc(p.categoria)} · por ${esc(p.unidad||'pza')}${p.activo?'':' · <span class="badge b-gris">inactivo</span>'}</p>
+        <p class="small muted" style="margin:0"><b>${esc(p.codigo)}</b> · ${esc(p.categoria)} · por ${esc(p.unidad||'pza')}${p.codigo_barras?` · CB ${esc(p.codigo_barras)}`:''}${p.activo?'':' · <span class="badge b-gris">inactivo</span>'}</p>
         <p style="margin:8px 0 0">Stock: <b>${+p.stock}</b> ${esc(p.unidad||'pza')} · Precio: <b>${fmt(p.precio)}</b>${esAdmin()?` · <span class="small muted">costo ${fmt(p.costo)}</span>`:''}</p>
       </div>
     </div>
@@ -1429,7 +1498,7 @@ async function fichaProducto(id){
     <div class="acciones">${esAdmin()?`<button class="btn sec" onclick="cerrarModal();editarProducto(${p.id})">✏️ Editar</button>`:''}<button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
 }
 function editarProducto(id){
-  const p = id ? invData.find(x=>x.id===id) : {codigo:'',descripcion:'',categoria:'General',costo:0,precio:0,stock:0,stock_min:3,activo:true,unidad:'pza'};
+  const p = id ? invData.find(x=>x.id===id) : {codigo:'',descripcion:'',categoria:'General',costo:0,precio:0,stock:0,stock_min:3,activo:true,unidad:'pza',codigo_barras:''};
   abrirModal(`<h3>${id?'Editar':'Nuevo'} producto</h3>
     <div class="frow">
       <div class="field"><label>Código</label><input id="pr-codigo" value="${esc(p.codigo)}" ${id?'disabled':''}></div>
@@ -1442,6 +1511,7 @@ function editarProducto(id){
       <div class="field"><label>Stock actual</label><input id="pr-stock" type="number" step="1" value="${+p.stock}"></div>
       <div class="field"><label>Stock mínimo (alerta)</label><input id="pr-min" type="number" step="1" value="${+p.stock_min}"></div>
       <div class="field"><label>Unidad</label><input id="pr-unidad" list="pr-unidades" value="${esc(p.unidad||'pza')}"><datalist id="pr-unidades"><option>pza</option><option>bolsa</option><option>caja</option><option>kilo</option><option>saco</option><option>bulto</option><option>metro</option><option>rollo</option><option>litro</option><option>cubeta</option><option>par</option><option>juego</option></datalist></div>
+      <div class="field"><label>Código de barras (escanéalo aquí con la pistola)</label><input id="pr-barras" value="${esc(p.codigo_barras||'')}" placeholder="— sin código —"></div>
     </div>
     <p id="pr-margen" class="small" style="margin:2px 0 10px"></p>
     <div class="field"><label><input type="checkbox" id="pr-activo" ${p.activo?'checked':''}> Activo (aparece en ventas)</label></div>
@@ -1484,6 +1554,7 @@ async function guardarProducto(id){
     costo: +$('pr-costo').value||0, precio: +$('pr-precio').value||0,
     stock: +$('pr-stock').value||0, stock_min: +$('pr-min').value||0,
     unidad: ($('pr-unidad').value.trim()||'pza'),
+    codigo_barras: $('pr-barras').value.trim(),
     activo: $('pr-activo').checked
   };
   if(!obj.descripcion){ toast('Falta la descripción', true); return; }
@@ -1493,7 +1564,7 @@ async function guardarProducto(id){
   }
   async function intenta(o){ return id ? (await sb.from('productos').update(o).eq('id', id)).error : (await sb.from('productos').insert(o)).error; }
   let error = await intenta(obj);
-  if(error && /unidad/i.test(error.message||'')){ const o2 = {...obj}; delete o2.unidad; error = await intenta(o2); }
+  if(error && /unidad|codigo_barras/i.test(error.message||'')){ const o2 = {...obj}; delete o2.unidad; delete o2.codigo_barras; error = await intenta(o2); }
   if(error){ toast(errMsg(error), true); return; }
   cerrarModal(); toast('Producto guardado'); vInventario();
 }
@@ -1524,7 +1595,7 @@ function etiquetasPrecios(){
   w.document.close();
 }
 function exportarInv(){
-  const enc = ['codigo','descripcion','categoria','unidad','costo','precio','stock','stock_min','activo'];
+  const enc = ['codigo','descripcion','categoria','unidad','codigo_barras','costo','precio','stock','stock_min','activo'];
   const csv = [enc.join(',')].concat(invData.map(p=>enc.map(k=>`"${String(p[k]??'').replace(/"/g,'""')}"`).join(','))).join('\n');
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob(['﻿'+csv], {type:'text/csv'}));
