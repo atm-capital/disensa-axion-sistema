@@ -1417,7 +1417,7 @@ async function vInventario(){
       <input type="search" id="inv-q" placeholder="Buscar por código o descripción..." oninput="pintarInv()">
       <select id="inv-cat" onchange="pintarInv()"><option value="">Todas las categorías</option>
         ${cats.map(c=>`<option>${esc(c)}</option>`).join('')}</select>
-      <select id="inv-est" onchange="pintarInv()"><option value="">Todos</option><option value="con">Con stock</option><option value="agotado">Agotados</option><option value="sinmov">Sin movimiento</option></select>
+      <select id="inv-est" onchange="pintarInv()"><option value="">Todos</option><option value="con">Con stock</option><option value="agotado">Agotados</option><option value="sinmov">Sin movimiento</option><option value="sincb">Sin código de barras</option></select>
       <label class="small"><input type="checkbox" id="inv-bajo" onchange="pintarInv()"> Solo stock bajo</label>
     </div>
     <div class="card"><div class="tbl-scroll"><table>
@@ -1436,7 +1436,7 @@ function pintarInv(){
   const rows = invData.filter(p =>
     (!q || p.codigo.toLowerCase().includes(q) || p.descripcion.toLowerCase().includes(q) || (p.codigo_barras||'').includes(q)) &&
     (!cat || p.categoria === cat) && (!soloBajo || +p.stock <= +p.stock_min) &&
-    (est==='' || (est==='con' && +p.stock>0) || (est==='agotado' && +p.stock<=0) || (est==='sinmov' && sinMov(p))));
+    (est==='' || (est==='con' && +p.stock>0) || (est==='agotado' && +p.stock<=0) || (est==='sinmov' && sinMov(p)) || (est==='sincb' && !(p.codigo_barras||'').trim())));
   $('inv-body').innerHTML = rows.slice(0,400).map(p=>{
     const bajo = +p.stock <= +p.stock_min;
     const neto = +p.precio/1.16, marg = neto - +p.costo;
