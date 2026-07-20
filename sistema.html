@@ -840,11 +840,13 @@ async function nuevaVenta(){
           ${cliCache.map(x=>`<option value="${x.id}">${esc(x.nombre)}${x.oficio?' 🔧':''}</option>`).join('')}</select></div>
         <p id="nv-maestro" class="small" style="margin:-6px 0 8px;color:var(--verde,#15803d);font-weight:600"></p>
         <div class="field"><label>Método de pago</label>
-          <select id="nv-metodo"><option value="efectivo">Efectivo</option><option value="tarjeta">Tarjeta</option>
+          <select id="nv-metodo" onchange="toggleCambio()"><option value="efectivo">Efectivo</option><option value="tarjeta">Tarjeta</option>
           <option value="transferencia">Transferencia</option><option value="ak_pago">AK Pago</option><option value="credito">Crédito</option></select></div>
         <table class="carrito" style="margin:8px 0"><tbody id="nv-carrito"></tbody></table>
         <div class="tot-line"><span>Descuento</span><span>$ <input id="nv-desc" value="0" style="width:80px;padding:5px;border:1px solid var(--linea);border-radius:6px;text-align:right" oninput="pintarCarrito()"></span></div>
         <div class="tot-line grande"><span>Total</span><span id="nv-total">$0.00</span></div>
+        <div class="tot-line" id="nv-recibido-row"><span>💵 Recibido</span><span>$ <input id="nv-recibido" inputmode="decimal" placeholder="0" style="width:80px;padding:5px;border:1px solid var(--linea);border-radius:6px;text-align:right" oninput="calcCambio()"></span></div>
+        <div class="tot-line grande" id="nv-cambio-row" style="display:none;color:var(--verde,#15803d)"><span>Cambio</span><span id="nv-cambio">$0.00</span></div>
         <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cancelar</button>
           <button class="btn" id="nv-guardar" onclick="guardarVenta()">Cobrar y guardar</button></div>
       </div>
@@ -971,7 +973,47 @@ function pintarCarrito(){
     || '<tr><td class="muted" style="padding:14px 6px">El carrito está vacío — busca y da clic en un producto.</td></tr>';
   const sub = carrito.reduce((s,c)=>s+c.cantidad*c.precio_unit,0);
   const desc = +($('nv-desc')?.value||0);
-  $('nv-total').textContent = fmt(sub - desc);
+  window._nvTotal = Math.round((sub - desc)*100)/100;
+  $('nv-total').textContent = fmt(window._nvTotal);
+  if($('nv-recibido')) calcCambio();
+}
+function toggleCambio(){
+  const esEfectivo = $('nv-metodo').value==='efectivo';
+  const r=$('nv-recibido-row'); if(r) r.style.display = esEfectivo?'':'none';
+  if(!esEfectivo && $('nv-cambio-row')) $('nv-cambio-row').style.display='none';
+}
+function calcCambio(){
+  const rec = +(($('nv-recibido')?.value)||0);
+  const tot = window._nvTotal||0;
+  const row = $('nv-cambio-row'); if(!row) return;
+  if(rec>0 && $('nv-metodo').value==='efectivo'){
+    const c = Math.round((rec-tot)*100)/100;
+    row.style.display='';
+    row.style.color = c>=0 ? 'var(--verde,#15803d)' : '#dc2626';
+    $('nv-cambio').textContent = (c>=0? fmt(c) : 'faltan '+fmt(-c));
+  } else row.style.display='none';
+}
+function numALetras(n){
+  n = Math.round(+n*100)/100;
+  const ent = Math.floor(n), cent = Math.round((n-ent)*100);
+  const U=['','UN','DOS','TRES','CUATRO','CINCO','SEIS','SIETE','OCHO','NUEVE','DIEZ','ONCE','DOCE','TRECE','CATORCE','QUINCE','DIECISEIS','DIECISIETE','DIECIOCHO','DIECINUEVE','VEINTE'];
+  const D=['','','VEINTI','TREINTA','CUARENTA','CINCUENTA','SESENTA','SETENTA','OCHENTA','NOVENTA'];
+  const C=['','CIENTO','DOSCIENTOS','TRESCIENTOS','CUATROCIENTOS','QUINIENTOS','SEISCIENTOS','SETECIENTOS','OCHOCIENTOS','NOVECIENTOS'];
+  function cientos(x){
+    if(x===0) return '';
+    if(x===100) return 'CIEN';
+    let s='';
+    if(x>=100){ s+=C[Math.floor(x/100)]+' '; x%=100; }
+    if(x>20){ const d=Math.floor(x/10), u=x%10; s += d===2 ? 'VEINTI'+(u?U[u]:''):(D[d]+(u?' Y '+U[u]:'')); }
+    else if(x>0) s+=U[x];
+    return s.trim();
+  }
+  let letra='';
+  if(ent===0) letra='CERO';
+  else if(ent>=1000000){ const m=Math.floor(ent/1000000); letra=(m===1?'UN MILLON':cientos(m)+' MILLONES'); const r=ent%1000000; if(r) letra+=' '+numALetras(r+0.00).split(' PESOS')[0].replace(/^UN PESO.*/,'UNO'); }
+  else if(ent>=1000){ const m=Math.floor(ent/1000); letra=(m===1?'MIL':cientos(m)+' MIL'); const r=ent%1000; if(r) letra+=' '+cientos(r); }
+  else letra=cientos(ent);
+  return letra+(ent===1?' PESO ':' PESOS ')+String(cent).padStart(2,'0')+'/100 MN';
 }
 async function guardarVenta(){
   if(!carrito.length){ toast('Agrega al menos un producto', true); return; }
@@ -993,8 +1035,10 @@ async function guardarVenta(){
     metodo: $('nv-metodo').value,
     items: carrito.map(c=>({desc: c.codigo+' · '+c.desc.slice(0,40), cant: c.cantidad, precio: c.precio_unit, importe: Math.round(c.cantidad*c.precio_unit*100)/100})),
     subtotal: Math.round(carrito.reduce((s,c)=>s+c.cantidad*c.precio_unit,0)*100)/100,
-    descuento: +($('nv-desc').value||0), total: data.total
+    descuento: +($('nv-desc').value||0), total: data.total,
+    recibido: ($('nv-metodo').value==='efectivo' && +($('nv-recibido')?.value||0)>0) ? +$('nv-recibido').value : null
   };
+  if(tk.recibido!==null) tk.cambio = Math.round((tk.recibido - +data.total)*100)/100;
   cerrarModal(); toast(`Venta #${data.folio} registrada · ${fmt(data.total)}`);
   imprimirTicket(tk);
   vVentas();
@@ -1015,21 +1059,30 @@ function imprimirTicket(v){
     @media print{.noprint{display:none}}
   </style></head><body>
   <img src="https://axiontools.mx/logo-axion.png" onerror="this.style.display='none'">
-  <div class="c">Materiales y Ferretería · Disensa<br>Av. Fidel Velázquez Sánchez 788<br>Santa Elena Estadio, Guadalajara, Jal.<br>Tel 33 1010 7423 · axiontools.mx</div>
+  <div class="c b">DISTRIBUIDORA AXION</div>
+  <div class="c">Materiales y Ferretería · Disensa<br>Av. Fidel Velázquez Sánchez 788<br>Santa Elena Estadio, 44230<br>Guadalajara, Jalisco<br>Tel 33 1010 7423 · axiontools.mx</div>
   <hr>
-  <div>Ticket: <b>#${v.folio}</b><br>Fecha: ${v.fecha}<br>Cliente: ${esc(v.cliente)}<br>Le atendió: ${esc(v.vendedor)} · Pago: ${esc(v.metodo)}</div>
+  <div>TICKET: <b>#${v.folio}</b><br>FECHA: ${v.fecha}<br>CLIENTE: ${esc(v.cliente)}<br>CAJERO: ${esc(v.vendedor)}<br>PAGO: ${esc(v.metodo)}</div>
   <hr>
+  <div class="b">DESCRIPCION</div>
   <table>${v.items.map(i=>`<tr><td colspan="2">${esc(i.desc)}</td></tr><tr><td>&nbsp;&nbsp;${i.cant} x ${fmt(i.precio)}</td><td class="n">${fmt(i.importe)}</td></tr>`).join('')}</table>
   <hr>
   <table>
-    <tr><td>Subtotal</td><td class="n">${fmt(v.subtotal)}</td></tr>
-    ${+v.descuento>0?`<tr><td>Descuento</td><td class="n">-${fmt(v.descuento)}</td></tr>`:''}
+    ${+v.descuento>0?`<tr><td>Suma</td><td class="n">${fmt(v.subtotal)}</td></tr><tr><td>DESCUENTO</td><td class="n">-${fmt(v.descuento)}</td></tr>`:''}
+    <tr><td>SUBTOTAL</td><td class="n">${fmt(Math.round(+v.total/1.16*100)/100)}</td></tr>
+    <tr><td>IVA (16%)</td><td class="n">${fmt(Math.round((+v.total - +v.total/1.16)*100)/100)}</td></tr>
     <tr><td class="tot">TOTAL</td><td class="n tot">${fmt(v.total)}</td></tr>
   </table>
-  <div class="c" style="margin-top:4px">Precios con IVA incluido</div>
+  <div>(${numALetras(v.total)})</div>
+  ${v.recibido!=null?`<hr><table>
+    <tr><td>EFECTIVO</td><td class="n">${fmt(v.total)}</td></tr>
+    <tr><td>RECIBIDO</td><td class="n">${fmt(v.recibido)}</td></tr>
+    <tr><td class="b">CAMBIO</td><td class="n b">${fmt(v.cambio||0)}</td></tr>
+  </table>`:''}
   <hr>
   <div class="c b">¡Gracias por su compra!</div>
   <div class="c">Cotiza tu obra o proyecto en<br>axiontools.mx</div>
+  <div class="c" style="margin-top:4px;font-size:10px">Este ticket no representa un<br>comprobante fiscal. Si requieres<br>factura, solicítala en mostrador.</div>
   <p class="noprint c" style="margin-top:10px"><button onclick="window.print()" style="padding:8px 18px;font-size:13px">🖨 Imprimir</button></p>
   <scr`+`ipt>setTimeout(function(){ window.print(); }, 500);</scr`+`ipt>
   </body></html>`);
