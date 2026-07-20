@@ -250,7 +250,7 @@ async function cargarPerfil(){
   }
   $('scr-app').classList.remove('hidden');
   iniciarAvisos();
-  procesarEstatusIndar(); procesarFacturasIndar(); logEv('sesion', 'entró al sistema');
+  procesarEstatusIndar(); procesarFacturasIndar(); procesarCuadreSafdi(); logEv('sesion', 'entró al sistema');
   $('foot-nombre').textContent = perfil.nombre || perfil.correo;
   $('foot-rol').textContent = 'Rol: ' + perfil.rol;
   montarNav();
@@ -700,7 +700,8 @@ async function vResumen(){
 let carrito = [], prodCache = [], cliCache = [];
 async function vVentas(){
   if(puedeVender()){
-    $('vtools').innerHTML = `<button class="btn" onclick="nuevaVenta()">+ Nueva venta</button>`;
+    $('vtools').innerHTML = `<button class="btn" onclick="nuevaVenta()">+ Nueva venta</button>
+      <button class="btn sec" onclick="cuadreSafdiModal()">⚖️ Cuadre SAFDI</button>`;
   }
   const {data, error} = await sb.from('ventas')
     .select('*, clientes(nombre), perfiles(nombre)')
@@ -902,6 +903,66 @@ async function asignarCB(pid){
   else if(data==='sin_permiso') toast('Tu usuario no puede registrar códigos', true);
   else toast('Código inválido', true);
 }
+/* ===== CUADRE DE STOCK VS SAFDI (Excel) ===== */
+function compararStockSafdi(){
+  abrirModal(`<h3>⚖️ Comparar stock contra SAFDI</h3>
+    <ol style="margin:10px 0 10px 18px;line-height:1.9">
+      <li>En SAFDI ve a <b>Inventario → Reportes → Lista de stock</b> (o el reporte que traiga stock por producto).</li>
+      <li>Descarga el <b>Excel</b> del reporte.</li>
+      <li>Súbelo aquí y te digo qué productos no cuadran:</li>
+    </ol>
+    <div class="field"><input type="file" id="sf-stock-file" accept=".xlsx,.xls,.csv" onchange="leerStockSafdi(this.files[0])"></div>
+    <div id="sf-stock-res"></div>
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
+}
+async function leerStockSafdi(file){
+  if(!file) return;
+  if(!window.XLSX){
+    try{ await new Promise((res,rej)=>{ const s=document.createElement('scr'+'ipt'); s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'; s.onload=res; s.onerror=rej; document.head.appendChild(s); }); }
+    catch(e){ toast('No pude cargar el lector de Excel', true); return; }
+  }
+  const buf = await file.arrayBuffer();
+  const wb = XLSX.read(buf, {type:'array'});
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(ws, {header:1});
+  let hi=-1, colCB=-1, colStock=-1, colCod=-1, colNom=-1;
+  for(let i=0;i<Math.min(rows.length,15);i++){
+    const cells=(rows[i]||[]).map(c=>String(c||'').toLowerCase());
+    const icb=cells.findIndex(c=>/c[oó]digo de barras|barcode/.test(c));
+    let ist=cells.findIndex(c=>/stock disponible/.test(c));
+    if(ist<0) ist=cells.findIndex(c=>/stock|existencia/.test(c));
+    if(icb>=0 && ist>=0){ hi=i; colCB=icb; colStock=ist;
+      colCod=cells.findIndex(c=>/^c[oó]digo$/.test(c)); colNom=cells.findIndex(c=>/producto|descripci/.test(c)); break; }
+  }
+  if(hi<0){ $('sf-stock-res').innerHTML='<p class="small" style="color:#dc2626">No encontré las columnas "Código de Barras" y "Stock" en este archivo. ¿Es el reporte correcto?</p>'; return; }
+  const porCB={};
+  invData.forEach(p=>{ if((p.codigo_barras||'').trim()) porCB[nbarra(p.codigo_barras)]=p; });
+  let cuadran=0; const difs=[], sinMatch=[];
+  for(let i=hi+1;i<rows.length;i++){
+    const r=rows[i]||[];
+    const cb=nbarra(String(r[colCB]||''));
+    if(!cb) continue;
+    const st=+String(r[colStock]||'0').replace(/[^0-9.-]/g,'')||0;
+    const nom=String(r[colNom]||'').slice(0,45);
+    const p=porCB[cb];
+    if(!p){ sinMatch.push({nom, cb, st}); continue; }
+    if(Math.abs(+p.stock - st)<0.001) cuadran++;
+    else difs.push({cod:p.codigo, desc:p.descripcion.slice(0,42), ax:+p.stock, sf:st});
+  }
+  difs.sort((a,b)=>Math.abs(b.ax-b.sf)-Math.abs(a.ax-a.sf));
+  $('sf-stock-res').innerHTML = `
+    <div class="kpis" style="margin:10px 0">
+      <div class="kpi"><div class="l">Cuadran</div><div class="v">${cuadran}</div></div>
+      <div class="kpi"><div class="l">Con diferencia</div><div class="v" style="${difs.length?'color:#dc2626':''}">${difs.length}</div></div>
+      <div class="kpi"><div class="l">Solo en SAFDI</div><div class="v">${sinMatch.length}</div><div class="s">sin código de barras común</div></div>
+    </div>
+    ${difs.length?`<div class="tbl-scroll" style="max-height:260px;overflow-y:auto"><table>
+      <thead><tr><th>Código</th><th>Producto</th><th class="num">Axion</th><th class="num">SAFDI</th><th class="num">Dif</th></tr></thead>
+      <tbody>${difs.map(d=>`<tr><td><b>${esc(d.cod)}</b></td><td>${esc(d.desc)}</td><td class="num">${d.ax}</td><td class="num">${d.sf}</td><td class="num"><span class="badge ${d.ax>d.sf?'b-ambar':'b-rojo'}">${d.ax-d.sf>0?'+':''}${Math.round((d.ax-d.sf)*100)/100}</span></td></tr>`).join('')}</tbody></table></div>
+      <p class="small muted" style="margin-top:6px">Dif positiva = Axion tiene más (¿venta en SAFDI sin registrar acá?). Negativa = SAFDI tiene más (¿venta en Axion sin capturar allá o entrada no dada de alta?).</p>`
+      :'<p class="small" style="color:var(--verde,#15803d)"><b>🎉 Todo el stock con código de barras cuadra perfecto.</b></p>'}
+    ${sinMatch.length?`<details style="margin-top:8px"><summary class="small muted">Ver los ${sinMatch.length} de SAFDI sin match (sin CB común)</summary><div class="small muted" style="max-height:120px;overflow-y:auto">${sinMatch.map(s=>esc(s.nom)+' ('+s.st+')').join(' · ')}</div></details>`:''}`;
+}
 function capturarCB(pid){
   const p = invData.find(x=>x.id===pid) || (typeof prodCache!=='undefined' && prodCache.find(x=>x.id===pid));
   if(!p) return;
@@ -1087,6 +1148,135 @@ function imprimirTicket(v){
   <scr`+`ipt>setTimeout(function(){ window.print(); }, 500);</scr`+`ipt>
   </body></html>`);
   w.document.close();
+}
+/* ===== CUADRE SAFDI ===== */
+function bookmarkletSafdi(){
+  const code = `(async()=>{try{
+if(!/safdi\\.disensa\\.com/.test(location.host)){alert('Abre esto estando en SAFDI');return;}
+if(!/FVentas\\/Factura/.test(location.pathname)){location.href='/FVentas/Factura';return;}
+const rows=[...document.querySelectorAll('table tr')].map(r=>{const a=r.querySelector('a[href*="ConsultarFactura"]');if(!a)return null;const id=a.getAttribute('href').split('/').pop();const c=[...r.cells].map(x=>x.textContent.trim());return {id:+id,total:c[3],estado:c[4]};}).filter(Boolean);
+if(!rows.length){alert('Primero pon las fechas y dale Consultar para que salgan los tickets');return;}
+const out=[];
+for(const t of rows){const r=await fetch('/api/FVentas/Factura/'+t.id);const j=await r.json();out.push({id:t.id,num:j.tx_numerodocumento,fecha:j.fe_emision,total:+j.vm_total,estado:j.tx_estado,items:(j.detalle||[]).map(d=>({it:d.id_item,qn:+d.qn_item,pu:Math.round(+d.vm_total/(+d.qn_item||1)*100)/100}))});}
+location.href='https://axiontools.mx/sistema.html'+String.fromCharCode(35)+'safdiv='+encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(out)))));
+}catch(e){alert('Error: '+e.message);}})();`;
+  return 'javascript:'+encodeURIComponent(code);
+}
+function cuadreSafdiModal(){
+  abrirModal(`<h3>⚖️ Cuadre de ventas con SAFDI</h3>
+    <ol style="margin:10px 0 10px 18px;line-height:1.9">
+      <li>Si es tu primera vez: arrastra este botón a tu barra de marcadores → <a href="${bookmarkletSafdi()}" class="btn sec sm" style="text-decoration:none" onclick="return false">⚖️ SAFDI → Axion</a></li>
+      <li>Abre SAFDI → Ventas → <b>Ticket de venta</b>, elige las fechas y dale <b>Consultar</b>.</li>
+      <li>Pica el marcador <b>⚖️ SAFDI → Axion</b>: junta los tickets y te regresa aquí con la comparación.</li>
+    </ol>
+    <p class="small muted">Los tickets que falten en Axion los registras con un clic (baja el stock y queda la nota del folio SAFDI). Los que falten en SAFDI te los marca para capturarlos allá.</p>
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button>
+    <button class="btn" onclick="window.open('https://safdi.disensa.com/FVentas/Factura','_blank')">Abrir SAFDI</button></div>`);
+}
+async function procesarCuadreSafdi(){
+  try{
+    const h = location.hash || '';
+    if(!h.startsWith('#safdiv=')) return;
+    const json = decodeURIComponent(escape(atob(decodeURIComponent(h.slice(8)))));
+    history.replaceState(null,'',location.pathname);
+    window._safdiTks = JSON.parse(json);
+    irA('ventas');
+    setTimeout(()=>pintarCuadreSafdi(), 600);
+  }catch(e){ toast('No pude leer los datos de SAFDI: '+e.message, true); }
+}
+async function pintarCuadreSafdi(){
+  const tks = window._safdiTks||[];
+  if(!tks.length){ toast('SAFDI no trajo tickets', true); return; }
+  const fechas = tks.map(t=>new Date(t.fecha));
+  const ini = new Date(Math.min(...fechas)); ini.setHours(0,0,0,0);
+  const fin = new Date(Math.max(...fechas)); fin.setHours(23,59,59,999);
+  const [vs, mapr, pr] = await Promise.all([
+    sb.from('ventas').select('id,folio,fecha,total,cancelada,notas').gte('fecha',ini.toISOString()).lte('fecha',fin.toISOString()),
+    sb.from('safdi_map').select('id_item,producto_id'),
+    sb.from('productos').select('id,codigo,descripcion,precio,stock')
+  ]);
+  window._safdiMap = {}; (mapr.data||[]).forEach(m=>window._safdiMap[m.id_item]=m.producto_id);
+  window._safdiProds = pr.data||[];
+  const ventas = (vs.data||[]).filter(v=>!v.cancelada);
+  const usadas = new Set();
+  tks.forEach(t=>{
+    t.st = 'falta';
+    if(!/cobrado/i.test(t.estado||'')){ t.st='anulado'; return; }
+    const imp = ventas.find(v=>(v.notas||'').includes('SAFDI:'+t.id));
+    if(imp){ t.st='importada'; t.folioAx=imp.folio; usadas.add(imp.id); return; }
+    const dia = new Date(t.fecha).toDateString();
+    const m = ventas.find(v=>!usadas.has(v.id) && !(v.notas||'').includes('SAFDI:') && new Date(v.fecha).toDateString()===dia && Math.abs(+v.total - t.total)<0.01);
+    if(m){ t.st='cuadra'; t.folioAx=m.folio; usadas.add(m.id); }
+  });
+  const soloAxion = ventas.filter(v=>!usadas.has(v.id) && !(v.notas||'').includes('SAFDI:'));
+  const B = {cuadra:'<span class="badge b-verde">✅ cuadra</span>', importada:'<span class="badge b-verde">✅ ya importada</span>', falta:'<span class="badge b-ambar">⚠️ falta en Axion</span>', anulado:'<span class="badge b-gris">anulada</span>'};
+  abrirModal(`<h3>⚖️ Cuadre SAFDI · ${tks.length} ticket(s)</h3>
+    <div class="tbl-scroll" style="max-height:340px;overflow-y:auto"><table>
+      <thead><tr><th>Ticket SAFDI</th><th>Fecha</th><th class="num">Total</th><th>Estado</th><th></th></tr></thead>
+      <tbody>${tks.map((t,i)=>`<tr>
+        <td><b>#${esc(String(t.num))}</b> <span class="small muted">(${t.id})</span></td>
+        <td>${fechaHora(t.fecha)}</td><td class="num"><b>${fmt(t.total)}</b></td>
+        <td>${B[t.st]}${t.folioAx?` <span class="small muted">Axion #${t.folioAx}</span>`:''}</td>
+        <td>${t.st==='falta'?`<button class="btn sm" onclick="registrarSafdi(${i})">Registrar en Axion</button>`:''}</td></tr>`).join('')}</tbody></table></div>
+    ${soloAxion.length?`<div class="card" style="border-left:4px solid #d97706;margin-top:10px"><b>⚠️ ${soloAxion.length} venta(s) de Axion que no están en SAFDI:</b> ${soloAxion.map(v=>'#'+v.folio+' ('+fmt(v.total)+')').join(', ')} — captúrenlas en SAFDI para que cuadre.</div>`:''}
+    <div id="safdi-res" style="margin-top:8px"></div>
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
+}
+async function registrarSafdi(idx){
+  const t = window._safdiTks[idx];
+  const map = window._safdiMap||{}, prods = window._safdiProds||[];
+  const items = []; const sinMapa = [];
+  for(const it of t.items){
+    let pid = map[it.it];
+    if(!pid){
+      const cand = prods.filter(p=>Math.abs(+p.precio - it.pu)<0.005);
+      if(cand.length===1) pid = cand[0].id;
+    }
+    if(pid){ const p=prods.find(x=>x.id===pid); items.push({producto_id:pid, cantidad:it.qn, precio_unit:it.pu, _cod:p?p.codigo:''}); }
+    else sinMapa.push(it);
+  }
+  if(sinMapa.length){ resolverItemSafdi(idx, sinMapa[0]); return; }
+  if(!confirm(`Registrar en Axion el ticket SAFDI #${t.num} por ${fmt(t.total)} (${items.map(i=>i._cod+' x'+i.cantidad).join(', ')})?`)) return;
+  const {data, error} = await sb.rpc('registrar_venta', {
+    p_items: items.map(i=>({producto_id:i.producto_id, cantidad:i.cantidad, precio_unit:i.precio_unit})),
+    p_cliente_id: null, p_metodo: 'efectivo', p_descuento: 0,
+    p_notas: 'SAFDI:'+t.id+' ticket #'+t.num+' del '+fechaHora(t.fecha)
+  });
+  if(error){ toast(errMsg(error), true); return; }
+  // guardar mapeos aprendidos
+  for(const i in t.items){
+    const it=t.items[i]; const reg=items[i];
+    if(reg && !(window._safdiMap||{})[it.it]){ await sb.from('safdi_map').upsert({id_item:it.it, producto_id:reg.producto_id}); window._safdiMap[it.it]=reg.producto_id; }
+  }
+  toast(`Venta SAFDI #${t.num} registrada como Axion #${data.folio} ✓`);
+  logEv('venta','importada de SAFDI ticket '+t.id);
+  pintarCuadreSafdi();
+}
+function resolverItemSafdi(idx, it){
+  const t = window._safdiTks[idx];
+  abrirModal(`<h3>¿Qué producto es este del ticket SAFDI #${esc(String(t.num))}?</h3>
+    <p class="small muted">Artículo SAFDI (${it.it}) · ${it.qn} pza(s) a ${fmt(it.pu)} c/u — no encontré un producto con ese precio exacto. Búscalo y elígelo (queda aprendido para siempre):</p>
+    <div class="field"><input id="sf-buscar" placeholder="nombre o código..." oninput="buscarProdSafdi(${idx},${it.it},${it.pu},${it.qn})"></div>
+    <div id="sf-res" style="max-height:260px;overflow-y:auto"></div>
+    <div class="acciones"><button class="btn sec" onclick="pintarCuadreSafdi()">Volver al cuadre</button></div>`, true);
+  setTimeout(()=>$('sf-buscar')?.focus(),150);
+}
+function buscarProdSafdi(idx, idItem, pu, qn){
+  const q = ($('sf-buscar').value||'').toLowerCase().trim();
+  const prods = window._safdiProds||[];
+  const res = q ? prods.filter(p=>p.codigo.toLowerCase().includes(q)||p.descripcion.toLowerCase().includes(q)).slice(0,15) : [];
+  $('sf-res').innerHTML = res.map(p=>`
+    <div class="it" style="display:flex;justify-content:space-between;padding:8px;border-bottom:1px solid var(--linea);cursor:pointer" onclick="elegirProdSafdi(${idx},${idItem},${p.id})">
+      <span><b>${esc(p.codigo)}</b> ${esc(p.descripcion.slice(0,45))}</span>
+      <span>${fmt(p.precio)} · <span class="muted">${+p.stock} disp</span></span>
+    </div>`).join('') || (q?'<div class="muted small" style="padding:8px">Sin resultados</div>':'');
+}
+async function elegirProdSafdi(idx, idItem, pid){
+  const {error} = await sb.from('safdi_map').upsert({id_item:idItem, producto_id:pid});
+  if(error){ toast(errMsg(error), true); return; }
+  (window._safdiMap=window._safdiMap||{})[idItem]=pid;
+  toast('Producto vinculado ✓');
+  registrarSafdi(idx);
 }
 async function reimprimirTicket(id){
   const [vr, ir] = await Promise.all([
@@ -1579,6 +1769,7 @@ async function vInventario(){
   if(esAdmin()) $('vtools').innerHTML = `<button class="btn" onclick="editarProducto(null)">+ Producto</button>
     <button class="btn sec" onclick="verResurtido()">🛒 Resurtido</button>
     <button class="btn sec" onclick="etiquetasPrecios()">🏷️ Precios tienda</button>
+    <button class="btn sec" onclick="compararStockSafdi()">⚖️ Stock SAFDI</button>
     <button class="btn sec" onclick="exportarInv()">Exportar CSV</button>`;
   const [{data, error}, mv, mr] = await Promise.all([
     sb.from('productos').select('*').order('descripcion'),
