@@ -712,26 +712,82 @@ async function vVentas(){
     (it.data||[]).forEach(i=>{ utilPor[i.venta_id] = (utilPor[i.venta_id]||0) + (+i.precio_unit/1.16 - +i.costo_unit) * +i.cantidad; });
     data.forEach(v=>{ if(utilPor[v.id]!==undefined) utilPor[v.id] = Math.round((utilPor[v.id] - +(v.descuento||0)/1.16)*100)/100; });
   }
+  window._vtasData = data; window._vtasUtil = utilPor;
+  const vends = [...new Set(data.map(v=>v.perfiles?.nombre).filter(Boolean))].sort();
+  const solicitadas = data.filter(v=>v.cancel_solicitada && !v.cancelada).length;
   $('v-ventas').innerHTML = `
-    ${esAdmin() && data.some(v=>v.cancel_solicitada && !v.cancelada) ? `<div class="card" style="border-left:4px solid #d97706"><b>⚠️ ${data.filter(v=>v.cancel_solicitada && !v.cancelada).length} venta(s) con cancelación solicitada por un vendedor</b> — abajo puedes Aprobar o Rechazar cada una.</div>`:''}
-    <div class="card"><h3>Historial (últimas 100)</h3>
-    <div class="tbl-scroll"><table><thead><tr><th>Folio</th><th>Fecha</th><th>Cliente</th><th>Vendedor</th><th>Pago</th><th class="num">Total</th>${esAdmin()?'<th class="num">Utilidad</th>':''}<th></th></tr></thead>
-    <tbody>${data.map(v=>`
-      <tr style="${v.cancelada?'opacity:.5;text-decoration:line-through':''}">
-        <td><b>#${v.folio}</b></td><td>${fechaHora(v.fecha)}</td>
-        <td>${esc(v.clientes?.nombre || 'Mostrador')}</td><td>${esc(v.perfiles?.nombre||'')}</td>
-        <td><span class="badge b-gris">${esc(v.metodo_pago)}</span>${!v.cancelada && v.cancel_solicitada ? ` <span class="badge b-ambar" title="${esc(v.cancel_motivo||'sin motivo')}">⚠️ canc. solicitada</span>`:''}</td>
-        <td class="num"><b>${fmt(v.total)}</b></td>
-        ${esAdmin()?`<td class="num">${(!v.cancelada && utilPor[v.id]!==undefined)?`<span class="badge ${utilPor[v.id]>=0?'b-verde':'b-rojo'}">${fmt(utilPor[v.id])}</span>`:''}</td>`:''}
-        <td style="white-space:nowrap"><button class="btn sec sm" onclick="verVenta(${v.id})">Ver</button><button class="btn sec sm" title="Reimprimir ticket" onclick="reimprimirTicket(${v.id})">🖨</button>
+    ${esAdmin() && solicitadas ? `<div class="card" style="border-left:4px solid #d97706;margin-bottom:14px"><b>⚠️ ${solicitadas} venta(s) con cancelación solicitada por un vendedor</b> — abajo puedes Aprobar o Rechazar cada una.</div>`:''}
+    <div class="kpis" id="vt-kpis" style="margin-bottom:14px"></div>
+    <div class="toolbar">
+      <input type="search" id="vt-q" placeholder="Buscar por folio o cliente..." oninput="pintarVentas()">
+      <select id="vt-pago" onchange="pintarVentas()"><option value="">Todos los pagos</option>
+        <option value="efectivo">💵 Efectivo</option><option value="tarjeta">💳 Tarjeta</option>
+        <option value="transferencia">🏦 Transferencia</option><option value="ak_pago">📱 AK Pago</option><option value="credito">📄 Crédito</option></select>
+      ${vends.length>1?`<select id="vt-vend" onchange="pintarVentas()"><option value="">Todos los vendedores</option>${vends.map(n=>`<option>${esc(n)}</option>`).join('')}</select>`:'<span id="vt-vend" style="display:none"></span>'}
+      <label class="small"><input type="checkbox" id="vt-canc" onchange="pintarVentas()"> Ver canceladas</label>
+    </div>
+    <div id="vt-lista"></div>`;
+  pintarVentas();
+}
+function pintarVentas(){
+  const data = window._vtasData||[], utilPor = window._vtasUtil||{};
+  const q = ($('vt-q').value||'').toLowerCase().trim();
+  const pago = $('vt-pago').value||'';
+  const vendEl = $('vt-vend'); const vend = (vendEl && vendEl.tagName==='SELECT') ? vendEl.value : '';
+  const verCanc = $('vt-canc').checked;
+  const rows = data.filter(v=>
+    (verCanc || !v.cancelada) &&
+    (!pago || v.metodo_pago===pago) &&
+    (!vend || (v.perfiles?.nombre||'')===vend) &&
+    (!q || String(v.folio).includes(q.replace('#','')) || (v.clientes?.nombre||'mostrador').toLowerCase().includes(q)));
+  const hoy0 = new Date(); hoy0.setHours(0,0,0,0);
+  const iniSem = new Date(hoy0); iniSem.setDate(hoy0.getDate() - ((hoy0.getDay()+6)%7));
+  let tHoy=0, nHoy=0, tSem=0, nSem=0, uHoy=0;
+  data.forEach(v=>{ if(v.cancelada) return; const f=new Date(v.fecha);
+    if(f>=hoy0){ tHoy+=+v.total; nHoy++; if(utilPor[v.id]!==undefined) uHoy+=utilPor[v.id]; }
+    if(f>=iniSem){ tSem+=+v.total; nSem++; } });
+  $('vt-kpis').innerHTML = `
+    <div class="kpi"><div class="l">Vendido hoy</div><div class="v">${fmt(tHoy)}</div><div class="s">${nHoy} venta(s)</div></div>
+    <div class="kpi"><div class="l">Esta semana</div><div class="v">${fmt(tSem)}</div><div class="s">${nSem} venta(s) desde el lunes</div></div>
+    ${esAdmin()?`<div class="kpi"><div class="l">Utilidad de hoy</div><div class="v">${fmt(Math.round(uHoy*100)/100)}</div><div class="s">sin IVA · sin canceladas</div></div>`:''}`;
+  const ICO = {efectivo:'💵', tarjeta:'💳', transferencia:'🏦', ak_pago:'📱', credito:'📄'};
+  const dias = {};
+  rows.forEach(v=>{ const f=new Date(v.fecha); const k=f.getFullYear()+'-'+f.getMonth()+'-'+f.getDate(); (dias[k]=dias[k]||[]).push(v); });
+  const nomDia = (fecha)=>{ const d=new Date(fecha); d.setHours(0,0,0,0);
+    const diff=Math.round((hoy0-d)/86400000);
+    if(diff===0) return 'Hoy'; if(diff===1) return 'Ayer';
+    return d.toLocaleDateString('es-MX',{weekday:'long', day:'numeric', month:'short'}); };
+  const fila = (v)=>{
+    const hora = new Date(v.fecha).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'});
+    const u = utilPor[v.id];
+    return `<div style="display:flex;align-items:center;gap:12px;padding:10px 4px;border-bottom:1px solid var(--linea);flex-wrap:wrap;${v.cancelada?'opacity:.45':''}">
+      <div style="min-width:60px"><b>#${v.folio}</b><div class="small muted">${hora}</div></div>
+      <div style="flex:1;min-width:130px">${esc(v.clientes?.nombre||'Mostrador')}<div class="small muted">${esc(v.perfiles?.nombre||'')}</div></div>
+      <div style="min-width:110px"><span class="badge b-gris">${ICO[v.metodo_pago]||'💵'} ${esc(v.metodo_pago)}</span>
+        ${v.cancelada?' <span class="badge b-rojo">cancelada</span>':''}
+        ${!v.cancelada && v.cancel_solicitada?` <span class="badge b-ambar" title="${esc(v.cancel_motivo||'sin motivo')}">⚠️ canc. solicitada</span>`:''}</div>
+      <div style="text-align:right;min-width:110px"><b style="font-size:16px">${fmt(v.total)}</b>
+        ${esAdmin() && !v.cancelada && u!==undefined?`<div><span class="badge ${u>=0?'b-verde':'b-rojo'}" title="Utilidad de esta venta (sin IVA)">${fmt(u)}</span></div>`:''}</div>
+      <div style="white-space:nowrap">
+        <button class="btn sec sm" onclick="verVenta(${v.id})">Ver</button><button class="btn sec sm" title="Reimprimir ticket" onclick="reimprimirTicket(${v.id})">🖨</button>
         ${!v.cancelada ? (esAdmin()
           ? (v.cancel_solicitada
             ? `<button class="btn sm" onclick="cancelarVenta(${v.id})">✅ Aprobar</button><button class="btn sec sm" onclick="rechazarCanc(${v.id})">Rechazar</button>`
-            : `<button class="btn sec sm" onclick="cancelarVenta(${v.id})">Cancelar</button>`)
+            : `<button class="btn sec sm" title="Cancelar venta" onclick="cancelarVenta(${v.id})">✖</button>`)
           : (v.cancel_solicitada
             ? '<span class="small muted">esperando admin ⏳</span>'
-            : (puedeVender() ? `<button class="btn sec sm" onclick="cancelarVenta(${v.id})">Cancelar</button>` : ''))) : ''}</td>
-      </tr>`).join('') || `<tr><td colspan="${esAdmin()?8:7}" class="muted">Aún no hay ventas registradas.</td></tr>`}</tbody></table></div></div>`;
+            : (puedeVender() ? `<button class="btn sec sm" title="Cancelar venta" onclick="cancelarVenta(${v.id})">✖</button>` : ''))) : ''}
+      </div></div>`;
+  };
+  $('vt-lista').innerHTML = Object.keys(dias).map(k=>{
+    const vs = dias[k];
+    const tot = vs.filter(v=>!v.cancelada).reduce((s,v)=>s+ +v.total,0);
+    return `<div class="card" style="margin-bottom:14px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;border-bottom:2px solid var(--linea);padding-bottom:8px">
+        <h3 style="margin:0;text-transform:capitalize">${nomDia(vs[0].fecha)}</h3>
+        <span><span class="muted small">${vs.length} venta(s) · </span><b>${fmt(tot)}</b></span></div>
+      ${vs.map(fila).join('')}</div>`;
+  }).join('') || '<div class="card muted">No hay ventas con esos filtros. Las últimas 100 ventas aparecen aquí.</div>';
 }
 async function verVenta(id){
   const {data, error} = await sb.from('venta_items').select('*, productos(codigo,descripcion)').eq('venta_id', id);
