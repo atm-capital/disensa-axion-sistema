@@ -796,7 +796,7 @@ async function verVenta(id){
   const utilTot = data.reduce((s,i)=>s+ (+i.precio_unit/1.16 - +(i.costo_unit||0)) * +i.cantidad, 0);
   abrirModal(`<h3>Detalle de venta</h3>
     <div class="tbl-scroll"><table><thead><tr><th>Producto</th><th class="num">Cant</th><th class="num">Precio</th><th class="num">Importe</th>${esAdmin()?'<th class="num">Costo</th><th class="num">Utilidad</th>':''}</tr></thead>
-    <tbody>${data.map(i=>`<tr><td>${esc(i.productos?.codigo)} · ${esc(i.productos?.descripcion)}</td>
+    <tbody>${data.map(i=>`<tr style="cursor:pointer" title="Ver ficha del producto: historial, stock y foto" onclick="cerrarModal();fichaProducto(${i.producto_id})"><td style="color:var(--naranja,#E8790F)">${esc(i.productos?.codigo)} · ${esc(i.productos?.descripcion)}</td>
       <td class="num">${+i.cantidad}</td><td class="num">${fmt(i.precio_unit)}</td><td class="num">${fmt(i.importe)}</td>
       ${esAdmin()?`<td class="num small muted">${fmt(i.costo_unit||0)}</td><td class="num">${fmt((+i.precio_unit/1.16 - +(i.costo_unit||0)) * +i.cantidad)}</td>`:''}</tr>`).join('')}</tbody>
     ${esAdmin()?`<tfoot><tr><th colspan="5" class="num">Utilidad de la venta (sin IVA, antes de descuento)</th><th class="num">${fmt(Math.round(utilTot*100)/100)}</th></tr></tfoot>`:''}</table></div>
@@ -921,10 +921,14 @@ function solicitarResurtido(){
 function buscarProdSol(){
   const q = ($('sol-buscar').value||'').toLowerCase().trim();
   const res = q ? invData.filter(p=>p.codigo.toLowerCase().includes(q)||p.descripcion.toLowerCase().includes(q)).slice(0,8) : [];
+  const vc = window._invVendCnt||{};
   $('sol-res').innerHTML = res.map(p=>`
-    <div class="it" style="display:flex;justify-content:space-between;padding:7px;border-bottom:1px solid var(--linea);cursor:pointer" onclick="addProdSol(${p.id})">
-      <span><b>${esc(p.codigo)}</b> ${esc(p.descripcion.slice(0,42))}</span>
-      <span class="muted small">${+p.stock} en stock</span>
+    <div class="it" style="display:flex;justify-content:space-between;gap:8px;padding:7px;border-bottom:1px solid var(--linea);cursor:pointer" onclick="addProdSol(${p.id})">
+      <span><b>${esc(p.codigo)}</b> ${esc(p.descripcion.slice(0,38))}</span>
+      <span class="small" style="white-space:nowrap;text-align:right">
+        ${+p.stock<=0?'<span class="badge b-rojo">agotado</span>':`<b>${+p.stock}</b> en stock`}
+        ${vc[p.id]?` · <span style="color:var(--verde,#15803d)">🛒 ${vc[p.id]} vendidas</span>`:' · <span class="muted">sin ventas</span>'}
+      </span>
     </div>`).join('')
     + (q.length>=3 ? `<div class="it" style="padding:7px;cursor:pointer;color:var(--naranja,#E8790F);font-weight:600" onclick="buscarCatSol()">🔍 Buscar "${esc(q)}" en TODO el catálogo Indar (29 mil productos)</div>` : '')
     + (!res.length && q && q.length<3 ? '<div class="muted small" style="padding:6px">Escribe al menos 3 letras</div>' : '');
@@ -1993,7 +1997,9 @@ function pintarInv(){
   $('inv-pie').textContent = `Mostrando ${Math.min(rows.length,400)} de ${rows.length} filtrado(s) · ${invData.length} productos en total — las tarjetas de arriba se recalculan con los filtros`;
 }
 async function fichaProducto(id){
-  const p = invData.find(x=>x.id===id); if(!p) return;
+  let p = invData.find(x=>x.id===id);
+  if(!p){ const r = await sb.from('productos').select('*').eq('id', id).single(); p = r.data; }
+  if(!p) return;
   const [vi, ci] = await Promise.all([
     sb.from('venta_items').select('cantidad,precio_unit,costo_unit,ventas(folio,fecha,cancelada)').eq('producto_id', id).order('id',{ascending:false}).limit(100),
     sb.from('pedido_compra_items').select('cantidad_recibida,costo_unit,pedidos_compra(folio_externo,fecha)').eq('producto_id', id)
@@ -2026,7 +2032,9 @@ async function fichaProducto(id){
     ${movs.length?`<div class="tbl-scroll" style="max-height:280px;overflow-y:auto"><table><thead><tr><th>Fecha</th><th>Movimiento</th><th class="num">Cant</th><th>Detalle</th></tr></thead>
       <tbody>${movs.map(m=>`<tr><td class="small">${m.f?fechaHora(m.f):'—'}</td><td>${m.t}</td><td class="num"><b style="color:${m.c<0?'#b91c1c':'#15803d'}">${m.c>0?'+':''}${m.c}</b></td><td class="small muted">${m.extra}</td></tr>`).join('')}</tbody></table></div>`
       : '<p class="muted" style="margin:8px 0">Sin movimientos todavía — este producto no ha tenido ni ventas ni recepciones (como los que nunca llegaron de Indar).</p>'}
-    <div class="acciones">${esAdmin()?`<button class="btn sec" onclick="cerrarModal();editarProducto(${p.id})">✏️ Editar</button>`:''}<button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
+    <div class="acciones">
+      ${puedeVender()?`<button class="btn" onclick='cerrarModal(); window._solItems=(window._solItems||[]).filter(x=>x.producto_id!==${p.id}); window._solItems.push({producto_id:${p.id}, codigo:${JSON.stringify(p.codigo)}, desc:${JSON.stringify(p.descripcion.slice(0,45))}, cant:1}); solicitarResurtido();'>🛒 Pedir resurtido</button>`:''}
+      ${esAdmin()?`<button class="btn sec" onclick="cerrarModal();editarProducto(${p.id})">✏️ Editar</button>`:''}<button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
 }
 function editarProducto(id){
   const p = id ? invData.find(x=>x.id===id) : {codigo:'',descripcion:'',categoria:'General',costo:0,precio:0,stock:0,stock_min:3,activo:true,unidad:'pza',codigo_barras:''};
