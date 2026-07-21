@@ -2776,7 +2776,7 @@ async function aplicarFacturas(){
       if(d.pedidoId){
         const ped = fxPedidos.find(p=>p.id===d.pedidoId);
         folioPed = ped ? ped.folio : ''; pedTocados.add(d.pedidoId);
-        const {data:its} = await sb.from('pedido_compra_items').select('id,cantidad,cantidad_facturada,productos(codigo)').eq('pedido_id', d.pedidoId);
+        const {data:its} = await sb.from('pedido_compra_items').select('id,producto_id,cantidad,cantidad_facturada,productos(codigo)').eq('pedido_id', d.pedidoId);
         for(const c of d.items){
           const it = (its||[]).find(x=>x.productos?.codigo===c.cod);
           if(!it) continue;
@@ -2784,6 +2784,7 @@ async function aplicarFacturas(){
           try{ upd.cantidad_facturada = (+it.cantidad_facturada||0) + c.cant; }catch(e){}
           const {error:eU} = await sb.from('pedido_compra_items').update(upd).eq('id', it.id);
           if(eU){ delete upd.cantidad_facturada; await sb.from('pedido_compra_items').update(upd).eq('id', it.id); }
+          if(it.producto_id && c.pu > 0) await sb.from('productos').update({costo: c.pu}).eq('id', it.producto_id);
           partidas++;
         }
         // recalcular totales del pedido
