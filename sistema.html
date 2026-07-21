@@ -920,12 +920,37 @@ function solicitarResurtido(){
 }
 function buscarProdSol(){
   const q = ($('sol-buscar').value||'').toLowerCase().trim();
-  const res = q ? invData.filter(p=>p.codigo.toLowerCase().includes(q)||p.descripcion.toLowerCase().includes(q)).slice(0,10) : [];
+  const res = q ? invData.filter(p=>p.codigo.toLowerCase().includes(q)||p.descripcion.toLowerCase().includes(q)).slice(0,8) : [];
   $('sol-res').innerHTML = res.map(p=>`
     <div class="it" style="display:flex;justify-content:space-between;padding:7px;border-bottom:1px solid var(--linea);cursor:pointer" onclick="addProdSol(${p.id})">
       <span><b>${esc(p.codigo)}</b> ${esc(p.descripcion.slice(0,42))}</span>
       <span class="muted small">${+p.stock} en stock</span>
-    </div>`).join('') || (q?'<div class="muted small" style="padding:6px">Sin resultados</div>':'');
+    </div>`).join('')
+    + (q.length>=3 ? `<div class="it" style="padding:7px;cursor:pointer;color:var(--naranja,#E8790F);font-weight:600" onclick="buscarCatSol()">🔍 Buscar "${esc(q)}" en TODO el catálogo Indar (29 mil productos)</div>` : '')
+    + (!res.length && q && q.length<3 ? '<div class="muted small" style="padding:6px">Escribe al menos 3 letras</div>' : '');
+}
+async function buscarCatSol(){
+  const q = ($('sol-buscar').value||'').trim();
+  if(q.length<3) return;
+  $('sol-res').innerHTML = '<div class="muted small" style="padding:8px">Buscando en el catálogo Indar...</div>';
+  const [r1, r2] = await Promise.all([
+    sb.from('lista_indar').select('codigo,descripcion,marca').ilike('descripcion','%'+q+'%').limit(12),
+    sb.from('lista_indar').select('codigo,descripcion,marca').ilike('codigo','%'+q+'%').limit(6)
+  ]);
+  const vistos=new Set(); const res=[];
+  [...(r2.data||[]), ...(r1.data||[])].forEach(x=>{ if(!vistos.has(x.codigo)){ vistos.add(x.codigo); res.push(x); } });
+  window._catSol = res;
+  $('sol-res').innerHTML = res.slice(0,15).map((x,i)=>`
+    <div class="it" style="display:flex;justify-content:space-between;padding:7px;border-bottom:1px solid var(--linea);cursor:pointer" onclick="addProdSolCat(${i})">
+      <span><b>${esc(x.codigo)}</b> ${esc((x.descripcion||'').slice(0,42))}</span>
+      <span class="badge b-azul" title="No lo tenemos en inventario — sería producto nuevo">catálogo</span>
+    </div>`).join('') || '<div class="muted small" style="padding:6px">Nada en el catálogo Indar con ese texto</div>';
+}
+function addProdSolCat(i){
+  const x = (window._catSol||[])[i]; if(!x) return;
+  if(!window._solItems.find(y=>y.codigo===x.codigo))
+    window._solItems.push({producto_id:null, codigo:x.codigo, desc:(x.descripcion||'').slice(0,45)+' 🆕', cant:1});
+  $('sol-buscar').value=''; buscarProdSol(); pintarSolItems(); $('sol-buscar').focus();
 }
 function addProdSol(id){
   const p = invData.find(x=>x.id===id); if(!p) return;
