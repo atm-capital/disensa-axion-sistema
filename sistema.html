@@ -1164,14 +1164,25 @@ location.href='https://axiontools.mx/sistema.html'+String.fromCharCode(35)+'safd
 }
 function cuadreSafdiModal(){
   abrirModal(`<h3>⚖️ Cuadre de ventas con SAFDI</h3>
-    <ol style="margin:10px 0 10px 18px;line-height:1.9">
-      <li>Si es tu primera vez: arrastra este botón a tu barra de marcadores → <a href="${bookmarkletSafdi()}" class="btn sec sm" style="text-decoration:none" onclick="return false">⚖️ SAFDI → Axion</a></li>
-      <li>Abre SAFDI → Ventas → <b>Ticket de venta</b>, elige las fechas y dale <b>Consultar</b>.</li>
-      <li>Pica el marcador <b>⚖️ SAFDI → Axion</b>: junta los tickets y te regresa aquí con la comparación.</li>
+    <p class="small" style="background:#fff7ed;border:1px solid #fdba74;border-radius:8px;padding:8px 10px">El botón se instala <b>una sola vez</b> como marcador y se usa <b>estando dentro de SAFDI</b> (aquí en el sistema no hace nada).</p>
+    <p style="margin:10px 0 4px"><b>Instalarlo (elige la forma que te acomode):</b></p>
+    <ul style="margin:0 0 10px 18px;line-height:1.9">
+      <li><b>Arrastrar:</b> jala este botón a tu barra de marcadores → <a href="${bookmarkletSafdi()}" class="btn sec sm" style="text-decoration:none" onclick="return false">⚖️ SAFDI → Axion</a><br>
+        <span class="small muted">(Si no ves la barra: Ctrl+Shift+B. Arrástralo lento, desde el texto del botón.)</span></li>
+      <li><b>O copiar y pegar:</b> <button class="btn sec sm" onclick="copiarBkSafdi()">📋 Copiar código</button> → clic derecho en tu barra de marcadores → <b>Agregar página...</b> → Nombre: <i>SAFDI → Axion</i> → en URL pega lo copiado → Guardar.</li>
+    </ul>
+    <p style="margin:10px 0 4px"><b>Usarlo (cada vez que quieran cuadrar):</b></p>
+    <ol style="margin:0 0 10px 18px;line-height:1.9">
+      <li>En SAFDI: Ventas → <b>Ticket de venta</b> → fechas → <b>Consultar</b>.</li>
+      <li>Pica el marcador <b>⚖️ SAFDI → Axion</b> — junta los tickets y te regresa aquí con la comparación.</li>
     </ol>
-    <p class="small muted">Los tickets que falten en Axion los registras con un clic (baja el stock y queda la nota del folio SAFDI). Los que falten en SAFDI te los marca para capturarlos allá.</p>
     <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button>
     <button class="btn" onclick="window.open('https://safdi.disensa.com/FVentas/Factura','_blank')">Abrir SAFDI</button></div>`);
+}
+function copiarBkSafdi(){
+  navigator.clipboard.writeText(bookmarkletSafdi())
+    .then(()=>toast('Código copiado 📋 Ahora: clic derecho en la barra de marcadores → Agregar página → pégalo en URL'))
+    .catch(()=>toast('No pude copiar — usa la opción de arrastrar', true));
 }
 async function procesarCuadreSafdi(){
   try{
