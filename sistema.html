@@ -2090,6 +2090,7 @@ async function verResurtido(){
     const bajoMin = stockTot <= +p.stock_min;
     const porRitmo = porDia>0 && cobertura!==null && cobertura <= ALERTA_DIAS;
     if(!bajoMin && !porRitmo) continue;
+    if(vend===0 && viene>0) continue; // producto nuevo sin historial y ya viene en camino: no molestar
     const sugMin = Math.max(1, Math.ceil(+p.stock_min*3 - stockTot));
     const sugRitmo = porDia>0 ? Math.max(0, Math.ceil(porDia*OBJETIVO_DIAS - stockTot)) : 0;
     const sugerido = Math.max(sugMin, sugRitmo);
