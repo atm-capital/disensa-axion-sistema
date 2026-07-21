@@ -2021,7 +2021,8 @@ async function fichaProducto(id){
       <div>
         <h3 style="margin:0 0 4px;line-height:1.3">${esc(p.descripcion)}</h3>
         <p class="small muted" style="margin:0"><b>${esc(p.codigo)}</b> · ${esc(p.categoria)} · por ${esc(p.unidad||'pza')}${p.codigo_barras?` · CB ${esc(p.codigo_barras)}`:''}${p.activo?'':' · <span class="badge b-gris">inactivo</span>'}</p>
-        <p style="margin:8px 0 0">Stock: <b>${+p.stock}</b> ${esc(p.unidad||'pza')} · Precio: <b>${fmt(p.precio)}</b>${esAdmin()?` · <span class="small muted">costo ${fmt(p.costo)}</span>`:''}</p>
+        <p style="margin:8px 0 0">Stock: <b>${+p.stock}</b> ${esc(p.unidad||'pza')} · Precio: <b>${fmt(p.precio)}</b> <span class="small muted">= ${fmt(Math.round(+p.precio/1.16*100)/100)} + ${fmt(Math.round((+p.precio - +p.precio/1.16)*100)/100)} de IVA</span></p>
+        ${puedeVender()?`<p class="small" style="margin:4px 0 0">${esAdmin()?`Costo: <b>${fmt(p.costo)}</b> (sin IVA) → utilidad por pieza: <b style="color:var(--verde,#15803d)">${fmt(Math.round((+p.precio/1.16 - +p.costo)*100)/100)}</b> <span class="muted">(la parte del IVA se entrega al SAT, no es ganancia)</span>`:''}</p>`:''}
       </div>
     </div>
     <div class="kpis" style="margin:12px 0">
