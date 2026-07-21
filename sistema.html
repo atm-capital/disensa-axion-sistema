@@ -856,6 +856,7 @@ async function nuevaVenta(){
   $('nv-buscar').focus();
 }
 function nbarra(s){ return String(s||'').trim().replace(/^0+/,''); }
+function redondearPrecio(p){ p = +p||0; return p>0 ? Math.ceil(p - 0.001) : 0; }
 function escanear(inp){
   const v = (inp.value||'').trim();
   if(!v) return;
@@ -902,6 +903,94 @@ async function asignarCB(pid){
   else if(data==='tiene_codigo') toast('Ese producto ya tiene código — un admin puede cambiarlo en Editar', true);
   else if(data==='sin_permiso') toast('Tu usuario no puede registrar códigos', true);
   else toast('Código inválido', true);
+}
+/* ===== SOLICITUDES DE RESURTIDO (vendedores) ===== */
+function solicitarResurtido(){
+  window._solItems = window._solItems || [];
+  abrirModal(`<h3>🛒 Solicitud de resurtido</h3>
+    <p class="small muted">Busca los productos que ves que faltan, ponles cantidad, y mándala — los admins la ven y hacen el pedido.</p>
+    <div class="field"><input id="sol-buscar" placeholder="busca: cinta, brocha, cemento..." oninput="buscarProdSol()"></div>
+    <div id="sol-res" style="max-height:170px;overflow-y:auto"></div>
+    <table class="carrito" style="margin:8px 0"><tbody id="sol-lista"></tbody></table>
+    <div class="field"><label>Nota (opcional)</label><input id="sol-nota" placeholder="ej. clientes lo han pedido mucho, se acaba rápido..."></div>
+    <div class="acciones"><button class="btn sec" onclick="window._solItems=[];cerrarModal()">Cancelar</button>
+    <button class="btn" onclick="enviarSolicitudRes()">📨 Enviar solicitud</button></div>`, true);
+  pintarSolItems();
+  setTimeout(()=>$('sol-buscar')?.focus(),150);
+}
+function buscarProdSol(){
+  const q = ($('sol-buscar').value||'').toLowerCase().trim();
+  const res = q ? invData.filter(p=>p.codigo.toLowerCase().includes(q)||p.descripcion.toLowerCase().includes(q)).slice(0,10) : [];
+  $('sol-res').innerHTML = res.map(p=>`
+    <div class="it" style="display:flex;justify-content:space-between;padding:7px;border-bottom:1px solid var(--linea);cursor:pointer" onclick="addProdSol(${p.id})">
+      <span><b>${esc(p.codigo)}</b> ${esc(p.descripcion.slice(0,42))}</span>
+      <span class="muted small">${+p.stock} en stock</span>
+    </div>`).join('') || (q?'<div class="muted small" style="padding:6px">Sin resultados</div>':'');
+}
+function addProdSol(id){
+  const p = invData.find(x=>x.id===id); if(!p) return;
+  if(!window._solItems.find(x=>x.producto_id===id))
+    window._solItems.push({producto_id:id, codigo:p.codigo, desc:p.descripcion.slice(0,45), cant:1});
+  $('sol-buscar').value=''; buscarProdSol(); pintarSolItems(); $('sol-buscar').focus();
+}
+function pintarSolItems(){
+  $('sol-lista').innerHTML = (window._solItems||[]).map((x,i)=>`
+    <tr><td style="max-width:200px"><b>${esc(x.codigo)}</b><br><span class="small muted">${esc(x.desc)}</span></td>
+    <td><input value="${x.cant}" style="width:60px" onchange="window._solItems[${i}].cant=Math.max(1,+this.value||1)"></td>
+    <td><span class="x" onclick="window._solItems.splice(${i},1);pintarSolItems()">✕</span></td></tr>`).join('')
+    || '<tr><td class="muted small" style="padding:10px 4px">Aún no agregas productos.</td></tr>';
+}
+async function enviarSolicitudRes(){
+  const items = window._solItems||[];
+  if(!items.length){ toast('Agrega al menos un producto', true); return; }
+  const {error} = await sb.from('resurtido_solicitudes').insert({
+    nombre: (typeof perfil!=='undefined'&&perfil?perfil.nombre:''),
+    nota: ($('sol-nota').value||'').trim(),
+    items: items.map(x=>({producto_id:x.producto_id, codigo:x.codigo, desc:x.desc, cant:+x.cant}))
+  });
+  if(error){ toast(errMsg(error), true); return; }
+  window._solItems=[];
+  toast('Solicitud enviada 📨 Los admins la verán en Inventario');
+  logEv('inventario','solicitud de resurtido con '+items.length+' producto(s)');
+  cerrarModal();
+}
+async function verSolicitudesRes(){
+  const {data, error} = await sb.from('resurtido_solicitudes').select('*').order('creado',{ascending:false}).limit(30);
+  if(error){ toast(errMsg(error), true); return; }
+  const pend = (data||[]).filter(s=>s.estado==='pendiente');
+  const otras = (data||[]).filter(s=>s.estado!=='pendiente');
+  const card = s => `<div class="card" style="margin-bottom:10px;${s.estado!=='pendiente'?'opacity:.6':''}">
+    <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px">
+      <b>${esc(s.nombre||'—')}</b>
+      <span class="small muted">${fechaHora(s.creado)} · ${s.estado==='pendiente'?'<span class="badge b-ambar">pendiente</span>':'<span class="badge b-verde">atendida</span>'}</span></div>
+    ${s.nota?`<p class="small" style="margin:4px 0">📝 ${esc(s.nota)}</p>`:''}
+    <table style="margin:6px 0">${(s.items||[]).map(i=>`<tr><td><b>${esc(i.codigo)}</b></td><td>${esc(i.desc)}</td><td class="num"><b>${i.cant}</b> pza</td></tr>`).join('')}</table>
+    ${s.estado==='pendiente'?`<div class="acciones" style="margin-top:4px">
+      <button class="btn sec sm" onclick="excelSolicitudRes(${s.id})">📥 Excel Indar</button>
+      <button class="btn sm" onclick="atenderSolicitudRes(${s.id})">✅ Atendida</button></div>`:''}
+  </div>`;
+  abrirModal(`<h3>📥 Solicitudes de resurtido</h3>
+    ${pend.length?pend.map(card).join(''):'<p class="muted">No hay solicitudes pendientes.</p>'}
+    ${otras.length?`<details style="margin-top:8px"><summary class="small muted">Ver atendidas (${otras.length})</summary>${otras.map(card).join('')}</details>`:''}
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
+  window._solData = data||[];
+}
+async function atenderSolicitudRes(id){
+  const {error} = await sb.from('resurtido_solicitudes').update({estado:'atendida'}).eq('id',id);
+  if(error){ toast(errMsg(error), true); return; }
+  toast('Marcada como atendida ✓'); verSolicitudesRes();
+  const b=$('btn-sol-res'); if(b) sb.from('resurtido_solicitudes').select('id',{count:'exact',head:true}).eq('estado','pendiente').then(({count})=>{ b.innerHTML = count?'📥 Solicitudes <span class="badge b-ambar">'+count+'</span>':'📥 Solicitudes'; });
+}
+async function excelSolicitudRes(id){
+  const s = (window._solData||[]).find(x=>x.id===id); if(!s) return;
+  if(!window.XLSX){
+    try{ await new Promise((res,rej)=>{ const sc=document.createElement('scr'+'ipt'); sc.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'; sc.onload=res; sc.onerror=rej; document.head.appendChild(sc); }); }
+    catch(e){ toast('No pude cargar el exportador', true); return; }
+  }
+  const ws = XLSX.utils.json_to_sheet((s.items||[]).map(i=>({ Codigos:i.codigo, Cantidad:+i.cant })), { header:['Codigos','Cantidad'] });
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Hoja1');
+  XLSX.writeFile(wb, 'Solicitud_Resurtido_'+id+'.xlsx');
+  toast('Excel listo 📥 Súbelo en Indar → Pedidos → Carrito');
 }
 /* ===== CUADRE DE STOCK VS SAFDI (Excel) ===== */
 function compararStockSafdi(){
@@ -1777,11 +1866,17 @@ function cotizarSeleccion(){
 ============================================================ */
 let invData = [];
 async function vInventario(){
-  if(esAdmin()) $('vtools').innerHTML = `<button class="btn" onclick="editarProducto(null)">+ Producto</button>
+  if(esAdmin()){
+    $('vtools').innerHTML = `<button class="btn" onclick="editarProducto(null)">+ Producto</button>
     <button class="btn sec" onclick="verResurtido()">🛒 Resurtido</button>
+    <button class="btn sec" id="btn-sol-res" onclick="verSolicitudesRes()">📥 Solicitudes</button>
     <button class="btn sec" onclick="etiquetasPrecios()">🏷️ Precios tienda</button>
     <button class="btn sec" onclick="compararStockSafdi()">⚖️ Stock SAFDI</button>
     <button class="btn sec" onclick="exportarInv()">Exportar CSV</button>`;
+    sb.from('resurtido_solicitudes').select('id',{count:'exact',head:true}).eq('estado','pendiente')
+      .then(({count})=>{ const b=$('btn-sol-res'); if(b && count) b.innerHTML='📥 Solicitudes <span class="badge b-ambar">'+count+'</span>'; });
+  }
+  else if(puedeVender()) $('vtools').innerHTML = `<button class="btn" onclick="solicitarResurtido()">🛒 Pedir resurtido</button>`;
   const [{data, error}, mv, mr] = await Promise.all([
     sb.from('productos').select('*').order('descripcion'),
     sb.from('venta_items').select('producto_id,cantidad,ventas!inner(cancelada)').eq('ventas.cancelada', false).range(0,9999),
@@ -1977,7 +2072,7 @@ async function exportarPedidoIndar(){
 async function guardarProducto(id){
   const obj = {
     descripcion: $('pr-desc').value.trim(), categoria: $('pr-cat').value.trim() || 'General',
-    costo: +$('pr-costo').value||0, precio: +$('pr-precio').value||0,
+    costo: +$('pr-costo').value||0, precio: redondearPrecio($('pr-precio').value),
     stock: +$('pr-stock').value||0, stock_min: +$('pr-min').value||0,
     unidad: ($('pr-unidad').value.trim()||'pza'),
     codigo_barras: $('pr-barras').value.trim(),
@@ -3025,7 +3120,7 @@ async function subirListaPrecios(){
         const r = mapa.get(p.codigo);
         if(r && r.precio_lista > 0){
           const costo = Math.round(r.precio_lista * (1 - (r.promo_pct||0)) * 100)/100;
-          await sb.from('productos').update({costo, precio: r.precio_sugerido || undefined}).eq('id', p.id);
+          await sb.from('productos').update({costo, precio: r.precio_sugerido ? redondearPrecio(r.precio_sugerido) : undefined}).eq('id', p.id);
           actualizados++;
         }
       }
@@ -3072,7 +3167,7 @@ async function ejecutarImport(){
     const nuevos = codigos.filter(c=>!mapa.has(c)).map(c=>{
       const i = impData.items.find(x=>x.c===c);
       return { codigo:c, descripcion:i.d||c, categoria:'General',
-        costo:i.l||0, precio:i.s||i.l||0, stock:0, stock_min:3 };
+        costo:i.l||0, precio:redondearPrecio(i.s||i.l||0), stock:0, stock_min:3 };
     });
     if(nuevos.length){
       const {error} = await sb.from('productos').insert(nuevos);
@@ -3084,7 +3179,7 @@ async function ejecutarImport(){
     if($('imp-precios').checked){
       for(const c of codigos){
         const i = impData.items.find(x=>x.c===c);
-        if(mapa.has(c) && i.s) await sb.from('productos').update({precio:i.s, costo:i.l||undefined}).eq('id', mapa.get(c));
+        if(mapa.has(c) && i.s) await sb.from('productos').update({precio:redondearPrecio(i.s), costo:i.l||undefined}).eq('id', mapa.get(c));
       }
     }
     // 3. pedido + partidas
