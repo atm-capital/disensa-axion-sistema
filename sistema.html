@@ -937,12 +937,9 @@ async function buscarCatSol(){
   const q = ($('sol-buscar').value||'').trim();
   if(q.length<3) return;
   $('sol-res').innerHTML = '<div class="muted small" style="padding:8px">Buscando en el catálogo Indar...</div>';
-  const [r1, r2] = await Promise.all([
-    sb.from('lista_indar').select('codigo,descripcion,marca').ilike('descripcion','%'+q+'%').limit(12),
-    sb.from('lista_indar').select('codigo,descripcion,marca').ilike('codigo','%'+q+'%').limit(6)
-  ]);
-  const vistos=new Set(); const res=[];
-  [...(r2.data||[]), ...(r1.data||[])].forEach(x=>{ if(!vistos.has(x.codigo)){ vistos.add(x.codigo); res.push(x); } });
+  const r1 = await sb.rpc('buscar_catalogo_indar', { q });
+  if(r1.error){ $('sol-res').innerHTML = '<div class="small" style="padding:8px;color:#dc2626">No pude buscar en el catálogo: '+esc(r1.error.message)+'</div>'; return; }
+  const res = r1.data||[];
   window._catSol = res;
   $('sol-res').innerHTML = res.slice(0,15).map((x,i)=>`
     <div class="it" style="display:flex;justify-content:space-between;padding:7px;border-bottom:1px solid var(--linea);cursor:pointer" onclick="addProdSolCat(${i})">
@@ -1673,7 +1670,7 @@ function agregarCot(p){
 function agregarLibreCot(){
   const d = prompt('Descripción de la partida:'); if(!d) return;
   const pr = +(prompt('Precio unitario (con IVA):')||0);
-  const co = +(prompt('Tu costo sin IVA (opcional, para ver tu margen — NO se imprime):')||0);
+  const co = esAdmin() ? +(prompt('Tu costo sin IVA (opcional, para ver tu margen — NO se imprime):')||0) : 0;
   cotCarrito.push({codigo:'', desc:d, cantidad:1, precio:pr, costo:co, sugerido:pr, producto_id:null});
   pintarCot();
 }
@@ -1698,14 +1695,14 @@ function pintarCot(){
       <select onchange="cotPreset(${i},this.value);this.value=''" style="width:64px;padding:4px;border:1px solid var(--linea);border-radius:6px;font-size:11px">
         <option value="">precio…</option><option value="pub">Público</option><option value="m25">May +25%</option><option value="m20">May +20%</option><option value="m15">May +15%</option><option value="m10">May +10%</option></select>
       ${pz?`<br><span class="small" style="color:var(--azul)">≈ ${fmt(c.precio/pz)} por pieza (${pz} pzas)</span>`:''}</td>
-    <td class="num">${fmt(c.cantidad*c.precio)}<br>
-      <span class="small" style="color:${col}">${costoD>0?`lista ${fmt(c.costo)} · Disensa ${fmt(costoD)} · marg ${pct.toFixed(0)}%`:'sin costo'}</span></td>
+    <td class="num">${fmt(c.cantidad*c.precio)}${esAdmin()?`<br>
+      <span class="small" style="color:${col}">${costoD>0?`lista ${fmt(c.costo)} · Disensa ${fmt(costoD)} · marg ${pct.toFixed(0)}%`:'sin costo'}</span>`:''}</td>
     <td><span class="x" onclick="cotCarrito.splice(${i},1);pintarCot()">✕</span></td></tr>`;
   }).join('') || '<tr><td class="muted" style="padding:12px 6px">Busca productos y da clic para agregarlos.</td></tr>';
   const tot = cotCarrito.reduce((s,c)=>s+c.cantidad*c.precio,0);
   const cost = cotCarrito.reduce((s,c)=>s+c.cantidad*(c.costo||0)*(1-DESC_DISENSA),0);
   const mg = cost>0 ? ((tot/1.16-cost)/cost*100) : null;
-  $('ct-total').innerHTML = fmt(tot) + (mg!==null?` <span class="small" style="color:var(--gris)">· margen total ${mg.toFixed(1)}% con desc. Disensa 5% (no se imprime)</span>`:'');
+  $('ct-total').innerHTML = fmt(tot) + (esAdmin() && mg!==null?` <span class="small" style="color:var(--gris)">· margen total ${mg.toFixed(1)}% con desc. Disensa 5% (no se imprime)</span>`:'');
 }
 async function guardarCot(){
   if(!cotCarrito.length){ toast('Agrega al menos una partida', true); return; }
