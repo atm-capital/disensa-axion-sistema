@@ -2067,16 +2067,42 @@ function calcMargen(){
     — ganas ${fmt(marg)} por pieza (precio sin IVA ${fmt(neto)} − costo ${fmt(c)})`;
 }
 async function verResurtido(){
-  const bajos = invData.filter(p=>p.activo && +p.stock <= +p.stock_min);
-  if(!bajos.length){ toast('Ningún producto está en o bajo su stock mínimo 🎉'); return; }
-  const filas = bajos.map(p=>({...p, sugerido: Math.max(1, Math.ceil(+p.stock_min*3 - +p.stock))}));
+  // ritmo de venta: últimos 30 días (sin canceladas)
+  const desde = new Date(Date.now() - 30*864e5).toISOString();
+  const vi = await sb.from('venta_items').select('producto_id,cantidad,ventas!inner(fecha,cancelada)')
+    .gte('ventas.fecha', desde).eq('ventas.cancelada', false).range(0,9999);
+  const v30 = {};
+  (vi.data||[]).forEach(x=>{ v30[x.producto_id] = (v30[x.producto_id]||0) + (+x.cantidad||0); });
+  const OBJETIVO_DIAS = 28, ALERTA_DIAS = 14; // cubrir 4 semanas; avisar si no alcanza para 2
+  const filas = [];
+  for(const p of invData){
+    if(!p.activo) continue;
+    const vend = v30[p.id]||0;
+    const porDia = vend/30;
+    const cobertura = porDia>0 ? Math.round(+p.stock/porDia) : null; // días que alcanza
+    const bajoMin = +p.stock <= +p.stock_min;
+    const porRitmo = porDia>0 && cobertura!==null && cobertura <= ALERTA_DIAS;
+    if(!bajoMin && !porRitmo) continue;
+    const sugMin = Math.max(1, Math.ceil(+p.stock_min*3 - +p.stock));
+    const sugRitmo = porDia>0 ? Math.max(0, Math.ceil(porDia*OBJETIVO_DIAS - +p.stock)) : 0;
+    filas.push({...p, vend, porSem: Math.round(porDia*7*10)/10, cobertura,
+      motivo: porRitmo ? (bajoMin?'ambos':'ritmo') : 'minimo',
+      sugerido: Math.max(sugMin, sugRitmo)});
+  }
+  if(!filas.length){ toast('Nada que resurtir: stock sano y la demanda cubierta 🎉'); return; }
+  filas.sort((a,b)=>(a.cobertura??999)-(b.cobertura??999));
   const costoTot = filas.reduce((s,p)=>s+p.sugerido * +p.costo,0);
+  const B = {ritmo:'<span class="badge b-rojo">se acaba pronto</span>', ambos:'<span class="badge b-rojo">urgente</span>', minimo:'<span class="badge b-ambar">bajo mínimo</span>'};
   abrirModal(`<h3>🛒 Resurtido sugerido · ${filas.length} producto(s)</h3>
-    <p class="small muted" style="margin-bottom:8px">Cantidad sugerida = 3 veces el stock mínimo menos lo que queda. Ajusta el stock mínimo de cada producto para afinar. Costo estimado del resurtido: <b>${fmt(costoTot)}</b> + IVA.</p>
+    <p class="small muted" style="margin-bottom:8px">Calculado con el <b>ritmo real de venta de los últimos 30 días</b>: se sugiere lo necesario para cubrir ~4 semanas, y se alerta lo que no alcanza ni para 2. También incluye lo que está bajo su stock mínimo. Costo estimado: <b>${fmt(costoTot)}</b> + IVA.</p>
     <div class="tbl-scroll" style="max-height:380px;overflow-y:auto"><table>
-      <thead><tr><th>Código</th><th>Descripción</th><th class="num">Stock</th><th class="num">Mín</th><th class="num">Pedir</th><th class="num">Costo est.</th></tr></thead>
-      <tbody>${filas.map(p=>`<tr><td><b>${esc(p.codigo)}</b></td><td>${esc(p.descripcion.slice(0,45))}</td>
-        <td class="num">${+p.stock}</td><td class="num">${+p.stock_min}</td>
+      <thead><tr><th>Código</th><th>Descripción</th><th class="num">Stock</th><th class="num">🛒/sem</th><th class="num">Alcanza</th><th>Motivo</th><th class="num">Pedir</th><th class="num">Costo est.</th></tr></thead>
+      <tbody>${filas.map(p=>`<tr style="cursor:pointer" onclick="cerrarModal();fichaProducto(${p.id})" title="Ver ficha">
+        <td><b>${esc(p.codigo)}</b></td><td>${esc(p.descripcion.slice(0,40))}</td>
+        <td class="num">${+p.stock}</td>
+        <td class="num">${p.porSem>0?p.porSem:'<span class="muted">—</span>'}</td>
+        <td class="num">${p.cobertura!==null?(p.cobertura<=3?`<b style="color:#b91c1c">${p.cobertura} día(s)</b>`:p.cobertura+' días'):'<span class="muted">—</span>'}</td>
+        <td>${B[p.motivo]}</td>
         <td class="num"><b>${p.sugerido}</b></td><td class="num">${fmt(p.sugerido * +p.costo)}</td></tr>`).join('')}</tbody></table></div>
     <div class="acciones">
       <button class="btn" onclick="exportarPedidoIndar()">📥 Excel para Indar (plantilla)</button>
