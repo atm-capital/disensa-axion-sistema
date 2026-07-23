@@ -463,7 +463,7 @@ async function traerFacturasIndar(){
   const ya = (fr.data||[]).map(function(x){ return String(x.folio); });
   const h = btoa(unescape(encodeURIComponent(JSON.stringify({v:1, pedidos:folios, ya:ya})))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
   logEv('vista','traer facturas Indar: '+folios.length+' pedidos');
-  window.open('https://indar.mx/pedidosAnteriores#axfx='+h, '_blank');
+  window.open('https://indar.mx/MiCuenta#axfx='+h, '_blank');
   abrirModal('<h3>🧾 Traer facturas de Indar</h3><p>Se abrió Indar en otra pestaña.</p><ol style="margin:10px 0 10px 18px;line-height:1.9"><li>Si te pide sesión, iníciala.</li><li>Dale clic a tu botón <b>🔧 Enviar a Axion</b>.</li><li>El botón busca facturas nuevas, trae sus XML y PDF, y regresa aquí solito — nomás confirmas con <b>Aplicar y archivar</b>.</li></ol><div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>');
 }
 async function procesarFacturasIndar(){
@@ -2573,24 +2573,28 @@ async function axBM(){
       var MF=function(t){var e=document.getElementById('axmsg');if(!e){e=document.createElement('div');e.id='axmsg';e.style.cssText='position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:99999;background:#26292b;color:#fff;padding:12px 22px;border-radius:10px;font:14px sans-serif;border-left:5px solid #E8790F';document.body.appendChild(e);}e.textContent='Axion: '+t;};
       var qf=JSON.parse(decodeURIComponent(escape(atob(location.hash.slice(6).replace(/-/g,'+').replace(/_/g,'/')))));
       var yaF={};(qf.ya||[]).forEach(function(x){yaF[String(x)]=1;});
-      var vistosF={},outF=[],pedsF=qf.pedidos||[];
+      var soloPeds={};(qf.pedidos||[]).forEach(function(x){soloPeds[String(x)]=1;});
       var getU=async function(nf,tp){var rr=await fetch('/pedidosAnteriores/descargarDocumento',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','X-CSRF-TOKEN':T,'X-Requested-With':'XMLHttpRequest'},body:'numFactura='+nf+'&type='+tp});var tt=(await rr.text()).trim().replace(/^"|"$/g,'');return /^https?:/.test(tt)?tt:'';};
-      for(var f1=0;f1<pedsF.length;f1++){
-        MF('buscando facturas del pedido '+pedsF[f1]+' ('+(f1+1)+'/'+pedsF.length+')...');
-        try{
-          if(typeof showCotizacionModal==='function'){showCotizacionModal(+pedsF[f1]);await new Promise(function(r){setTimeout(r,1300);});}
-          var cajasF=[].slice.call(document.querySelectorAll('[onclick*=openDetail]'));
-          for(var f2=0;f2<cajasF.length;f2++){
-            var mF=(cajasF[f2].getAttribute('onclick')||'').match(/openDetail\('?(\d+)'?\s*,\s*'?(\d+)'?/);
-            if(!mF)continue;
-            var soF=mF[1],nfF=mF[2];
-            if(!nfF||yaF[nfF]||vistosF[nfF])continue;
-            vistosF[nfF]=1;
-            MF('pidiendo ligas de la factura '+nfF+'...');
-            var xU=await getU(nfF,'xml');var pU=await getU(nfF,'pdf');
-            if(xU||pU)outF.push({f:nfF,so:soF,x:xU,p:pU});
-          }
-        }catch(e8){}
+      MF('consultando tus pedidos y facturas...');
+      var cidEl=document.getElementById('codCustomer');
+      var cid=cidEl?cidEl.innerText.trim():'';
+      var rowsF=[];
+      try{
+        var ro=await fetch('/pedidosAnteriores/getOrdersCompanyId',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','X-CSRF-TOKEN':T,'X-Requested-With':'XMLHttpRequest'},body:'companyId='+encodeURIComponent(cid)});
+        rowsF=await ro.json();
+      }catch(e7){rowsF=[];}
+      if(!Array.isArray(rowsF))rowsF=[];
+      if(!rowsF.length){alert('No pude leer tus pedidos. Abre esta liga desde indar.mx/MiCuenta con tu sesion iniciada y reintenta.');return;}
+      var vistosF={},outF=[];
+      for(var f1=0;f1<rowsF.length;f1++){
+        var rwF=rowsF[f1];
+        var nfF=String(rwF.numFactura==null?'':rwF.numFactura).trim();
+        if(!nfF||nfF==='null'||nfF==='0'||yaF[nfF]||vistosF[nfF])continue;
+        if(Object.keys(soloPeds).length && !soloPeds[String(rwF.cotizacion)])continue;
+        vistosF[nfF]=1;
+        MF('pidiendo ligas de la factura '+nfF+'...');
+        var xU=await getU(nfF,'xml');var pU=await getU(nfF,'pdf');
+        if(xU||pU)outF.push({f:nfF,so:String(rwF.numPedido||''),x:xU,p:pU});
       }
       if(!outF.length){MF('no hay facturas nuevas que traer');setTimeout(function(){var eZ=document.getElementById('axmsg');if(eZ)eZ.remove();},4000);return;}
       MF(outF.length+' factura(s) nuevas, regresando a Axion...');
