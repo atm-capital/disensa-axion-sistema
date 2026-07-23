@@ -283,20 +283,21 @@ async function logout(){ await sb.auth.signOut(); location.reload(); }
 
 /* ================= NAVEGACIÓN ================= */
 const VISTAS = [
-  {id:'resumen',    icono:'📊', titulo:'Resumen',    roles:['admin','vendedor','consulta']},
-  {id:'ventas',     icono:'🧾', titulo:'Ventas',     roles:['admin','vendedor','consulta']},
+  {id:'resumen',    icono:'📊', titulo:'Resumen',    roles:['admin','vendedor','consulta','contador']},
+  {id:'ventas',     icono:'🧾', titulo:'Ventas',     roles:['admin','vendedor','consulta','contador']},
   {id:'cotizaciones', icono:'📋', titulo:'Cotizaciones', roles:['admin','vendedor','consulta']},
   {id:'catalogo',   icono:'🗂', titulo:'Catálogo',   roles:['admin','vendedor','consulta']},
-  {id:'inventario', icono:'📦', titulo:'Inventario', roles:['admin','vendedor','consulta']},
+  {id:'inventario', icono:'📦', titulo:'Inventario', roles:['admin','vendedor','consulta','contador']},
   {id:'clientes',   icono:'👥', titulo:'Clientes',   roles:['admin','vendedor','consulta']},
-  {id:'pedidos',    icono:'🚚', titulo:'Pedidos a proveedor', roles:['admin','vendedor','consulta']},
-  {id:'finanzas',   icono:'💰', titulo:'Finanzas',   roles:['admin','consulta']},
+  {id:'pedidos',    icono:'🚚', titulo:'Pedidos a proveedor', roles:['admin','vendedor','consulta','contador']},
+  {id:'finanzas',   icono:'💰', titulo:'Finanzas',   roles:['admin','consulta','contador']},
   {id:'importar',   icono:'📥', titulo:'Importar',   roles:['admin']},
   {id:'usuarios',   icono:'🔑', titulo:'Usuarios',   roles:['admin']},
   {id:'actividad',  icono:'📈', titulo:'Actividad',  roles:['admin'], solo:'andres@aptelecom.mx'},
 ];
 const esAdmin = () => perfil.rol === 'admin';
 const puedeVender = () => ['admin','vendedor'].includes(perfil.rol);
+const esFinanzas = () => ['admin','contador'].includes(perfil.rol); // ve costos/utilidad pero NO edita ni vende
 function montarNav(){
   $('nav').innerHTML = VISTAS.filter(v=>v.roles.includes(perfil.rol) && (!v.solo || v.solo===(perfil.correo||'')))
     .map(v=>`<a id="nav-${v.id}" onclick="irA('${v.id}')"><span>${v.icono}</span>${v.titulo}</a>`).join('');
@@ -632,7 +633,7 @@ async function vResumen(){
     sb.from('productos').select('costo,precio,stock,stock_min,activo').eq('activo', true),
     sb.from('cuentas_pagar').select('*, proveedores(nombre)').neq('estado','pagada').order('fecha_vencimiento'),
     sb.from('pedidos_compra').select('folio_externo,fecha,estado,total,proveedores(nombre)').in('estado',['borrador','enviado','parcial']).order('fecha',{ascending:false}),
-    esAdmin() ? sb.from('venta_items').select('cantidad,precio_unit,costo_unit,ventas!inner(fecha,cancelada)').gte('ventas.fecha', mes.toISOString()).eq('ventas.cancelada', false) : Promise.resolve({data:null, error:null}),
+    esFinanzas() ? sb.from('venta_items').select('cantidad,precio_unit,costo_unit,ventas!inner(fecha,cancelada)').gte('ventas.fecha', mes.toISOString()).eq('ventas.cancelada', false) : Promise.resolve({data:null, error:null}),
   ]);
   for(const r of [ventasMes,prods,cxp,pedCurso]) if(r.error) throw r.error;
   let utilMes = null, margenPct = 0;
@@ -708,7 +709,7 @@ async function vVentas(){
     .order('fecha',{ascending:false}).limit(100);
   if(error) throw error;
   const utilPor = {};
-  if(esAdmin() && data.length){
+  if(esFinanzas() && data.length){
     const it = await sb.from('venta_items').select('venta_id,cantidad,precio_unit,costo_unit').in('venta_id', data.map(v=>v.id));
     (it.data||[]).forEach(i=>{ utilPor[i.venta_id] = (utilPor[i.venta_id]||0) + (+i.precio_unit/1.16 - +i.costo_unit) * +i.cantidad; });
     data.forEach(v=>{ if(utilPor[v.id]!==undefined) utilPor[v.id] = Math.round((utilPor[v.id] - +(v.descuento||0)/1.16)*100)/100; });
@@ -750,7 +751,7 @@ function pintarVentas(){
   $('vt-kpis').innerHTML = `
     <div class="kpi"><div class="l">Vendido hoy</div><div class="v">${fmt(tHoy)}</div><div class="s">${nHoy} venta(s)</div></div>
     <div class="kpi"><div class="l">Esta semana</div><div class="v">${fmt(tSem)}</div><div class="s">${nSem} venta(s) desde el lunes</div></div>
-    ${esAdmin()?`<div class="kpi"><div class="l">Utilidad de hoy</div><div class="v">${fmt(Math.round(uHoy*100)/100)}</div><div class="s">sin IVA · sin canceladas</div></div>`:''}`;
+    ${esFinanzas()?`<div class="kpi"><div class="l">Utilidad de hoy</div><div class="v">${fmt(Math.round(uHoy*100)/100)}</div><div class="s">sin IVA · sin canceladas</div></div>`:''}`;
   const ICO = {efectivo:'💵', tarjeta:'💳', transferencia:'🏦', ak_pago:'📱', credito:'📄'};
   const dias = {};
   rows.forEach(v=>{ const f=new Date(v.fecha); const k=f.getFullYear()+'-'+f.getMonth()+'-'+f.getDate(); (dias[k]=dias[k]||[]).push(v); });
@@ -768,7 +769,7 @@ function pintarVentas(){
         ${v.cancelada?' <span class="badge b-rojo">cancelada</span>':''}
         ${!v.cancelada && v.cancel_solicitada?` <span class="badge b-ambar" title="${esc(v.cancel_motivo||'sin motivo')}">⚠️ canc. solicitada</span>`:''}</div>
       <div style="text-align:right;min-width:110px"><b style="font-size:16px">${fmt(v.total)}</b>
-        ${esAdmin() && !v.cancelada && u!==undefined?`<div><span class="badge ${u>=0?'b-verde':'b-rojo'}" title="Utilidad de esta venta (sin IVA)">${fmt(u)}</span></div>`:''}</div>
+        ${esFinanzas() && !v.cancelada && u!==undefined?`<div><span class="badge ${u>=0?'b-verde':'b-rojo'}" title="Utilidad de esta venta (sin IVA)">${fmt(u)}</span></div>`:''}</div>
       <div style="white-space:nowrap">
         <button class="btn sec sm" onclick="verVenta(${v.id})">Ver</button><button class="btn sec sm" title="Reimprimir ticket" onclick="reimprimirTicket(${v.id})">🖨</button>
         ${!v.cancelada ? (esAdmin()
@@ -795,11 +796,11 @@ async function verVenta(id){
   if(error){ toast(errMsg(error),true); return; }
   const utilTot = data.reduce((s,i)=>s+ (+i.precio_unit/1.16 - +(i.costo_unit||0)) * +i.cantidad, 0);
   abrirModal(`<h3>Detalle de venta</h3>
-    <div class="tbl-scroll"><table><thead><tr><th>Producto</th><th class="num">Cant</th><th class="num">Precio</th><th class="num">Importe</th>${esAdmin()?'<th class="num">Costo</th><th class="num">Utilidad</th>':''}</tr></thead>
+    <div class="tbl-scroll"><table><thead><tr><th>Producto</th><th class="num">Cant</th><th class="num">Precio</th><th class="num">Importe</th>${esFinanzas()?'<th class="num">Costo</th><th class="num">Utilidad</th>':''}</tr></thead>
     <tbody>${data.map(i=>`<tr style="cursor:pointer" title="Ver ficha del producto: historial, stock y foto" onclick="cerrarModal();fichaProducto(${i.producto_id})"><td style="color:var(--naranja,#E8790F)">${esc(i.productos?.codigo)} · ${esc(i.productos?.descripcion)}</td>
       <td class="num">${+i.cantidad}</td><td class="num">${fmt(i.precio_unit)}</td><td class="num">${fmt(i.importe)}</td>
-      ${esAdmin()?`<td class="num small muted">${fmt(i.costo_unit||0)}</td><td class="num">${fmt((+i.precio_unit/1.16 - +(i.costo_unit||0)) * +i.cantidad)}</td>`:''}</tr>`).join('')}</tbody>
-    ${esAdmin()?`<tfoot><tr><th colspan="5" class="num">Utilidad de la venta (sin IVA, antes de descuento)</th><th class="num">${fmt(Math.round(utilTot*100)/100)}</th></tr></tfoot>`:''}</table></div>
+      ${esFinanzas()?`<td class="num small muted">${fmt(i.costo_unit||0)}</td><td class="num">${fmt((+i.precio_unit/1.16 - +(i.costo_unit||0)) * +i.cantidad)}</td>`:''}</tr>`).join('')}</tbody>
+    ${esFinanzas()?`<tfoot><tr><th colspan="5" class="num">Utilidad de la venta (sin IVA, antes de descuento)</th><th class="num">${fmt(Math.round(utilTot*100)/100)}</th></tr></tfoot>`:''}</table></div>
     <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
 }
 async function cancelarVenta(id){
@@ -1922,7 +1923,7 @@ async function vInventario(){
         nMov = data.filter(noMov).length,
         nCB  = data.filter(p=>!(p.codigo_barras||'').trim()).length;
   $('v-inventario').innerHTML = `
-    ${esAdmin()?'<div class="kpis" id="inv-kpis" style="margin-bottom:14px"></div>':''}
+    ${esFinanzas()?'<div class="kpis" id="inv-kpis" style="margin-bottom:14px"></div>':''}
     <div class="toolbar">
       <input type="search" id="inv-q" placeholder="Buscar por código o descripción..." oninput="pintarInv()">
       <select id="inv-cat" onchange="pintarInv()"><option value="">Todas las categorías</option>
@@ -1940,13 +1941,13 @@ async function vInventario(){
         <option value="vendidos">Más vendidos</option>
         <option value="stockmax">Mayor stock</option>
         <option value="stockmin">Menor stock</option>
-        ${esAdmin()?'<option value="margen">Mayor margen %</option><option value="valor">Mayor valor en stock</option>':''}
+        ${esFinanzas()?'<option value="margen">Mayor margen %</option><option value="valor">Mayor valor en stock</option>':''}
       </select>
       <label class="small"><input type="checkbox" id="inv-bajo" onchange="pintarInv()"> Solo stock bajo</label>
     </div>
     <div class="card"><div class="tbl-scroll"><table>
       <thead><tr><th>Código</th><th>Descripción</th><th>Categoría</th>
-      ${esAdmin()?'<th class="num">Costo</th>':''}<th class="num">Precio</th>${esAdmin()?'<th class="num">Margen</th>':''}<th class="num">Stock</th><th></th></tr></thead>
+      ${esFinanzas()?'<th class="num">Costo</th>':''}<th class="num">Precio</th>${esFinanzas()?'<th class="num">Margen</th>':''}<th class="num">Stock</th><th></th></tr></thead>
       <tbody id="inv-body"></tbody></table></div>
       <p class="small muted" id="inv-pie" style="margin-top:10px"></p></div>`;
   pintarInv();
@@ -1977,9 +1978,9 @@ function pintarInv(){
     return `<tr style="cursor:pointer;${p.activo?(+p.stock<=0?'opacity:.7':''):'opacity:.45'}" onclick="fichaProducto(${p.id})" title="Ver historial del producto">
       <td><b>${esc(p.codigo)}</b></td><td>${esc(p.descripcion)}${+p.stock<=0?' <span class="badge b-rojo">agotado</span>':''}${sinMov(p)?' <span class="badge b-gris" title="Nunca ha tenido venta ni recepción">sin movimiento</span>':''}${verVend&&(vc[p.id]||0)>0?` <span class="badge b-verde" title="Piezas vendidas">🛒 ${vc[p.id]}</span>`:''}</td>
       <td><span class="badge b-gris">${esc(p.categoria)}</span></td>
-      ${esAdmin()?`<td class="num">${fmt(p.costo)}</td>`:''}
+      ${esFinanzas()?`<td class="num">${fmt(p.costo)}</td>`:''}
       <td class="num"><b>${fmt(p.precio)}</b></td>
-      ${esAdmin()?`<td class="num"><span class="badge ${bm}">${pct.toFixed(0)}%</span> <span class="small muted">${fmt(marg)}</span></td>`:''}
+      ${esFinanzas()?`<td class="num"><span class="badge ${bm}">${pct.toFixed(0)}%</span> <span class="small muted">${fmt(marg)}</span></td>`:''}
       <td class="num"><span class="badge ${bajo?'b-rojo':'b-verde'}">${+p.stock}</span> <span class="small muted">${esc(p.unidad||'pza')}</span></td>
       <td style="white-space:nowrap">${!(p.codigo_barras||'').trim()?`<button class="btn sec sm" title="Registrar código de barras con la pistola" onclick="event.stopPropagation();capturarCB(${p.id})">📎 Código</button> `:''}${esAdmin()?`<button class="btn sec sm" onclick="event.stopPropagation();editarProducto(${p.id})">Editar</button>`:''}</td></tr>`;
   }).join('') || '<tr><td colspan="8" class="muted">Sin resultados.</td></tr>';
@@ -2009,8 +2010,8 @@ async function fichaProducto(id){
   const recs = (ci.data||[]).filter(x=>+(x.cantidad_recibida||0)>0);
   const totRec = recs.reduce((s,x)=>s+ +x.cantidad_recibida, 0);
   const movs = [
-    ...ventas.map(x=>({f:x.ventas.fecha, t:'🛒 Venta #'+x.ventas.folio, c:-x.cantidad, extra: fmt(x.precio_unit)+(esAdmin()?' · utilidad '+fmt(Math.round(((+x.precio_unit/1.16)-+(x.costo_unit||0))*+x.cantidad*100)/100):'')})),
-    ...recs.map(x=>({f:x.pedidos_compra?.fecha, t:'📦 Recepción · pedido '+esc(x.pedidos_compra?.folio_externo||''), c:+x.cantidad_recibida, extra: esAdmin()?('costo '+fmt(x.costo_unit)):''}))
+    ...ventas.map(x=>({f:x.ventas.fecha, t:'🛒 Venta #'+x.ventas.folio, c:-x.cantidad, extra: fmt(x.precio_unit)+(esFinanzas()?' · utilidad '+fmt(Math.round(((+x.precio_unit/1.16)-+(x.costo_unit||0))*+x.cantidad*100)/100):'')})),
+    ...recs.map(x=>({f:x.pedidos_compra?.fecha, t:'📦 Recepción · pedido '+esc(x.pedidos_compra?.folio_externo||''), c:+x.cantidad_recibida, extra: esFinanzas()?('costo '+fmt(x.costo_unit)):''}))
   ].sort((a,b)=>new Date(b.f)-new Date(a.f)).slice(0,40);
   abrirModal(`
     <div style="display:flex;gap:14px;align-items:flex-start">
@@ -2019,7 +2020,7 @@ async function fichaProducto(id){
         <h3 style="margin:0 0 4px;line-height:1.3">${esc(p.descripcion)}</h3>
         <p class="small muted" style="margin:0"><b>${esc(p.codigo)}</b> · ${esc(p.categoria)} · por ${esc(p.unidad||'pza')}${p.codigo_barras?` · CB ${esc(p.codigo_barras)}`:''}${p.activo?'':' · <span class="badge b-gris">inactivo</span>'}</p>
         <p style="margin:8px 0 0">Stock: <b>${+p.stock}</b> ${esc(p.unidad||'pza')} · Precio: <b>${fmt(p.precio)}</b> <span class="small muted">= ${fmt(Math.round(+p.precio/1.16*100)/100)} + ${fmt(Math.round((+p.precio - +p.precio/1.16)*100)/100)} de IVA</span></p>
-        ${puedeVender()?`<p class="small" style="margin:4px 0 0">${esAdmin()?`Costo: <b>${fmt(p.costo)}</b> (sin IVA) → utilidad por pieza: <b style="color:var(--verde,#15803d)">${fmt(Math.round((+p.precio/1.16 - +p.costo)*100)/100)}</b> <span class="muted">(la parte del IVA se entrega al SAT, no es ganancia)</span>`:''}</p>`:''}
+        ${esFinanzas()?`<p class="small" style="margin:4px 0 0">Costo: <b>${fmt(p.costo)}</b> (sin IVA) → utilidad por pieza: <b style="color:var(--verde,#15803d)">${fmt(Math.round((+p.precio/1.16 - +p.costo)*100)/100)}</b> <span class="muted">(la parte del IVA se entrega al SAT, no es ganancia)</span></p>`:''}
       </div>
     </div>
     <div class="kpis" style="margin:12px 0">
@@ -3301,7 +3302,7 @@ async function vUsuarios(){
         <td><b>${esc(u.nombre)||'—'}</b>${u.id===perfil.id?' <span class="badge b-azul">tú</span>':''}</td>
         <td>${esc(u.correo)}</td>
         <td><select onchange="cambiarRol('${u.id}', this.value)" ${u.id===perfil.id?'disabled':''}>
-          ${['admin','vendedor','consulta','pendiente'].map(r=>`<option ${u.rol===r?'selected':''}>${r}</option>`).join('')}</select></td>
+          ${['admin','vendedor','contador','consulta','pendiente'].map(r=>`<option ${u.rol===r?'selected':''}>${r}</option>`).join('')}</select></td>
         <td><input type="checkbox" ${u.activo?'checked':''} ${u.id===perfil.id?'disabled':''} onchange="cambiarActivo('${u.id}', this.checked)"></td>
         <td class="small muted">${fecha(u.creado)}</td></tr>`).join('')}</tbody></table></div></div>`;
 }
