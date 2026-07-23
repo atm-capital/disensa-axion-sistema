@@ -2974,10 +2974,11 @@ async function aplicarFacturas(){
       aplicadas++;
     }
     st('');
-    await limpiarCanceladosIndar(pedTocados);
+    try{ await limpiarCanceladosIndar(pedTocados); }catch(eL){}
     toast(`✅ ${aplicadas} factura(s) aplicadas (${cxpN} CxP, ${partidas} partidas a precio de factura) · ${archivadas} archivada(s) en Finanzas → Facturas`);
     leerFacturas();
-  }catch(e){ st(''); toast(errMsg(e), true); $('fx-aplicar').disabled = false; }
+  }catch(e){ st(''); toast(errMsg(e), true); }
+  const b = $('fx-aplicar'); if(b) b.disabled = false;
 }
 const MX_STOP = new Set(['DE','LA','EL','CON','PARA','DEL','LOS','LAS','EN','POR','SIN','KG','MTS','MM','LTRS','CAL','QUE','UNA','SEGUNDA','BOLSAS','LARGO','COLOR']);
 function mxToks(s){ return normTxt(s).split(/\s+/).filter(t=>t.length>2 && !MX_STOP.has(t)); }
