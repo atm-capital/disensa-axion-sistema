@@ -2577,7 +2577,7 @@ async function axBM(){
       var getU=async function(nf,tp){var rr=await fetch('/pedidosAnteriores/descargarDocumento',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','X-CSRF-TOKEN':T,'X-Requested-With':'XMLHttpRequest'},body:'numFactura='+nf+'&type='+tp});var tt=(await rr.text()).trim().replace(/^"|"$/g,'');return /^https?:/.test(tt)?tt:'';};
       MF('consultando tus pedidos y facturas...');
       var cidEl=document.getElementById('codCustomer');
-      var cid=cidEl?cidEl.innerText.trim():'';
+      var cid=(cidEl&&cidEl.innerText.trim())||((document.body.innerText.match(/C0\d{5,}/)||[])[0])||'C027242';
       var rowsF=[];
       try{
         var ro=await fetch('/pedidosAnteriores/getOrdersCompanyId',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','X-CSRF-TOKEN':T,'X-Requested-With':'XMLHttpRequest'},body:'companyId='+encodeURIComponent(cid)});
