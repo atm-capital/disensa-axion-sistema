@@ -1869,9 +1869,25 @@ function fichaCat(cod){
     <h3 style="margin:6px 0;line-height:1.4">${esc(p.descripcion)}</h3>
     <p style="font-size:19px;margin:8px 0"><b>${fmt(p.precio_sugerido)}</b> <span class="small muted">sugerido con IVA${pz?` · ${fmt(p.precio_sugerido/pz)}/pza`:''}</span>
     ${esAdmin()?`<br><span class="small muted">costo −5%: ${fmt(costoD)} · lista: ${fmt(p.precio_lista)}${+p.promo_pct?` · promo ${Math.round(+p.promo_pct*100)}%`:''}</span>`:''}</p>
+    <p class="small" id="fcat-inv" style="margin:4px 0 8px"><span class="muted">⏳ checando inventario y pedidos...</span></p>
     <div class="acciones">
       <button class="btn" onclick='toggleCat(${JSON.stringify({c:p.codigo,d:p.descripcion,pr:+p.precio_sugerido,co:Math.round(+p.precio_lista*(1-(+p.promo_pct||0))*100)/100,su:+p.precio_sugerido}).replace(/'/g,"&#39;")}); cerrarModal();'>➕ Seleccionar para cotizar</button>
       <button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
+  fcatInv(p.codigo);
+}
+async function fcatInv(cod){
+  const el = $('fcat-inv'); if(!el) return;
+  try{
+    const pr = await sb.from('productos').select('id,stock,unidad').eq('codigo', cod).limit(1);
+    const p = pr.data && pr.data[0];
+    if(!p){ el.innerHTML = '<span class="muted">📦 No está en inventario · 🚚 no viene en ningún pedido</span>'; return; }
+    const it = await sb.from('pedido_compra_items').select('cantidad,cantidad_recibida,parte,pedidos_compra(folio_externo,estado)').eq('producto_id', p.id);
+    const enCam = (it.data||[]).filter(x=>['enviado','parcial'].includes(x.pedidos_compra?.estado) && (+x.cantidad - +(x.cantidad_recibida||0)) > 0);
+    const totCam = enCam.reduce((s,x)=>s+ (+x.cantidad - +(x.cantidad_recibida||0)), 0);
+    el.innerHTML = `📦 En inventario: <b>${+p.stock}</b> ${esc(p.unidad||'pza')} · ` +
+      (totCam>0 ? `🚚 <b>En camino: ${totCam}</b> — ${enCam.map(x=>'pedido '+esc(x.pedidos_compra?.folio_externo||'')+(x.parte?' (parte '+esc(x.parte)+')':'')).join(', ')}` : '<span class="muted">🚚 no viene en ningún pedido</span>') +
+      ` · <a class="link" onclick="cerrarModal();fichaProducto(${p.id})" style="cursor:pointer">ver ficha completa</a>`;
+  }catch(e){ el.innerHTML = ''; }
 }
 function pintarSelBar(){
   const bar = $('cat-sel-bar'); if(!bar) return;
@@ -2006,7 +2022,7 @@ async function fichaProducto(id){
   if(!p) return;
   const [vi, ci] = await Promise.all([
     sb.from('venta_items').select('cantidad,precio_unit,costo_unit,ventas(folio,fecha,cancelada)').eq('producto_id', id).order('id',{ascending:false}).limit(100),
-    sb.from('pedido_compra_items').select('cantidad_recibida,costo_unit,pedidos_compra(folio_externo,fecha)').eq('producto_id', id)
+    sb.from('pedido_compra_items').select('cantidad,cantidad_recibida,parte,costo_unit,pedidos_compra(folio_externo,fecha,estado)').eq('producto_id', id)
   ]);
   const ventas = (vi.data||[]).filter(x=>x.ventas && !x.ventas.cancelada);
   const totVend = ventas.reduce((s,x)=>s+ +x.cantidad, 0);
@@ -2015,6 +2031,8 @@ async function fichaProducto(id){
   const v30 = ventas.filter(x=>new Date(x.ventas.fecha).getTime()>=hace30).reduce((s,x)=>s+ +x.cantidad, 0);
   const recs = (ci.data||[]).filter(x=>+(x.cantidad_recibida||0)>0);
   const totRec = recs.reduce((s,x)=>s+ +x.cantidad_recibida, 0);
+  const enCam = (ci.data||[]).filter(x=>['enviado','parcial'].includes(x.pedidos_compra?.estado) && (+x.cantidad - +(x.cantidad_recibida||0)) > 0);
+  const totCam = enCam.reduce((s,x)=>s+ (+x.cantidad - +(x.cantidad_recibida||0)), 0);
   const movs = [
     ...ventas.map(x=>({f:x.ventas.fecha, t:'🛒 Venta #'+x.ventas.folio, c:-x.cantidad, extra: fmt(x.precio_unit)+(esFinanzas()?' · utilidad '+fmt(Math.round(((+x.precio_unit/1.16)-+(x.costo_unit||0))*+x.cantidad*100)/100):'')})),
     ...recs.map(x=>({f:x.pedidos_compra?.fecha, t:'📦 Recepción · pedido '+esc(x.pedidos_compra?.folio_externo||''), c:+x.cantidad_recibida, extra: esFinanzas()?('costo '+fmt(x.costo_unit)):''}))
@@ -2026,6 +2044,7 @@ async function fichaProducto(id){
         <h3 style="margin:0 0 4px;line-height:1.3">${esc(p.descripcion)}</h3>
         <p class="small muted" style="margin:0"><b>${esc(p.codigo)}</b> · ${esc(p.categoria)} · por ${esc(p.unidad||'pza')}${p.codigo_barras?` · CB ${esc(p.codigo_barras)}`:''}${p.activo?'':' · <span class="badge b-gris">inactivo</span>'}</p>
         <p style="margin:8px 0 0">Stock: <b>${+p.stock}</b> ${esc(p.unidad||'pza')} · Precio: <b>${fmt(p.precio)}</b> <span class="small muted">= ${fmt(Math.round(+p.precio/1.16*100)/100)} + ${fmt(Math.round((+p.precio - +p.precio/1.16)*100)/100)} de IVA</span></p>
+        <p class="small" style="margin:4px 0 0">${totCam>0?`🚚 <b>En camino: ${totCam} ${esc(p.unidad||'pza')}</b> — ${enCam.map(x=>'pedido '+esc(x.pedidos_compra?.folio_externo||'')+(x.parte?' (parte '+esc(x.parte)+')':'')).join(', ')}`:'<span class="muted">🚚 No viene en ningún pedido</span>'}</p>
         ${esFinanzas()?`<p class="small" style="margin:4px 0 0">Costo: <b>${fmt(p.costo)}</b> (sin IVA) → utilidad por pieza: <b style="color:var(--verde,#15803d)">${fmt(Math.round((+p.precio/1.16 - +p.costo)*100)/100)}</b> <span class="muted">(la parte del IVA se entrega al SAT, no es ganancia)</span></p>`:''}
       </div>
     </div>
