@@ -1899,12 +1899,15 @@ async function vInventario(){
     <button class="btn sec" onclick="verResurtido()">🛒 Resurtido</button>
     <button class="btn sec" id="btn-sol-res" onclick="verSolicitudesRes()">📥 Solicitudes</button>
     <button class="btn sec" onclick="etiquetasPrecios()">🏷️ Precios tienda</button>
+    <button class="btn sec" id="btn-eti-nuevas" onclick="etiquetasPrecios(true)">🏷️ Nuevas</button>
     <button class="btn sec" onclick="compararStockSafdi()">⚖️ Stock SAFDI</button>
     <button class="btn sec" onclick="exportarInv()">Exportar CSV</button>`;
     sb.from('resurtido_solicitudes').select('id',{count:'exact',head:true}).eq('estado','pendiente')
       .then(({count})=>{ const b=$('btn-sol-res'); if(b && count) b.innerHTML='📥 Solicitudes <span class="badge b-ambar">'+count+'</span>'; });
   }
-  else if(puedeVender()) $('vtools').innerHTML = `<button class="btn" onclick="solicitarResurtido()">🛒 Pedir resurtido</button>`;
+  else if(puedeVender()) $('vtools').innerHTML = `<button class="btn" onclick="solicitarResurtido()">🛒 Pedir resurtido</button>
+    <button class="btn sec" onclick="etiquetasPrecios()">🏷️ Precios tienda</button>
+    <button class="btn sec" id="btn-eti-nuevas" onclick="etiquetasPrecios(true)">🏷️ Nuevas</button>`;
   const [{data, error}, mv, mr] = await Promise.all([
     sb.from('productos').select('*').order('descripcion'),
     sb.from('venta_items').select('producto_id,cantidad,ventas!inner(cancelada)').eq('ventas.cancelada', false).range(0,9999),
@@ -1923,6 +1926,8 @@ async function vInventario(){
         nAgo = data.filter(p=>+p.stock<=0).length,
         nMov = data.filter(noMov).length,
         nCB  = data.filter(p=>!(p.codigo_barras||'').trim()).length;
+  { const nNue = data.filter(p=>p.activo && +p.precio>0 && !p.etiqueta_at).length;
+    const be = $('btn-eti-nuevas'); if(be) be.innerHTML = '🏷️ Nuevas' + (nNue?' <span class="badge b-ambar">'+nNue+'</span>':''); }
   $('v-inventario').innerHTML = `
     ${esFinanzas()?'<div class="kpis" id="inv-kpis" style="margin-bottom:14px"></div>':''}
     <div class="toolbar">
@@ -2142,6 +2147,7 @@ async function guardarProducto(id){
   const obj = {
     descripcion: $('pr-desc').value.trim(), categoria: $('pr-cat').value.trim() || 'General',
     costo: +$('pr-costo').value||0, precio: redondearPrecio($('pr-precio').value),
+    ...(id && (()=>{ const prev = invData.find(p=>p.id===id); return prev && +prev.precio !== redondearPrecio($('pr-precio').value); })() ? {etiqueta_at: null} : {}),
     stock: +$('pr-stock').value||0, stock_min: +$('pr-min').value||0,
     unidad: ($('pr-unidad').value.trim()||'pza'),
     codigo_barras: $('pr-barras').value.trim(),
@@ -2158,14 +2164,15 @@ async function guardarProducto(id){
   if(error){ toast(errMsg(error), true); return; }
   cerrarModal(); toast('Producto guardado'); vInventario();
 }
-function etiquetasPrecios(){
+function etiquetasPrecios(soloNuevas){
   const q = ($('inv-q').value||'').toLowerCase().trim();
   const cat = $('inv-cat').value;
   const rows = invData.filter(p => p.activo && +p.precio>0 &&
+    (!soloNuevas || !p.etiqueta_at) &&
     (!q || p.codigo.toLowerCase().includes(q) || p.descripcion.toLowerCase().includes(q)) &&
     (!cat || p.categoria === cat))
     .sort((a,b)=>a.categoria.localeCompare(b.categoria)||a.descripcion.localeCompare(b.descripcion));
-  if(!rows.length){ toast('No hay productos con precio con los filtros actuales', true); return; }
+  if(!rows.length){ toast(soloNuevas ? 'No hay etiquetas pendientes 🎉 Todo tiene su tarjeta' : 'No hay productos con precio con los filtros actuales', !soloNuevas); return; }
   const w = window.open('','_blank');
   if(!w){ toast('Permite las ventanas emergentes para imprimir', true); return; }
   w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Precios tienda · Axion Tools</title>
@@ -2183,6 +2190,13 @@ function etiquetasPrecios(){
     <div class="marca">AXION TOOLS</div></div>`).join('')}</div>
   </body></html>`);
   w.document.close();
+  sb.rpc('marcar_etiquetas', {p_ids: rows.map(r=>r.id)}).then(({error})=>{
+    if(error) return;
+    const ahora = new Date().toISOString();
+    rows.forEach(r=>{ r.etiqueta_at = ahora; });
+    const be = $('btn-eti-nuevas');
+    if(be){ const nNue = invData.filter(p=>p.activo && +p.precio>0 && !p.etiqueta_at).length; be.innerHTML = '🏷️ Nuevas' + (nNue?' <span class="badge b-ambar">'+nNue+'</span>':''); }
+  });
 }
 function exportarInv(){
   const enc = ['codigo','descripcion','categoria','unidad','codigo_barras','costo','precio','stock','stock_min','activo'];
@@ -3215,7 +3229,8 @@ async function subirListaPrecios(){
         const r = mapa.get(p.codigo);
         if(r && r.precio_lista > 0){
           const costo = Math.round(r.precio_lista * (1 - (r.promo_pct||0)) * 100)/100;
-          await sb.from('productos').update({costo, precio: r.precio_sugerido ? redondearPrecio(r.precio_sugerido) : undefined}).eq('id', p.id);
+          const nPre = r.precio_sugerido ? redondearPrecio(r.precio_sugerido) : undefined;
+          await sb.from('productos').update({costo, precio: nPre, ...(nPre!==undefined && +nPre !== +p.precio ? {etiqueta_at: null} : {})}).eq('id', p.id);
           actualizados++;
         }
       }
