@@ -2304,19 +2304,20 @@ async function verPedido(id, estado){
   const data = it.data, facturas = fx.error ? [] : (fx.data||[]); const pindar = (pix && !pix.error && pix.data) ? pix.data : [];
   pedItems = data;
   const tot = data.reduce((s,i)=>s+ +i.importe,0);
-  const recibiendo = esAdmin() && ['enviado','parcial'].includes(estado);
-  const nCols = recibiendo ? 7 : 5;
+  const recibiendo = puedeVender() && ['enviado','parcial'].includes(estado);
+  const editando = esAdmin() && ['enviado','parcial'].includes(estado); // editar cantidades/quitar: solo admin
+  const nCols = 5 + (recibiendo?1:0) + (editando?1:0);
   // agrupar por parte (sales order de Indar)
   const grupos = new Map();
   for(const i of data){ const p = i.parte || ''; if(!grupos.has(p)) grupos.set(p, []); grupos.get(p).push(i); }
   const fila = i => {
     const rec = +(i.cantidad_recibida||0), pend = +i.cantidad - rec;
     return `<tr><td>${esc(i.productos?.codigo)} · ${esc((i.productos?.descripcion||'').slice(0,45))}</td>
-      <td class="num">${recibiendo?`<input id="ped-cant-${i.id}" type="number" min="${Math.max(rec,1)}" value="${+i.cantidad}" style="width:64px;padding:5px;border:1px solid var(--linea);border-radius:6px;text-align:right">`:(+i.cantidad)}</td>
+      <td class="num">${editando?`<input id="ped-cant-${i.id}" type="number" min="${Math.max(rec,1)}" value="${+i.cantidad}" style="width:64px;padding:5px;border:1px solid var(--linea);border-radius:6px;text-align:right">`:(+i.cantidad)}</td>
       <td class="num"><span class="badge ${pend<=0?'b-verde':(rec>0?'b-ambar':'b-gris')}">${rec}</span></td>
       ${recibiendo?`<td class="num">${pend>0?`<input id="rec-${i.id}" type="number" min="0" max="${pend}" value="0" style="width:64px;padding:5px;border:1px solid var(--linea);border-radius:6px;text-align:right">`:'✓'}</td>`:''}
       <td class="num">${fmt(i.costo_unit)}</td><td class="num">${fmt(i.importe)}</td>
-      ${recibiendo?`<td style="text-align:center">${rec===0?`<input type="checkbox" id="ped-del-${i.id}">`:''}</td>`:''}</tr>`;
+      ${editando?`<td style="text-align:center">${rec===0?`<input type="checkbox" id="ped-del-${i.id}">`:''}</td>`:''}</tr>`;
   };
   const badgesParte = its => {
     const ped = its.reduce((s,i)=>s+ +i.cantidad,0), rec = its.reduce((s,i)=>s+ +(i.cantidad_recibida||0),0), fac = its.reduce((s,i)=>s+ +(i.cantidad_facturada||0),0);
@@ -2333,13 +2334,13 @@ async function verPedido(id, estado){
     ${facturas.length ? `<p class="small" style="margin-bottom:6px">🧾 <b>Facturas de este pedido:</b> ${facturas.map(f=>`${esc(f.folio)} (${fmt(f.total)})${f.pdf_path?` <button class="btn sm sec" onclick="verPdfFactura('${esc(f.pdf_path)}')">📄 Ver</button>`:''}`).join(' · ')}</p>` : ''}
     ${recibiendo?`<p class="small muted" style="margin-bottom:8px">Cuando llegue una entrega: dale <b>📦 Recibir esta parte</b> (llena las cantidades pendientes de esa parte), coteja contra la factura 📄, ajusta si algo no llegó, y da clic en <b>Registrar recepción</b>. Solo lo recibido se suma al inventario.</p>`:''}
     <div class="tbl-scroll" style="max-height:400px;overflow-y:auto"><table>
-    <thead><tr><th>Producto</th><th class="num">Pedida</th><th class="num">Recibida</th>${recibiendo?'<th class="num">Recibir ahora</th>':''}<th class="num">Costo</th><th class="num">Importe</th>${recibiendo?'<th>Quitar</th>':''}</tr></thead>
+    <thead><tr><th>Producto</th><th class="num">Pedida</th><th class="num">Recibida</th>${recibiendo?'<th class="num">Recibir ahora</th>':''}<th class="num">Costo</th><th class="num">Importe</th>${editando?'<th>Quitar</th>':''}</tr></thead>
     <tbody>${cuerpo}</tbody>
-    <tfoot><tr><th colspan="${recibiendo?6:4}" class="num">Suma</th><th class="num">${fmt(tot)}</th></tr></tfoot></table></div>
+    <tfoot><tr><th colspan="${nCols-1}" class="num">Suma</th><th class="num">${fmt(tot)}</th></tr></tfoot></table></div>
     <div class="acciones">
       ${recibiendo?`<button class="btn sec" onclick="llenarPendiente()">Llenar TODO lo pendiente</button>
-      <button class="btn" onclick="registrarRecepcion(${id})">Registrar recepción</button>
-      <button class="btn sec" onclick="guardarCambiosPedido(${id})">💾 Guardar cambios (cantidades/quitar)</button>`:''}
+      <button class="btn" onclick="registrarRecepcion(${id})">Registrar recepción</button>`:''}
+      ${editando?`<button class="btn sec" onclick="guardarCambiosPedido(${id})">💾 Guardar cambios (cantidades/quitar)</button>`:''}
       <button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
   cargarEvidencias(id);
 }
@@ -2351,14 +2352,31 @@ async function cargarEvidencias(pedidoId){
     <label class="btn sm" style="margin-left:6px;cursor:pointer">⬆️ Subir<input type="file" accept="image/*,.pdf" style="display:none" onchange="subirEvidencia(${pedidoId}, this)"></label>`;
 }
 async function subirEvidencia(pedidoId, inp){
-  const f = inp.files && inp.files[0]; if(!f) return;
+  const f = inp.files && inp.files[0]; if(!f) return false;
   toast('Subiendo evidencia...');
   const limpio = f.name.replace(/[^A-Za-z0-9_.-]/g,'_').slice(-60);
   const path = 'evidencias/'+pedidoId+'/'+Date.now()+'_'+limpio;
   const {error} = await sb.storage.from('facturas').upload(path, f, {contentType: f.type || 'application/octet-stream'});
-  if(error){ toast(errMsg(error), true); return; }
+  if(error){ toast(errMsg(error), true); return false; }
   logEv('evidencia', 'pedido '+pedidoId+': '+limpio);
   toast('Evidencia guardada ✓'); cargarEvidencias(pedidoId);
+  return true;
+}
+function pedirEvidenciaRec(pedidoId){
+  const el = $('ev-ped');
+  if(el && !$('ev-req')){
+    el.insertAdjacentHTML('beforeend', `<div id="ev-req" style="margin-top:8px;padding:10px;border:2px solid #d97706;border-radius:8px;background:#fef3c7"><b>📸 Falta la evidencia de entrega:</b> toma una foto o sube el escaneo del papel firmado para poder registrar la recepción.
+      <label class="btn sm" style="cursor:pointer;margin-left:6px">📷 Tomar foto / subir archivo<input type="file" accept="image/*,.pdf" capture="environment" style="display:none" onchange="subirEvidenciaRec(${pedidoId}, this)"></label></div>`);
+    el.scrollIntoView({behavior:'smooth', block:'center'});
+  }
+  toast('Sube la evidencia de entrega para poder registrar la recepción', true);
+}
+async function subirEvidenciaRec(pedidoId, inp){
+  const ok = await subirEvidencia(pedidoId, inp);
+  if(!ok) return;
+  window._evOk = true;
+  const b = $('ev-req'); if(b) b.remove();
+  registrarRecepcion(pedidoId);
 }
 async function verEvidencia(path){
   const {data, error} = await sb.storage.from('facturas').createSignedUrl(path, 300);
@@ -2396,6 +2414,8 @@ function llenarPendiente(){
 async function registrarRecepcion(pedidoId){
   const items = pedItems.map(i=>({item_id:i.id, cantidad:+($('rec-'+i.id)?.value||0)})).filter(x=>x.cantidad>0);
   if(!items.length){ toast('Escribe al menos una cantidad en "Recibir ahora"', true); return; }
+  if(!esAdmin() && !window._evOk){ pedirEvidenciaRec(pedidoId); return; } // vendedores: evidencia obligatoria
+  window._evOk = false;
   const {error} = await sb.rpc('recibir_partidas', {p_pedido_id:pedidoId, p_items:items});
   if(error){ toast(errMsg(error),true); return; }
   cerrarModal(); toast('Recepción registrada: inventario actualizado ✓'); vPedidos();
