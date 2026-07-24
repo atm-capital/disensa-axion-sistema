@@ -412,10 +412,10 @@ function resumenPartes(grupos, facturas, data, pindar){
       if(+pi.cant_facturada>0 && !fs.length) vivo += '<br><span class="badge b-rojo">⚠️ falta subir XML</span>';
       vivo += '<br><span class="muted small">'+tiempoRel(pi.actualizado)+'</span>';
     }
-    const fh = fs.length ? fs.map(function(f){ return '🧾 <b>'+esc(f.folio)+'</b> ('+fmt(f.total)+')'+(f.pdf_path?' <button class="btn sm sec" onclick="verPdfFactura(\''+esc(f.pdf_path)+'\')">📄 Ver</button>':''); }).join('<br>') : '<span class="muted small">sin factura aún</span>';
-    return '<tr style="cursor:pointer" title="Clic: ir a esta parte en la lista" onclick="irAParte(\''+String(p)+'\')"><td style="white-space:nowrap"><b>'+(p?'Parte '+esc(p):'Sin parte')+'</b></td><td class="num">'+its.length+'</td><td class="num">'+fmt(Math.round(tot*116)/100)+'</td><td>'+est+'</td><td>'+fh+'</td><td>'+vivo+'</td></tr>';
+    const fh = fs.length ? fs.map(function(f){ return '🧾 <b>'+esc(f.folio)+'</b>'+(esFinanzas()?' ('+fmt(f.total)+')'+(f.pdf_path?' <button class="btn sm sec" onclick="verPdfFactura(\''+esc(f.pdf_path)+'\')">📄 Ver</button>':''):''); }).join('<br>') : '<span class="muted small">sin factura aún</span>';
+    return '<tr style="cursor:pointer" title="Clic: ir a esta parte en la lista" onclick="irAParte(\''+String(p)+'\')"><td style="white-space:nowrap"><b>'+(p?'Parte '+esc(p):'Sin parte')+'</b></td><td class="num">'+its.length+'</td>'+(esFinanzas()?'<td class="num">'+fmt(Math.round(tot*116)/100)+'</td>':'')+'<td>'+est+'</td><td>'+fh+'</td><td>'+vivo+'</td></tr>';
   }).join('');
-  return '<div class="tbl-scroll" style="margin:6px 0 10px"><table><thead><tr><th>Parte</th><th class="num">Partidas</th><th class="num">Total c/IVA</th><th>Estado</th><th>Factura(s)</th><th>Indar en vivo</th></tr></thead><tbody>'+filas+'</tbody></table></div>';
+  return '<div class="tbl-scroll" style="margin:6px 0 10px"><table><thead><tr><th>Parte</th><th class="num">Partidas</th>'+(esFinanzas()?'<th class="num">Total c/IVA</th>':'')+'<th>Estado</th><th>Factura(s)</th><th>Indar en vivo</th></tr></thead><tbody>'+filas+'</tbody></table></div>';
 }
 
 /* ===== Estatus en vivo de Indar (partes_indar) ===== */
@@ -2271,17 +2271,17 @@ async function vPedidos(){
   $('v-pedidos').innerHTML = `
     <div class="kpis">
       ${['enviado','parcial','recibido','borrador','cancelado'].filter(e=>porEstado[e]).map(e=>`
-        <div class="kpi" style="cursor:pointer;${window._pedFiltro===e?'outline:2px solid var(--naranja,#e8862d)':''}" title="Clic para filtrar" onclick="window._pedFiltro = window._pedFiltro==='${e}'?null:'${e}'; vPedidos()"><div class="l">${e} (${porEstado[e].n})</div><div class="v">${fmt(porEstado[e].t)}</div></div>`).join('')}
-      <div class="kpi" style="cursor:pointer;${!window._pedFiltro?'':'opacity:.75'}" title="Ver todos" onclick="window._pedFiltro=null; vPedidos()"><div class="l">Total pedidos (${data.filter(p=>p.estado!=='cancelado').length})</div><div class="v">${fmt(totalGral)}</div></div>
+        <div class="kpi" style="cursor:pointer;${window._pedFiltro===e?'outline:2px solid var(--naranja,#e8862d)':''}" title="Clic para filtrar" onclick="window._pedFiltro = window._pedFiltro==='${e}'?null:'${e}'; vPedidos()"><div class="l">${e} (${porEstado[e].n})</div><div class="v">${esFinanzas()?fmt(porEstado[e].t):porEstado[e].n+' 📦'}</div></div>`).join('')}
+      <div class="kpi" style="cursor:pointer;${!window._pedFiltro?'':'opacity:.75'}" title="Ver todos" onclick="window._pedFiltro=null; vPedidos()"><div class="l">Total pedidos (${data.filter(p=>p.estado!=='cancelado').length})</div><div class="v">${esFinanzas()?fmt(totalGral):data.filter(p=>p.estado!=='cancelado').length+' 📦'}</div></div>
     </div>` + `
     <div class="card"><h3>Pedidos de compra${window._pedFiltro?` · filtro: <span class="badge ${badges[window._pedFiltro]}">${window._pedFiltro}</span>`:''}</h3>
     <button class="btn sm" style="float:right;margin-left:10px" onclick="syncIndar()">🔄 Actualizar estatus Indar</button><button class="btn sm sec" style="float:right" onclick="traerFacturasIndar()">🧾 Traer facturas de Indar</button><p class="small muted" style="margin-bottom:10px">Los pedidos se capturan en el portal del proveedor (Indar / Holcim) y aquí se registran para dar seguimiento. Al marcar <b>Recibido</b>, las cantidades se suman al inventario automáticamente.</p>
     <div class="tbl-scroll"><table>
-      <thead><tr><th>Folio</th><th>Proveedor</th><th>Fecha</th><th>Estado</th><th>Partes / avance</th><th>Plazo</th><th class="num">Total</th><th></th></tr></thead>
+      <thead><tr><th>Folio</th><th>Proveedor</th><th>Fecha</th><th>Estado</th><th>Partes / avance</th><th>Plazo</th>${esFinanzas()?'<th class="num">Total</th>':''}<th></th></tr></thead>
       <tbody>${dataF.map(p=>`<tr style="cursor:pointer" title="Clic: ver partes, cotejar factura y recibir" onclick="verPedido(${p.id}, '${p.estado}')">
         <td><b>${esc(p.folio_externo)||('#'+p.id)}</b></td><td>${esc(p.proveedores?.nombre)}</td>
         <td>${fecha(p.fecha)}</td><td><span class="badge ${badges[p.estado]}">${p.estado}</span></td>
-        <td class="small" style="white-space:nowrap">${resParteHTML(window._pp[p.id], window._pind && window._pind[p.id])}</td><td>${p.plazo_dias||0} días</td><td class="num"><b>${fmt(p.total)}</b></td>
+        <td class="small" style="white-space:nowrap">${resParteHTML(window._pp[p.id], window._pind && window._pind[p.id])}</td><td>${p.plazo_dias||0} días</td>${esFinanzas()?`<td class="num"><b>${fmt(p.total)}</b></td>`:''}
         <td style="white-space:nowrap" onclick="event.stopPropagation()"><button class="btn sec sm" onclick="verPedido(${p.id}, '${p.estado}')">Ver / Recibir</button>
         ${esAdmin() && ['enviado','parcial'].includes(p.estado) ? `<button class="btn sm" onclick="recibirPedido(${p.id})">Recibir todo ✓</button>`:''}</td>
       </tr>`).join('') || '<tr><td colspan="8" class="muted">Sin pedidos registrados.</td></tr>'}</tbody></table></div></div>
@@ -2306,7 +2306,8 @@ async function verPedido(id, estado){
   const tot = data.reduce((s,i)=>s+ +i.importe,0);
   const recibiendo = puedeVender() && ['enviado','parcial'].includes(estado);
   const editando = esAdmin() && ['enviado','parcial'].includes(estado); // editar cantidades/quitar: solo admin
-  const nCols = 5 + (recibiendo?1:0) + (editando?1:0);
+  const verCostos = esFinanzas(); // como factura de traslado: quien recibe ve todo menos costos
+  const nCols = 3 + (recibiendo?1:0) + (verCostos?2:0) + (editando?1:0);
   // agrupar por parte (sales order de Indar)
   const grupos = new Map();
   for(const i of data){ const p = i.parte || ''; if(!grupos.has(p)) grupos.set(p, []); grupos.get(p).push(i); }
@@ -2316,7 +2317,7 @@ async function verPedido(id, estado){
       <td class="num">${editando?`<input id="ped-cant-${i.id}" type="number" min="${Math.max(rec,1)}" value="${+i.cantidad}" style="width:64px;padding:5px;border:1px solid var(--linea);border-radius:6px;text-align:right">`:(+i.cantidad)}</td>
       <td class="num"><span class="badge ${pend<=0?'b-verde':(rec>0?'b-ambar':'b-gris')}">${rec}</span></td>
       ${recibiendo?`<td class="num">${pend>0?`<input id="rec-${i.id}" type="number" min="0" max="${pend}" value="0" style="width:64px;padding:5px;border:1px solid var(--linea);border-radius:6px;text-align:right">`:'✓'}</td>`:''}
-      <td class="num">${fmt(i.costo_unit)}</td><td class="num">${fmt(i.importe)}</td>
+      ${verCostos?`<td class="num">${fmt(i.costo_unit)}</td><td class="num">${fmt(i.importe)}</td>`:''}
       ${editando?`<td style="text-align:center">${rec===0?`<input type="checkbox" id="ped-del-${i.id}">`:''}</td>`:''}</tr>`;
   };
   const badgesParte = its => {
@@ -2331,12 +2332,12 @@ async function verPedido(id, estado){
   abrirModal(`<h3>Partidas del pedido (${data.length}${grupos.size>1?` · ${grupos.size} partes`:''})</h3>
     ${resumenPartes(grupos, facturas, data, pindar)}
     <div id="ev-ped" class="small" style="margin:0 0 8px"></div>
-    ${facturas.length ? `<p class="small" style="margin-bottom:6px">🧾 <b>Facturas de este pedido:</b> ${facturas.map(f=>`${esc(f.folio)} (${fmt(f.total)})${f.pdf_path?` <button class="btn sm sec" onclick="verPdfFactura('${esc(f.pdf_path)}')">📄 Ver</button>`:''}`).join(' · ')}</p>` : ''}
+    ${facturas.length ? `<p class="small" style="margin-bottom:6px">🧾 <b>Facturas de este pedido:</b> ${facturas.map(f=>`${esc(f.folio)}${verCostos?` (${fmt(f.total)})${f.pdf_path?` <button class="btn sm sec" onclick="verPdfFactura('${esc(f.pdf_path)}')">📄 Ver</button>`:''}`:''}`).join(' · ')}</p>` : ''}
     ${recibiendo?`<p class="small muted" style="margin-bottom:8px">Cuando llegue una entrega: dale <b>📦 Recibir esta parte</b> (llena las cantidades pendientes de esa parte), coteja contra la factura 📄, ajusta si algo no llegó, y da clic en <b>Registrar recepción</b>. Solo lo recibido se suma al inventario.</p>`:''}
     <div class="tbl-scroll" style="max-height:400px;overflow-y:auto"><table>
-    <thead><tr><th>Producto</th><th class="num">Pedida</th><th class="num">Recibida</th>${recibiendo?'<th class="num">Recibir ahora</th>':''}<th class="num">Costo</th><th class="num">Importe</th>${editando?'<th>Quitar</th>':''}</tr></thead>
+    <thead><tr><th>Producto</th><th class="num">Pedida</th><th class="num">Recibida</th>${recibiendo?'<th class="num">Recibir ahora</th>':''}${verCostos?'<th class="num">Costo</th><th class="num">Importe</th>':''}${editando?'<th>Quitar</th>':''}</tr></thead>
     <tbody>${cuerpo}</tbody>
-    <tfoot><tr><th colspan="${nCols-1}" class="num">Suma</th><th class="num">${fmt(tot)}</th></tr></tfoot></table></div>
+    ${verCostos?`<tfoot><tr><th colspan="${nCols-1}" class="num">Suma</th><th class="num">${fmt(tot)}</th></tr></tfoot>`:''}</table></div>
     <div class="acciones">
       ${recibiendo?`<button class="btn sec" onclick="llenarPendiente()">Llenar TODO lo pendiente</button>
       <button class="btn" onclick="registrarRecepcion(${id})">Registrar recepción</button>`:''}
