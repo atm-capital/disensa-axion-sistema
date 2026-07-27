@@ -2476,18 +2476,19 @@ async function vCaja(){
     sb.from('ventas').select('folio,total,metodo_pago,fecha').gte('fecha', f+'T00:00:00-06:00').lt('fecha', f+'T23:59:59.999-06:00').eq('cancelada', false),
     sb.from('caja_movs').select('*').eq('fecha', f).order('creado'),
     sb.from('cortes_caja').select('*').eq('fecha', f).maybeSingle(),
-    sb.from('cortes_caja').select('fecha,contado,esperado,diferencia,deposito,nombre').order('fecha',{ascending:false}).limit(15)
+    sb.from('cortes_caja').select('fecha,contado,esperado,diferencia,deposito,deja_fondo,nombre').order('fecha',{ascending:false}).limit(15)
   ]);
   const fondoFijo = +((cfgR.data||{}).fondo_fijo||0);
   const vts = vtR.data||[], movs = mvR.data||[], corte = ctR.data, his = hisR.data||[];
+  const prev = his.find(c=>c.fecha < f); // lo que dejó el corte anterior manda sobre el fondo fijo
   const efectivo = vts.filter(v=>v.metodo_pago==='efectivo').reduce((s,v)=>s+ +v.total,0);
   const otros = {}; vts.filter(v=>v.metodo_pago!=='efectivo').forEach(v=>{ otros[v.metodo_pago]=(otros[v.metodo_pago]||0)+ +v.total; });
   const totOtros = Object.values(otros).reduce((s,x)=>s+x,0);
   const retiros = movs.filter(m=>m.tipo!=='entrada').reduce((s,m)=>s+ +m.monto,0);
   const entradas = movs.filter(m=>m.tipo==='entrada').reduce((s,m)=>s+ +m.monto,0);
-  const fondoUsar = corte ? +corte.fondo : fondoFijo;
+  const fondoUsar = corte ? +corte.fondo : (prev ? +prev.deja_fondo : fondoFijo);
   const esperado = Math.round((fondoUsar + efectivo + entradas - retiros)*100)/100;
-  window._cajaCalc = {fecha:f, fondo:fondoUsar, efectivo, otros:totOtros, retiros:retiros-entradas, esperado};
+  window._cajaCalc = {fecha:f, fondo:fondoUsar, efectivo, otros:totOtros, retiros:retiros-entradas, esperado, primero: !prev && !corte};
   const ico = {efectivo:'💵',tarjeta:'💳',transferencia:'🏦',ak_pago:'📱',credito:'📄'};
   $('vtools').innerHTML = `<input type="date" value="${f}" onchange="window._cajaFecha=this.value; vCaja()" style="padding:8px;border:1px solid var(--linea);border-radius:8px">
     ${puedeVender()?`<button class="btn sec" onclick="movCaja()">💸 Retiro / gasto</button>`:''}
@@ -2505,7 +2506,8 @@ async function vCaja(){
         <span class="badge ${Math.abs(+corte.diferencia)<0.5?'b-verde':(+corte.diferencia>0?'b-azul':'b-rojo')}">${+corte.diferencia===0?'cuadró exacto':(+corte.diferencia>0?'sobró '+fmt(corte.diferencia):'faltó '+fmt(Math.abs(corte.diferencia)))}</span></p>
         <p class="small muted">Lo hizo ${esc(corte.nombre)||'—'} · deja de fondo ${fmt(corte.deja_fondo)} · a depositar ${fmt(corte.deposito)}${corte.nota?' · '+esc(corte.nota):''}</p>
         ${esAdmin()?`<button class="btn sec sm" onclick="hacerCorte(true)">✏️ Corregir corte</button>`:''}`
-      : `<p class="small muted">Cuenta el efectivo del cajón (incluyendo el fondo) y captúralo. El sistema te dice si cuadra.</p>
+      : `<p class="small muted">Cuenta el efectivo del cajón (todo lo que hay) y captúralo. El sistema te dice si cuadra.</p>
+         <p class="small" id="caja-hist" style="margin:6px 0"></p>
          ${puedeVender()?`<button class="btn" onclick="hacerCorte()">💵 Hacer corte de caja</button>`:'<span class="muted small">Solo caja/admin puede cerrar el corte.</span>'}`}
     </div>
     ${movs.length?`<div class="card"><h3>Movimientos de efectivo del día</h3><div class="tbl-scroll"><table>
@@ -2520,6 +2522,19 @@ async function vCaja(){
         <td class="num">${fmt(c.esperado)}</td><td class="num">${fmt(c.contado)}</td>
         <td><span class="badge ${Math.abs(+c.diferencia)<0.5?'b-verde':(+c.diferencia>0?'b-azul':'b-rojo')}">${Math.abs(+c.diferencia)<0.5?'cuadró':(+c.diferencia>0?'+'+fmt(c.diferencia):fmt(c.diferencia))}</span></td>
         <td class="num">${fmt(c.deposito)}</td></tr>`).join('') || '<tr><td colspan="6" class="muted">Sin cortes registrados todavía.</td></tr>'}</tbody></table></div></div>`;
+  if(!corte && !prev) acumHistorico();
+}
+// Sin cortes previos: cuánto efectivo se ha acumulado desde que abrió la tienda (referencia para el primer conteo)
+async function acumHistorico(){
+  const el = $('caja-hist'); if(!el) return;
+  const [v, m] = await Promise.all([
+    sb.from('ventas').select('total,metodo_pago').eq('cancelada',false),
+    sb.from('caja_movs').select('tipo,monto')
+  ]);
+  const ef = (v.data||[]).filter(x=>x.metodo_pago==='efectivo').reduce((s,x)=>s+ +x.total,0);
+  const ret = (m.data||[]).filter(x=>x.tipo!=='entrada').reduce((s,x)=>s+ +x.monto,0);
+  const ent = (m.data||[]).filter(x=>x.tipo==='entrada').reduce((s,x)=>s+ +x.monto,0);
+  el.innerHTML = `📌 <b>Referencia:</b> desde que abrió la tienda se han cobrado <b>${fmt(ef)}</b> en efectivo${ret?` y se han registrado ${fmt(ret)} en retiros/gastos`:''}${ent?` y ${fmt(ent)} de entradas`:''}. Si nunca has hecho corte, en el cajón debería haber aprox. <b>${fmt(ef - ret + ent)}</b> más el dinero con el que arrancaron y menos los gastos que no se registraron aquí.`;
 }
 function movCaja(){
   abrirModal(`<h3>Retiro, gasto o entrada de efectivo</h3>
@@ -2540,11 +2555,12 @@ async function guardarMovCaja(){
 function hacerCorte(editando){
   const c = window._cajaCalc;
   abrirModal(`<h3>Corte de caja · ${fecha(c.fecha)}</h3>
+    ${c.primero?`<div class="card" style="border-left:4px solid #d97706;margin-bottom:10px;padding:10px"><b>Primer corte:</b> escribe con cuánto efectivo <b>abrió</b> hoy el cajón (lo que ya traía acumulado). De mañana en adelante se hereda solo lo que dejes de fondo.</div>`:''}
     <table style="width:100%;margin-bottom:10px"><tbody>
-      <tr><td>Fondo con el que abrió</td><td class="num">${fmt(c.fondo)}</td></tr>
+      <tr><td>Efectivo con el que abrió</td><td class="num"><input type="number" id="ct-ini" step="0.01" value="${c.fondo}" oninput="recalcEsperado()" style="width:110px;padding:5px;border:1px solid var(--linea);border-radius:6px;text-align:right"></td></tr>
       <tr><td>+ Ventas en efectivo</td><td class="num">${fmt(c.efectivo)}</td></tr>
       <tr><td>− Retiros y gastos</td><td class="num">${fmt(c.retiros)}</td></tr>
-      <tr><th style="border-top:2px solid var(--linea)">Debe haber en el cajón</th><th class="num" style="border-top:2px solid var(--linea);font-size:18px">${fmt(c.esperado)}</th></tr>
+      <tr><th style="border-top:2px solid var(--linea)">Debe haber en el cajón</th><th class="num" id="ct-esp" style="border-top:2px solid var(--linea);font-size:18px">${fmt(c.esperado)}</th></tr>
     </tbody></table>
     <label>💵 Efectivo contado (todo lo que hay en el cajón)</label>
     <input type="number" id="ct-contado" step="0.01" placeholder="0.00" oninput="calcDifCorte()">
@@ -2555,6 +2571,13 @@ function hacerCorte(editando){
     <label>Nota (opcional)</label><input id="ct-nota" placeholder="Ej: faltó por cambio de un cliente">
     <div class="acciones"><button class="btn" onclick="guardarCorte(${editando?'true':'false'})">Guardar corte</button><button class="btn sec" onclick="cerrarModal()">Cancelar</button></div>`);
   setTimeout(()=>$('ct-contado').focus(), 100);
+}
+function recalcEsperado(){
+  const c = window._cajaCalc;
+  c.fondo = +$('ct-ini').value||0;
+  c.esperado = Math.round((c.fondo + c.efectivo - c.retiros)*100)/100;
+  $('ct-esp').textContent = fmt(c.esperado);
+  calcDifCorte();
 }
 function calcDifCorte(){
   const c = window._cajaCalc, cont = +$('ct-contado').value||0, dej = +$('ct-fondo').value||0;
