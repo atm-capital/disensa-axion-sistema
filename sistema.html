@@ -2365,6 +2365,7 @@ async function vPedidos(){
       <div class="kpi" style="cursor:pointer;${!window._pedFiltro?'':'opacity:.75'}" title="Ver todos" onclick="window._pedFiltro=null; vPedidos()"><div class="l">Total pedidos (${data.filter(p=>p.estado!=='cancelado').length})</div><div class="v">${esFinanzas()?fmt(totalGral):data.filter(p=>p.estado!=='cancelado').length+' 📦'}</div></div>
     </div>` + `
     <div class="card"><h3>Pedidos de compra${window._pedFiltro?` · filtro: <span class="badge ${badges[window._pedFiltro]}">${window._pedFiltro}</span>`:''}</h3>
+    ${puedeVender()?`<button class="btn sm" style="float:right;margin-left:10px" onclick="buscarFolio()">🔍 ¿Qué me están entregando?</button>`:''}
     <button class="btn sm" style="float:right;margin-left:10px" onclick="syncIndar()">🔄 Actualizar estatus Indar</button><button class="btn sm sec" style="float:right" onclick="traerFacturasIndar()">🧾 Traer facturas de Indar</button><p class="small muted" style="margin-bottom:10px">Los pedidos se capturan en el portal del proveedor (Indar / Holcim) y aquí se registran para dar seguimiento. Al marcar <b>Recibido</b>, las cantidades se suman al inventario automáticamente.</p>
     <div class="tbl-scroll"><table>
       <thead><tr><th>Folio</th><th>Proveedor</th><th>Fecha</th><th>Estado</th><th>Partes / avance</th><th>Plazo</th>${esFinanzas()?'<th class="num">Total</th>':''}<th></th></tr></thead>
@@ -2382,6 +2383,54 @@ async function vPedidos(){
     <tbody>${pr.data.map(x=>`<tr><td><b>${esc(x.nombre)}</b></td><td>${esc(x.codigo_cliente)}</td>
       <td>${x.portal?`<a href="${esc(x.portal)}" target="_blank">${esc(x.portal)}</a>`:''}</td>
       <td class="small">${esc(x.contacto)}</td></tr>`).join('')}</tbody>`;
+}
+/* ===== Buscador universal de folios: "¿qué me están entregando?" (v76) =====
+   Indar entrega agrupando: un papel puede traer varias facturas y partes de distintos pedidos.
+   Aquí capturan CUALQUIER número del papel y el sistema les dice a qué pedido pertenece. */
+function buscarFolio(){
+  abrirModal(`<h3>🔍 ¿Qué me están entregando?</h3>
+    <p class="small muted" style="margin:0 0 8px">Escribe cualquier número que venga en el papel: <b>factura</b>, <b>parte</b> (sales order) o <b>pedido</b>. Te digo a cuál pertenece.</p>
+    <input id="bf-q" placeholder="Ej: 2792053, 2948863 o 1405623" onkeydown="if(event.key==='Enter')hacerBuscarFolio()" style="font-size:17px;padding:11px">
+    <div id="bf-res" style="margin-top:10px"></div>
+    <div class="acciones"><button class="btn" onclick="hacerBuscarFolio()">Buscar</button><button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`);
+  setTimeout(()=>$('bf-q').focus(), 100);
+}
+async function hacerBuscarFolio(){
+  const q = ($('bf-q').value||'').replace(/\D/g,'').trim();
+  const el = $('bf-res');
+  if(!q){ el.innerHTML = '<p class="small" style="color:#b91c1c">Escribe un número</p>'; return; }
+  el.innerHTML = '<p class="small muted">Buscando...</p>';
+  const [fxR, itR, pcR] = await Promise.all([
+    sb.from('facturas').select('folio,total,pedido_id,fecha').ilike('folio','%'+q+'%'),
+    sb.from('pedido_compra_items').select('pedido_id,parte,cantidad,cantidad_recibida').ilike('parte','%'+q+'%'),
+    sb.from('pedidos_compra').select('id,folio_externo,estado,fecha,total').ilike('folio_externo','%'+q+'%')
+  ]);
+  const hits = new Map(); // pedido_id -> motivos
+  (fxR.data||[]).forEach(f=>{ if(f.pedido_id){ const m=hits.get(f.pedido_id)||[]; m.push('🧾 factura '+f.folio); hits.set(f.pedido_id,m); } });
+  (itR.data||[]).forEach(i=>{ const m=hits.get(i.pedido_id)||[]; const t='📦 parte '+i.parte; if(!m.includes(t)) m.push(t); hits.set(i.pedido_id,m); });
+  (pcR.data||[]).forEach(p=>{ const m=hits.get(p.id)||[]; m.push('🚚 pedido '+p.folio_externo); hits.set(p.id,m); });
+  if(!hits.size){
+    const fxSin = (fxR.data||[]).filter(f=>!f.pedido_id);
+    el.innerHTML = `<div class="card" style="border-left:4px solid #b91c1c;padding:10px">
+      <b>❌ Ese número no está en el sistema.</b><br>
+      ${fxSin.length?`Existe la factura ${esc(fxSin[0].folio)} pero no está ligada a ningún pedido.`:'Puede ser de un pedido que aún no se importa, o el papel es de otro cliente.'}
+      <br><span class="small muted">NO recibas hasta confirmarlo. Avísale a Andrés.</span></div>`;
+    return;
+  }
+  const ids = [...hits.keys()];
+  const peds = await sb.from('pedidos_compra').select('id,folio_externo,estado,fecha,total').in('id', ids);
+  const its = await sb.from('pedido_compra_items').select('pedido_id,parte,cantidad,cantidad_recibida').in('pedido_id', ids);
+  el.innerHTML = (peds.data||[]).map(p=>{
+    const mine = (its.data||[]).filter(x=>x.pedido_id===p.id);
+    const pend = mine.reduce((s,x)=>s+(+x.cantidad - +(x.cantidad_recibida||0)),0);
+    const partes = [...new Set(mine.map(x=>x.parte||''))].filter(Boolean);
+    return `<div class="card" style="border-left:4px solid var(--verde,#15803d);padding:10px;margin-bottom:8px">
+      <b>✅ Es del pedido ${esc(p.folio_externo)}</b> <span class="badge b-${p.estado==='recibido'?'verde':(p.estado==='parcial'?'ambar':'azul')}">${p.estado}</span>
+      <br><span class="small">Coincide por: ${hits.get(p.id).join(' · ')}</span>
+      <br><span class="small muted">${mine.length} partidas · ${partes.length} parte(s) · <b>${pend}</b> pieza(s) por recibir</span>
+      <div style="margin-top:8px"><button class="btn sm" onclick="cerrarModal(); verPedido(${p.id}, '${p.estado}')">Abrir este pedido y recibir</button></div>
+    </div>`;
+  }).join('');
 }
 let pedItems = [];
 async function verPedido(id, estado){
