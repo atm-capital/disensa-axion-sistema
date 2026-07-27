@@ -176,6 +176,7 @@ tr.oculto,tr.plegado{display:none}
       <div id="v-inventario" class="view"></div>
       <div id="v-clientes" class="view"></div>
       <div id="v-pedidos" class="view"></div>
+      <div id="v-caja" class="view"></div>
       <div id="v-finanzas" class="view"></div>
       <div id="v-importar" class="view"></div>
       <div id="v-usuarios" class="view"></div>
@@ -290,6 +291,7 @@ const VISTAS = [
   {id:'inventario', icono:'📦', titulo:'Inventario', roles:['admin','vendedor','consulta','contador']},
   {id:'clientes',   icono:'👥', titulo:'Clientes',   roles:['admin','vendedor','consulta']},
   {id:'pedidos',    icono:'🚚', titulo:'Pedidos a proveedor', roles:['admin','vendedor','consulta','contador']},
+  {id:'caja',       icono:'💵', titulo:'Corte de caja', roles:['admin','vendedor','contador']},
   {id:'finanzas',   icono:'💰', titulo:'Finanzas',   roles:['admin','consulta','contador']},
   {id:'importar',   icono:'📥', titulo:'Importar',   roles:['admin']},
   {id:'usuarios',   icono:'🔑', titulo:'Usuarios',   roles:['admin']},
@@ -313,7 +315,7 @@ async function irA(id){
   try{ localStorage.setItem('ax_vista', id); }catch(e){}
   logEv('vista', id);
   try { await ({resumen:vResumen, ventas:vVentas, cotizaciones:vCotizaciones, catalogo:vCatalogo, inventario:vInventario, clientes:vClientes,
-    pedidos:vPedidos, finanzas:vFinanzas, usuarios:vUsuarios, importar:vImportar, actividad:vActividad})[id](); }
+    pedidos:vPedidos, caja:vCaja, finanzas:vFinanzas, usuarios:vUsuarios, importar:vImportar, actividad:vActividad})[id](); }
   catch(e){ toast(errMsg(e), true); }
 }
 
@@ -2461,6 +2463,133 @@ async function recibirPedido(id){
   const {error} = await sb.rpc('recibir_pedido', {p_pedido_id:id});
   if(error){ toast(errMsg(error),true); return; }
   toast('Pedido recibido completo: inventario actualizado ✓'); vPedidos();
+}
+
+/* ============================================================
+   VISTA: CORTE DE CAJA (v72)
+============================================================ */
+function hoyMX(){ return new Date(Date.now() - 6*3600e3).toISOString().slice(0,10); }
+async function vCaja(){
+  const f = window._cajaFecha || hoyMX();
+  const [cfgR, vtR, mvR, ctR, hisR] = await Promise.all([
+    sb.from('caja_config').select('fondo_fijo').eq('id',1).maybeSingle(),
+    sb.from('ventas').select('folio,total,metodo_pago,fecha').gte('fecha', f+'T00:00:00-06:00').lt('fecha', f+'T23:59:59.999-06:00').eq('cancelada', false),
+    sb.from('caja_movs').select('*').eq('fecha', f).order('creado'),
+    sb.from('cortes_caja').select('*').eq('fecha', f).maybeSingle(),
+    sb.from('cortes_caja').select('fecha,contado,esperado,diferencia,deposito,nombre').order('fecha',{ascending:false}).limit(15)
+  ]);
+  const fondoFijo = +((cfgR.data||{}).fondo_fijo||0);
+  const vts = vtR.data||[], movs = mvR.data||[], corte = ctR.data, his = hisR.data||[];
+  const efectivo = vts.filter(v=>v.metodo_pago==='efectivo').reduce((s,v)=>s+ +v.total,0);
+  const otros = {}; vts.filter(v=>v.metodo_pago!=='efectivo').forEach(v=>{ otros[v.metodo_pago]=(otros[v.metodo_pago]||0)+ +v.total; });
+  const totOtros = Object.values(otros).reduce((s,x)=>s+x,0);
+  const retiros = movs.filter(m=>m.tipo!=='entrada').reduce((s,m)=>s+ +m.monto,0);
+  const entradas = movs.filter(m=>m.tipo==='entrada').reduce((s,m)=>s+ +m.monto,0);
+  const fondoUsar = corte ? +corte.fondo : fondoFijo;
+  const esperado = Math.round((fondoUsar + efectivo + entradas - retiros)*100)/100;
+  window._cajaCalc = {fecha:f, fondo:fondoUsar, efectivo, otros:totOtros, retiros:retiros-entradas, esperado};
+  const ico = {efectivo:'💵',tarjeta:'💳',transferencia:'🏦',ak_pago:'📱',credito:'📄'};
+  $('vtools').innerHTML = `<input type="date" value="${f}" onchange="window._cajaFecha=this.value; vCaja()" style="padding:8px;border:1px solid var(--linea);border-radius:8px">
+    ${puedeVender()?`<button class="btn sec" onclick="movCaja()">💸 Retiro / gasto</button>`:''}
+    ${esAdmin()?`<button class="btn sec" onclick="configFondo(${fondoFijo})">⚙️ Fondo fijo</button>`:''}`;
+  $('v-caja').innerHTML = `
+    <div class="kpis">
+      <div class="kpi"><div class="l">Ventas en efectivo</div><div class="v">${fmt(efectivo)}</div><div class="s">${vts.filter(v=>v.metodo_pago==='efectivo').length} venta(s)</div></div>
+      <div class="kpi"><div class="l">Otros pagos</div><div class="v">${fmt(totOtros)}</div><div class="s">${Object.keys(otros).map(k=>(ico[k]||'')+' '+fmt(otros[k])).join(' · ')||'—'}</div></div>
+      <div class="kpi"><div class="l">Retiros y gastos</div><div class="v">${fmt(retiros)}</div><div class="s">${movs.length} movimiento(s)</div></div>
+      <div class="kpi" style="outline:2px solid var(--naranja,#e8862d)"><div class="l">Efectivo que debe haber</div><div class="v">${fmt(esperado)}</div><div class="s">fondo ${fmt(fondoUsar)} + ventas − retiros</div></div>
+    </div>
+    <div class="card">
+      <h3>${corte?'✅ Corte del '+fecha(f):'Corte de caja · '+fecha(f)}</h3>
+      ${corte ? `<p>Contado: <b>${fmt(corte.contado)}</b> · Esperado: <b>${fmt(corte.esperado)}</b> ·
+        <span class="badge ${Math.abs(+corte.diferencia)<0.5?'b-verde':(+corte.diferencia>0?'b-azul':'b-rojo')}">${+corte.diferencia===0?'cuadró exacto':(+corte.diferencia>0?'sobró '+fmt(corte.diferencia):'faltó '+fmt(Math.abs(corte.diferencia)))}</span></p>
+        <p class="small muted">Lo hizo ${esc(corte.nombre)||'—'} · deja de fondo ${fmt(corte.deja_fondo)} · a depositar ${fmt(corte.deposito)}${corte.nota?' · '+esc(corte.nota):''}</p>
+        ${esAdmin()?`<button class="btn sec sm" onclick="hacerCorte(true)">✏️ Corregir corte</button>`:''}`
+      : `<p class="small muted">Cuenta el efectivo del cajón (incluyendo el fondo) y captúralo. El sistema te dice si cuadra.</p>
+         ${puedeVender()?`<button class="btn" onclick="hacerCorte()">💵 Hacer corte de caja</button>`:'<span class="muted small">Solo caja/admin puede cerrar el corte.</span>'}`}
+    </div>
+    ${movs.length?`<div class="card"><h3>Movimientos de efectivo del día</h3><div class="tbl-scroll"><table>
+      <thead><tr><th>Hora</th><th>Tipo</th><th>Concepto</th><th>Quién</th><th class="num">Monto</th></tr></thead>
+      <tbody>${movs.map(m=>`<tr><td class="small">${(m.creado||'').slice(11,16)}</td>
+        <td><span class="badge ${m.tipo==='entrada'?'b-verde':'b-ambar'}">${m.tipo}</span></td>
+        <td>${esc(m.concepto)||'—'}</td><td class="small">${esc(m.nombre)||''}</td>
+        <td class="num"><b>${m.tipo==='entrada'?'+':'−'}${fmt(m.monto)}</b></td></tr>`).join('')}</tbody></table></div></div>`:''}
+    <div class="card"><h3>Cortes anteriores</h3><div class="tbl-scroll"><table>
+      <thead><tr><th>Fecha</th><th>Quién</th><th class="num">Esperado</th><th class="num">Contado</th><th>Diferencia</th><th class="num">Depositado</th></tr></thead>
+      <tbody>${his.map(c=>`<tr style="cursor:pointer" onclick="window._cajaFecha='${c.fecha}'; vCaja()"><td>${fecha(c.fecha)}</td><td class="small">${esc(c.nombre)||''}</td>
+        <td class="num">${fmt(c.esperado)}</td><td class="num">${fmt(c.contado)}</td>
+        <td><span class="badge ${Math.abs(+c.diferencia)<0.5?'b-verde':(+c.diferencia>0?'b-azul':'b-rojo')}">${Math.abs(+c.diferencia)<0.5?'cuadró':(+c.diferencia>0?'+'+fmt(c.diferencia):fmt(c.diferencia))}</span></td>
+        <td class="num">${fmt(c.deposito)}</td></tr>`).join('') || '<tr><td colspan="6" class="muted">Sin cortes registrados todavía.</td></tr>'}</tbody></table></div></div>`;
+}
+function movCaja(){
+  abrirModal(`<h3>Retiro, gasto o entrada de efectivo</h3>
+    <label>Tipo</label><select id="mc-tipo"><option value="retiro">💸 Retiro (a bóveda / depósito)</option><option value="gasto">🧾 Gasto pagado de la caja</option><option value="entrada">➕ Entrada de efectivo</option></select>
+    <label>Monto</label><input type="number" id="mc-monto" step="0.01" min="0.01" placeholder="0.00">
+    <label>Concepto</label><input id="mc-con" placeholder="Ej: depósito al banco, gasolina, cambio de $500">
+    <div class="acciones"><button class="btn" onclick="guardarMovCaja()">Guardar</button><button class="btn sec" onclick="cerrarModal()">Cancelar</button></div>`);
+  setTimeout(()=>$('mc-monto').focus(), 100);
+}
+async function guardarMovCaja(){
+  const monto = +$('mc-monto').value||0;
+  if(monto<=0){ toast('Escribe el monto', true); return; }
+  const {error} = await sb.from('caja_movs').insert({tipo:$('mc-tipo').value, monto, concepto:$('mc-con').value.trim(), nombre:perfil.nombre||perfil.correo, usuario_id:perfil.id, fecha: window._cajaFecha||hoyMX()});
+  if(error){ toast(errMsg(error), true); return; }
+  logEv('caja_mov', $('mc-tipo').value+' '+monto);
+  cerrarModal(); toast('Movimiento registrado ✓'); vCaja();
+}
+function hacerCorte(editando){
+  const c = window._cajaCalc;
+  abrirModal(`<h3>Corte de caja · ${fecha(c.fecha)}</h3>
+    <table style="width:100%;margin-bottom:10px"><tbody>
+      <tr><td>Fondo con el que abrió</td><td class="num">${fmt(c.fondo)}</td></tr>
+      <tr><td>+ Ventas en efectivo</td><td class="num">${fmt(c.efectivo)}</td></tr>
+      <tr><td>− Retiros y gastos</td><td class="num">${fmt(c.retiros)}</td></tr>
+      <tr><th style="border-top:2px solid var(--linea)">Debe haber en el cajón</th><th class="num" style="border-top:2px solid var(--linea);font-size:18px">${fmt(c.esperado)}</th></tr>
+    </tbody></table>
+    <label>💵 Efectivo contado (todo lo que hay en el cajón)</label>
+    <input type="number" id="ct-contado" step="0.01" placeholder="0.00" oninput="calcDifCorte()">
+    <p id="ct-dif" class="small muted" style="margin:6px 0">Captura el conteo para ver si cuadra.</p>
+    <label>¿Cuánto dejas de fondo para mañana?</label>
+    <input type="number" id="ct-fondo" step="0.01" value="${c.fondo}" oninput="calcDifCorte()">
+    <p id="ct-dep" class="small" style="margin:6px 0"></p>
+    <label>Nota (opcional)</label><input id="ct-nota" placeholder="Ej: faltó por cambio de un cliente">
+    <div class="acciones"><button class="btn" onclick="guardarCorte(${editando?'true':'false'})">Guardar corte</button><button class="btn sec" onclick="cerrarModal()">Cancelar</button></div>`);
+  setTimeout(()=>$('ct-contado').focus(), 100);
+}
+function calcDifCorte(){
+  const c = window._cajaCalc, cont = +$('ct-contado').value||0, dej = +$('ct-fondo').value||0;
+  const dif = Math.round((cont - c.esperado)*100)/100;
+  const el = $('ct-dif');
+  el.innerHTML = !$('ct-contado').value ? 'Captura el conteo para ver si cuadra.'
+    : (Math.abs(dif)<0.5 ? '<b style="color:var(--verde,#15803d)">✅ Cuadra exacto</b>'
+    : (dif>0 ? `<b style="color:#2563eb">Sobran ${fmt(dif)}</b> — revisa si falta registrar una venta`
+             : `<b style="color:#b91c1c">Faltan ${fmt(Math.abs(dif))}</b> — revisa cambios o gastos sin registrar`));
+  $('ct-dep').innerHTML = cont>0 ? `A depositar / guardar: <b>${fmt(Math.max(0, Math.round((cont-dej)*100)/100))}</b>` : '';
+}
+async function guardarCorte(editando){
+  const c = window._cajaCalc, cont = +$('ct-contado').value||0, dej = +$('ct-fondo').value||0;
+  if(!$('ct-contado').value){ toast('Captura el efectivo contado', true); return; }
+  const dif = Math.round((cont - c.esperado)*100)/100;
+  if(Math.abs(dif)>=0.5 && !confirm((dif>0?'Sobran ':'Faltan ')+fmt(Math.abs(dif))+'. ¿Guardar el corte así?')) return;
+  const row = {fecha:c.fecha, nombre:perfil.nombre||perfil.correo, usuario_id:perfil.id, fondo:c.fondo,
+    ventas_efectivo:c.efectivo, ventas_otros:c.otros, retiros:c.retiros, contado:cont, esperado:c.esperado,
+    diferencia:dif, deja_fondo:dej, deposito:Math.max(0, Math.round((cont-dej)*100)/100), nota:$('ct-nota').value.trim()};
+  const {error} = await sb.from('cortes_caja').upsert(row, {onConflict:'fecha'});
+  if(error){ toast(errMsg(error), true); return; }
+  logEv('corte_caja', c.fecha+' dif '+dif);
+  cerrarModal(); toast(Math.abs(dif)<0.5?'Corte guardado: cuadró ✓':'Corte guardado con diferencia'); vCaja();
+}
+function configFondo(actual){
+  abrirModal(`<h3>Fondo fijo de caja</h3>
+    <p class="small muted">Es el dinero que se queda en el cajón para dar cambio. Se usa como punto de partida de cada día.</p>
+    <label>Monto del fondo</label><input type="number" id="cf-monto" step="0.01" value="${actual||''}" placeholder="Ej: 1500">
+    <div class="acciones"><button class="btn" onclick="guardarFondo()">Guardar</button><button class="btn sec" onclick="cerrarModal()">Cancelar</button></div>`);
+}
+async function guardarFondo(){
+  const m = +$('cf-monto').value||0;
+  const {error} = await sb.from('caja_config').upsert({id:1, fondo_fijo:m, actualizado:new Date().toISOString()});
+  if(error){ toast(errMsg(error), true); return; }
+  cerrarModal(); toast('Fondo fijo guardado: '+fmt(m)); vCaja();
 }
 
 /* ============================================================
