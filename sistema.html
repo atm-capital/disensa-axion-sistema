@@ -3042,6 +3042,34 @@ async function axBM(){
   }catch(e){alert('Axion fallo: '+e.message+'. Reintenta o avisale a Claude.');}
 }
 const BOOKMARKLET = 'javascript:(' + axBM.toString().replace(/\r/g,'').replace(/\n\s*/g,' ') + ')();';
+/* ===== Instalar el marcador en iPad/iPhone (v77) — el código mide ~13 mil letras, hay que copiarlo completo ===== */
+function instalarBM(){
+  abrirModal(`<h3>📱 Instalar "Enviar a Axion" en iPad o iPhone</h3>
+    <p class="small muted" style="margin:0 0 8px">En iPad no se puede arrastrar. Se copia el código y se pega en un marcador. Sigue los pasos <b>en el mismo orden</b>.</p>
+    <ol style="margin:0 0 10px 18px;line-height:1.8">
+      <li><b>Copia el código</b> con el botón de abajo (o toca dentro del recuadro → <i>Seleccionar todo</i> → <i>Copiar</i>).</li>
+      <li>Abre <b>cualquier página</b> en Safari → botón <b>Compartir</b> ⬆️ → <b>Añadir marcador</b> → nómbralo <b>Enviar a Axion</b> → Guardar (déjalo en Favoritos).</li>
+      <li>Toca el ícono de <b>libro</b> 📖 → <b>Editar</b> → toca ese marcador → borra TODA la dirección → <b>pega</b> el código → sal de Editar.</li>
+      <li><b>Verifica</b> que la dirección empiece con <code>javascript:</code> — Safari a veces lo borra. Si falta, escríbelo tú al inicio.</li>
+      <li><b>Para usarlo:</b> entra a indar.mx con tu sesión, toca la barra de direcciones, escribe <i>Enviar a Axion</i> y toca el marcador que aparece abajo.</li>
+    </ol>
+    <textarea id="bm-code" readonly onclick="this.focus();this.setSelectionRange(0,999999)"
+      style="width:100%;height:120px;font-family:monospace;font-size:11px;padding:8px;border:1px solid var(--linea);border-radius:8px">${esc(BOOKMARKLET)}</textarea>
+    <p class="small muted" style="margin:6px 0">Son ${BOOKMARKLET.length.toLocaleString('es-MX')} letras: asegúrate de copiar TODO (si copias de menos, no funciona y no avisa).</p>
+    <div class="acciones">
+      <button class="btn" onclick="copiarBM()">📋 Copiar código completo</button>
+      <button class="btn sec" onclick="$('bm-code').focus();$('bm-code').setSelectionRange(0,999999)">Seleccionar todo</button>
+      <button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
+}
+async function copiarBM(){
+  const ta = $('bm-code');
+  ta.focus(); ta.setSelectionRange(0, 999999);
+  let ok = false;
+  try{ await navigator.clipboard.writeText(BOOKMARKLET); ok = true; }catch(e){}
+  if(!ok){ try{ ok = document.execCommand('copy'); }catch(e){} }
+  toast(ok ? 'Código copiado ✓ (' + BOOKMARKLET.length.toLocaleString('es-MX') + ' letras) — ahora pégalo en el marcador'
+           : 'No pude copiar solo: toca el recuadro → Seleccionar todo → Copiar', !ok);
+}
 let impData = null;
 function deB64(s){ s = s.replace(/-/g,'+').replace(/_/g,'/'); return decodeURIComponent(escape(atob(s))); }
 async function vImportar(){
@@ -3056,7 +3084,8 @@ async function vImportar(){
         <p style="margin-bottom:6px"><b>Instalación (una sola vez):</b> arrastra este botón a tu barra de marcadores de Chrome
         (si no la ves, presiona Ctrl+Shift+B):</p>
         <p style="margin:14px 0"><a href="${BOOKMARKLET.replace(/"/g,'&quot;')}" class="btn" style="text-decoration:none"
-          onclick="toast('Arrástralo a la barra de marcadores, no le des clic aquí', true); return false;">🔧 Enviar a Axion</a></p>
+          onclick="toast('Arrástralo a la barra de marcadores, no le des clic aquí', true); return false;">🔧 Enviar a Axion</a>
+          <button class="btn sec" style="margin-left:8px" onclick="instalarBM()">📱 Instalar en iPad / iPhone</button></p>
         <p class="small muted"><b>Cómo se usa:</b> 1) Entra a indar.mx con tu usuario → Pedidos → Pedidos Anteriores.
         2) Da clic en el marcador "Enviar a Axion". 3) Elige la cotización. 4) Se abre esta pantalla con todo precargado y confirmas.</p>
       </div>
