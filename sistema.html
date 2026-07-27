@@ -1916,16 +1916,14 @@ async function vInventario(){
     $('vtools').innerHTML = `<button class="btn" onclick="editarProducto(null)">+ Producto</button>
     <button class="btn sec" onclick="verResurtido()">🛒 Resurtido</button>
     <button class="btn sec" id="btn-sol-res" onclick="verSolicitudesRes()">📥 Solicitudes</button>
-    <button class="btn sec" onclick="etiquetasPrecios()">🏷️ Precios tienda</button>
-    <button class="btn sec" id="btn-eti-nuevas" onclick="etiquetasPrecios(true)">🏷️ Nuevas</button>
+    <button class="btn sec" id="btn-eti-nuevas" onclick="elegirEtiquetas()">🏷️ Etiquetas</button>
     <button class="btn sec" onclick="compararStockSafdi()">⚖️ Stock SAFDI</button>
     <button class="btn sec" onclick="exportarInv()">Exportar CSV</button>`;
     sb.from('resurtido_solicitudes').select('id',{count:'exact',head:true}).eq('estado','pendiente')
       .then(({count})=>{ const b=$('btn-sol-res'); if(b && count) b.innerHTML='📥 Solicitudes <span class="badge b-ambar">'+count+'</span>'; });
   }
   else if(puedeVender()) $('vtools').innerHTML = `<button class="btn" onclick="solicitarResurtido()">🛒 Pedir resurtido</button>
-    <button class="btn sec" onclick="etiquetasPrecios()">🏷️ Precios tienda</button>
-    <button class="btn sec" id="btn-eti-nuevas" onclick="etiquetasPrecios(true)">🏷️ Nuevas</button>`;
+    <button class="btn sec" id="btn-eti-nuevas" onclick="elegirEtiquetas()">🏷️ Etiquetas</button>`;
   const [{data, error}, mv, mr] = await Promise.all([
     sb.from('productos').select('*').order('descripcion'),
     sb.from('venta_items').select('producto_id,cantidad,ventas!inner(cancelada)').eq('ventas.cancelada', false).range(0,9999),
@@ -1945,7 +1943,7 @@ async function vInventario(){
         nMov = data.filter(noMov).length,
         nCB  = data.filter(p=>!(p.codigo_barras||'').trim()).length;
   { const nNue = data.filter(p=>p.activo && +p.precio>0 && !p.etiqueta_at).length;
-    const be = $('btn-eti-nuevas'); if(be) be.innerHTML = '🏷️ Nuevas' + (nNue?' <span class="badge b-ambar">'+nNue+'</span>':''); }
+    const be = $('btn-eti-nuevas'); if(be) be.innerHTML = '🏷️ Etiquetas' + (nNue?' <span class="badge b-ambar">'+nNue+'</span>':''); }
   $('v-inventario').innerHTML = `
     ${esFinanzas()?'<div class="kpis" id="inv-kpis" style="margin-bottom:14px"></div>':''}
     <div class="toolbar">
@@ -2185,15 +2183,71 @@ async function guardarProducto(id){
   if(error){ toast(errMsg(error), true); return; }
   cerrarModal(); toast('Producto guardado'); vInventario();
 }
-function etiquetasPrecios(soloNuevas){
-  const q = ($('inv-q').value||'').toLowerCase().trim();
-  const cat = $('inv-cat').value;
-  const rows = invData.filter(p => p.activo && +p.precio>0 &&
-    (!soloNuevas || !p.etiqueta_at) &&
-    (!q || p.codigo.toLowerCase().includes(q) || p.descripcion.toLowerCase().includes(q)) &&
-    (!cat || p.categoria === cat))
-    .sort((a,b)=>a.categoria.localeCompare(b.categoria)||a.descripcion.localeCompare(b.descripcion));
-  if(!rows.length){ toast(soloNuevas ? 'No hay etiquetas pendientes 🎉 Todo tiene su tarjeta' : 'No hay productos con precio con los filtros actuales', !soloNuevas); return; }
+/* ===== Selector de etiquetas: elegir exactamente cuáles imprimir (v74) ===== */
+let etiSel = new Set();
+function elegirEtiquetas(){
+  etiSel = new Set();
+  abrirModal(`<h3>🏷️ Imprimir etiquetas de precio</h3>
+    <p class="small muted" style="margin:0 0 8px">Elige nada más las que necesitas. Caben <b>24 etiquetas por hoja</b>.</p>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+      <button class="btn sec sm" onclick="etiFiltro('pend')">🆕 Sin etiqueta impresa</button>
+      <button class="btn sec sm" onclick="etiFiltro('stock')">📦 Con stock</button>
+      <button class="btn sec sm" onclick="etiFiltro('todos')">Todos</button>
+      <button class="btn sec sm" onclick="etiSel=new Set(); pintarEti()">✖ Limpiar selección</button>
+    </div>
+    <input type="search" id="eti-q" placeholder="Buscar por código, descripción o categoría..." oninput="pintarEti()" style="margin-bottom:6px">
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
+      <button class="btn sec sm" onclick="etiTodos(true)">Seleccionar todo lo que se ve</button>
+      <button class="btn sec sm" onclick="etiTodos(false)">Quitar los que se ven</button>
+      <span id="eti-cnt" class="small"></span>
+    </div>
+    <div id="eti-lista" class="tbl-scroll" style="max-height:340px;overflow-y:auto;border:1px solid var(--linea);border-radius:8px"></div>
+    <div class="acciones">
+      <button class="btn" id="eti-btn" onclick="imprimirEtiSel()">🖨 Imprimir seleccionadas</button>
+      <button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
+  window._etiFiltro = 'pend';
+  pintarEti();
+}
+function etiFiltro(f){ window._etiFiltro = f; pintarEti(); }
+function etiFilas(){
+  const q = ($('eti-q')?($('eti-q').value||''):'').toLowerCase().trim();
+  const f = window._etiFiltro||'pend';
+  return invData.filter(p => p.activo && +p.precio>0
+    && (f==='todos' || (f==='pend' ? !p.etiqueta_at : +p.stock>0))
+    && (!q || (p.codigo+' '+p.descripcion+' '+(p.categoria||'')).toLowerCase().includes(q)))
+    .sort((a,b)=>(a.categoria||'').localeCompare(b.categoria||'')||a.descripcion.localeCompare(b.descripcion));
+}
+function pintarEti(){
+  const rows = etiFilas();
+  $('eti-lista').innerHTML = `<table><tbody>${rows.slice(0,400).map(p=>`<tr style="cursor:pointer" onclick="etiTog(${p.id})">
+    <td style="width:34px"><input type="checkbox" id="eti-${p.id}" ${etiSel.has(p.id)?'checked':''} onclick="event.stopPropagation(); etiTog(${p.id})"></td>
+    <td><b>${esc(p.codigo)}</b> · ${esc(p.descripcion.slice(0,46))}<br><span class="small muted">${esc(p.categoria)} · stock ${+p.stock} · ${fmt(p.precio)}${p.etiqueta_at?'':' · <b style="color:#d97706">sin etiqueta</b>'}</span></td>
+    </tr>`).join('')}</tbody></table>${rows.length>400?'<p class="small muted" style="padding:8px">Mostrando 400 de '+rows.length+' — usa el buscador para afinar.</p>':''}`;
+  actCntEti();
+}
+function etiTog(id){
+  if(etiSel.has(id)) etiSel.delete(id); else etiSel.add(id);
+  const c = $('eti-'+id); if(c) c.checked = etiSel.has(id);
+  actCntEti();
+}
+function etiTodos(add){
+  etiFilas().forEach(p=>{ if(add) etiSel.add(p.id); else etiSel.delete(p.id); });
+  pintarEti();
+}
+function actCntEti(){
+  const n = etiSel.size, hojas = Math.ceil(n/24);
+  const el = $('eti-cnt'); if(el) el.innerHTML = n ? `<b>${n}</b> seleccionada(s) · ${hojas} hoja(s)` : '<span class="muted">ninguna seleccionada</span>';
+  const b = $('eti-btn'); if(b) b.textContent = n ? `🖨 Imprimir ${n} etiqueta(s)` : '🖨 Imprimir seleccionadas';
+}
+function imprimirEtiSel(){
+  if(!etiSel.size){ toast('Selecciona al menos un producto', true); return; }
+  const rows = invData.filter(p=>etiSel.has(p.id))
+    .sort((a,b)=>(a.categoria||'').localeCompare(b.categoria||'')||a.descripcion.localeCompare(b.descripcion));
+  cerrarModal();
+  pintarEtiquetas(rows);
+}
+function pintarEtiquetas(rows){
+  if(!rows || !rows.length){ toast('No hay productos que imprimir', true); return; }
   const w = window.open('','_blank');
   if(!w){ toast('Permite las ventanas emergentes para imprimir', true); return; }
   w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Precios tienda · Axion Tools</title>
@@ -2216,7 +2270,7 @@ function etiquetasPrecios(soloNuevas){
     const ahora = new Date().toISOString();
     rows.forEach(r=>{ r.etiqueta_at = ahora; });
     const be = $('btn-eti-nuevas');
-    if(be){ const nNue = invData.filter(p=>p.activo && +p.precio>0 && !p.etiqueta_at).length; be.innerHTML = '🏷️ Nuevas' + (nNue?' <span class="badge b-ambar">'+nNue+'</span>':''); }
+    if(be){ const nNue = invData.filter(p=>p.activo && +p.precio>0 && !p.etiqueta_at).length; be.innerHTML = '🏷️ Etiquetas' + (nNue?' <span class="badge b-ambar">'+nNue+'</span>':''); }
   });
 }
 function exportarInv(){
