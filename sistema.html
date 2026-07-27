@@ -2392,6 +2392,10 @@ async function verPedido(id, estado){
   ]);
   if(it.error){ toast(errMsg(it.error),true); return; }
   const data = it.data, facturas = fx.error ? [] : (fx.data||[]); const pindar = (pix && !pix.error && pix.data) ? pix.data : [];
+  const pedR = await sb.from('pedidos_compra').select('folio_externo').eq('id', id).maybeSingle();
+  const pedFolio = (pedR.data||{}).folio_externo || '';
+  window._pedFolioAct = pedFolio; window._recOk = false;
+  window._pindPed = {}; pindar.forEach(z=>{ window._pindPed[String(z.parte)] = z; });
   pedItems = data;
   const tot = data.reduce((s,i)=>s+ +i.importe,0);
   const recibiendo = puedeVender() && ['enviado','parcial'].includes(estado);
@@ -2424,7 +2428,9 @@ async function verPedido(id, estado){
     ${resumenPartes(grupos, facturas, data, pindar)}
     <div id="ev-ped" class="small" style="margin:0 0 8px"></div>
     ${facturas.length ? `<p class="small" style="margin-bottom:6px">🧾 <b>Facturas de este pedido:</b> ${facturas.map(f=>`${esc(f.folio)}${verFx?` (${fmt(f.total)})${f.pdf_path?` <button class="btn sm sec" onclick="verPdfFactura('${esc(f.pdf_path)}')">📄 Ver</button>`:''}`:''}`).join(' · ')}</p>` : ''}
-    ${recibiendo?`<p class="small muted" style="margin-bottom:8px">Cuando llegue una entrega: dale <b>📦 Recibir esta parte</b> (llena las cantidades pendientes de esa parte), coteja contra la factura 📄, ajusta si algo no llegó, y da clic en <b>Registrar recepción</b>. Solo lo recibido se suma al inventario.</p>`:''}
+    ${recibiendo?`<div class="card" style="border-left:4px solid var(--naranja,#e8862d);padding:10px;margin-bottom:10px">
+      <b>⚠️ Antes de recibir, checa el papel:</b> el número de <b>pedido ${esc(pedFolio||'')}</b> o de <b>parte</b> que trae la lista de empaque debe aparecer en esta pantalla. Si el papel dice otro número, ciérrala y abre el pedido correcto.
+      <br><span class="small muted">Luego: 📦 Recibir esta parte → coteja cantidades → sube la foto del papel firmado → Registrar recepción.</span></div>`:''}
     <div class="tbl-scroll" style="max-height:400px;overflow-y:auto"><table>
     <thead><tr><th>Producto</th><th class="num">Pedida</th><th class="num">Recibida</th>${recibiendo?'<th class="num">Recibir ahora</th>':''}${verCostos?'<th class="num">Costo</th><th class="num">Importe</th>':''}${editando?'<th>Quitar</th>':''}</tr></thead>
     <tbody>${cuerpo}</tbody>
@@ -2506,8 +2512,26 @@ function llenarPendiente(){
 async function registrarRecepcion(pedidoId){
   const items = pedItems.map(i=>({item_id:i.id, cantidad:+($('rec-'+i.id)?.value||0)})).filter(x=>x.cantidad>0);
   if(!items.length){ toast('Escribe al menos una cantidad en "Recibir ahora"', true); return; }
+  // Defensa 1: ¿el papel es de ESTE pedido? (evita registrar mercancía que no llegó)
+  const partesTocadas = [...new Set(pedItems.filter(i=>+($('rec-'+i.id)?.value||0)>0).map(i=>String(i.parte||'')))].filter(Boolean);
+  if(!window._recOk){
+    const esperado = partesTocadas.join(' o ') || String(pedidoId);
+    const cap = prompt('Escribe el número de PEDIDO o de PARTE que viene impreso en la lista de empaque:\n\n(en esta pantalla: '+esperado+')');
+    if(cap===null) return;
+    const limpio = String(cap).replace(/\D/g,'');
+    const valido = limpio && (partesTocadas.some(p=>p.replace(/\D/g,'')===limpio) || (window._pedFolioAct||'').replace(/\D/g,'')===limpio);
+    if(!valido){
+      alert('⚠️ Ese número NO corresponde a este pedido.\n\nEl papel dice ' + (limpio||'—') + ' y aquí las partes son: ' + esperado + '.\n\nBusca el pedido correcto en la lista antes de recibir. Si crees que sí es, avísale a Andrés.');
+      logEv('recepcion_bloqueada', 'pedido '+pedidoId+' papel '+limpio);
+      return;
+    }
+    window._recOk = true;
+  }
+  // Defensa 2: Indar dice que ni lo ha surtido
+  const sinSurtir = partesTocadas.filter(p=>{ const z=(window._pindPed||{})[p]; return z && +z.cant_empacada===0 && +z.cant_facturada===0; });
+  if(sinSurtir.length && !confirm('⚠️ OJO: según el estatus de Indar, la(s) parte(s) '+sinSurtir.join(', ')+' NO están surtidas ni facturadas.\n\n¿De verdad ya llegó la mercancía físicamente?')){ window._recOk=false; return; }
   if(!esAdmin() && !window._evOk){ pedirEvidenciaRec(pedidoId); return; } // vendedores: evidencia obligatoria
-  window._evOk = false;
+  window._evOk = false; window._recOk = false;
   const {error} = await sb.rpc('recibir_partidas', {p_pedido_id:pedidoId, p_items:items});
   if(error){ toast(errMsg(error),true); return; }
   cerrarModal(); toast('Recepción registrada: inventario actualizado ✓'); vPedidos();
