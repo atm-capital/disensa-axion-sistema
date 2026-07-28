@@ -1896,6 +1896,7 @@ function fichaCat(cod){
     <p class="small" id="fcat-inv" style="margin:4px 0 8px"><span class="muted">⏳ checando inventario y pedidos...</span></p>
     <div class="acciones">
       <button class="btn" onclick='toggleCat(${JSON.stringify({c:p.codigo,d:p.descripcion,pr:+p.precio_sugerido,co:Math.round(+p.precio_lista*(1-(+p.promo_pct||0))*100)/100,su:+p.precio_sugerido}).replace(/'/g,"&#39;")}); cerrarModal();'>➕ Seleccionar para cotizar</button>
+      ${puedeVender()?`<button class="btn sec" onclick='catAResurtido(${JSON.stringify({c:p.codigo,d:p.descripcion}).replace(/'/g,"&#39;")})'>🛒 Pedir resurtido</button>`:''}
       <button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
   fcatInv(p.codigo);
 }
@@ -1920,13 +1921,32 @@ function pintarSelBar(){
   bar.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
     <b>${catSel.size} producto(s) seleccionado(s)</b>
     <span class="small muted" style="flex:1">${[...catSel.keys()].slice(0,6).join(' · ')}${catSel.size>6?' …':''}</span>
-    <span>${puedeVender()?`<button class="btn sm" onclick="cotizarSeleccion()">📋 Cotizar selección</button>`:''}
+    <span>${puedeVender()?`<button class="btn sm" onclick="cotizarSeleccion()">📋 Cotizar selección</button>
+    <button class="btn sec sm" onclick="resurtirSeleccion()">🛒 Pedir al resurtido</button>`:''}
     <button class="btn sec sm" onclick="catSel.clear();pintarCatalogo(false)">Limpiar</button></span></div>`;
 }
 function cotizarSeleccion(){
   window._preCot = [...catSel.values()].map(p=>({codigo:p.c, desc:p.d, cantidad:1, precio:p.pr, costo:p.co, sugerido:p.su, producto_id:null}));
   catSel.clear();
   irA('cotizaciones').then(()=>nuevaCot());
+}
+/* Desde el catálogo → solicitud de resurtido (v80). Si el producto ya está en tu inventario lo liga; si no, va como 🆕 */
+function catAResurtido(p){
+  window._solItems = window._solItems || [];
+  const prop = (invData||[]).find(x=>x.codigo===p.c);
+  if(!window._solItems.find(x=>x.codigo===p.c))
+    window._solItems.push({producto_id: prop?prop.id:null, codigo:p.c, desc:(p.d||'').slice(0,45)+(prop?'':' 🆕'), cant:1});
+  cerrarModal(); solicitarResurtido();
+}
+function resurtirSeleccion(){
+  window._solItems = window._solItems || [];
+  [...catSel.values()].forEach(p=>{
+    const prop = (invData||[]).find(x=>x.codigo===p.c);
+    if(!window._solItems.find(x=>x.codigo===p.c))
+      window._solItems.push({producto_id: prop?prop.id:null, codigo:p.c, desc:(p.d||'').slice(0,45)+(prop?'':' 🆕'), cant:1});
+  });
+  catSel.clear(); pintarCatalogo(false);
+  solicitarResurtido();
 }
 
 /* ============================================================
