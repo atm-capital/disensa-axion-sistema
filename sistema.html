@@ -653,8 +653,28 @@ async function vResumen(){
   const bajos = prods.data.filter(p=>+p.stock <= +p.stock_min).length;
   const porPagar = cxp.data.reduce((s,c)=>s+ +c.saldo,0);
   const prox = cxp.data[0];
+  // ===== Alerta de vencimientos (v78): lo que vence en 7 días o menos, y lo ya vencido =====
+  let alertaCxp = '';
+  if(esFinanzas()){
+    const dd = f => Math.round((new Date(f+'T12:00:00') - hoy)/864e5);
+    const abiertas = cxp.data.filter(c=>c.estado!=='anulada' && +c.saldo>0 && c.fecha_vencimiento);
+    const vencidas = abiertas.filter(c=>dd(c.fecha_vencimiento)<0);
+    const pronto = abiertas.filter(c=>{const d=dd(c.fecha_vencimiento); return d>=0 && d<=7;});
+    const sumV = vencidas.reduce((s,c)=>s+ +c.saldo,0), sumP = pronto.reduce((s,c)=>s+ +c.saldo,0);
+    if(vencidas.length || pronto.length){
+      const porDia = {};
+      pronto.forEach(c=>{ const k=c.fecha_vencimiento; if(!porDia[k]) porDia[k]={n:0,t:0}; porDia[k].n++; porDia[k].t+= +c.saldo; });
+      const ahorro = pronto.filter(c=>/indar|factura/i.test(c.concepto+' '+(c.proveedores?.nombre||''))).reduce((s,c)=>s+ +c.saldo,0)*0.045;
+      alertaCxp = `<div class="card" style="border-left:5px solid ${vencidas.length?'#b91c1c':'#d97706'};background:${vencidas.length?'#fef2f2':'#fffbeb'};margin-bottom:14px;cursor:pointer" onclick="irA('finanzas')">
+        <h3 style="margin:0 0 6px">${vencidas.length?'🔴':'⚠️'} ${vencidas.length?`${vencidas.length} cuenta(s) YA VENCIDAS por ${fmt(sumV)}`:'Pagos próximos'}</h3>
+        ${pronto.length?`<p style="margin:0 0 4px"><b>${pronto.length} cuenta(s) vencen en 7 días o menos: ${fmt(sumP)}</b></p>
+        <p class="small" style="margin:0 0 4px">${Object.entries(porDia).sort().map(([d,g])=>`${fecha(d)} <b>(en ${dd(d)} día${dd(d)===1?'':'s'})</b>: ${g.n} × ${fmt(g.t)}`).join(' · ')}</p>`:''}
+        ${ahorro>50?`<p class="small" style="margin:0;color:#15803d"><b>💰 Si las pagas antes de que venzan te ahorras ~${fmt(ahorro)}</b> por pronto pago (4-5% Indar).</p>`:''}
+        <p class="small muted" style="margin:4px 0 0">Clic para ver el detalle en Finanzas</p></div>`;
+    }
+  }
 
-  $('v-resumen').innerHTML = `
+  $('v-resumen').innerHTML = alertaCxp + `
     <div class="kpis">
       <div class="kpi" style="cursor:pointer" title="Ir a Ventas" onclick="irA('ventas')"><div class="l">Ventas de hoy</div><div class="v">${fmt(totHoy)}</div><div class="s">${vHoy.length} venta(s)</div></div>
       <div class="kpi" style="cursor:pointer" title="Ir a Ventas" onclick="irA('ventas')"><div class="l">Ventas del mes</div><div class="v">${fmt(totMes)}</div><div class="s">${ventasMes.data.length} venta(s)</div></div>
