@@ -176,6 +176,7 @@ tr.oculto,tr.plegado{display:none}
       <div id="v-inventario" class="view"></div>
       <div id="v-clientes" class="view"></div>
       <div id="v-pedidos" class="view"></div>
+      <div id="v-apartados" class="view"></div>
       <div id="v-caja" class="view"></div>
       <div id="v-finanzas" class="view"></div>
       <div id="v-importar" class="view"></div>
@@ -291,6 +292,7 @@ const VISTAS = [
   {id:'inventario', icono:'📦', titulo:'Inventario', roles:['admin','vendedor','consulta','contador']},
   {id:'clientes',   icono:'👥', titulo:'Clientes',   roles:['admin','vendedor','consulta']},
   {id:'pedidos',    icono:'🚚', titulo:'Pedidos a proveedor', roles:['admin','vendedor','consulta','contador']},
+  {id:'apartados',  icono:'🔖', titulo:'Apartados',  roles:['admin','vendedor','consulta','contador']},
   {id:'caja',       icono:'💵', titulo:'Corte de caja', roles:['admin','vendedor','contador']},
   {id:'finanzas',   icono:'💰', titulo:'Finanzas',   roles:['admin','consulta','contador']},
   {id:'importar',   icono:'📥', titulo:'Importar',   roles:['admin']},
@@ -315,7 +317,7 @@ async function irA(id){
   try{ localStorage.setItem('ax_vista', id); }catch(e){}
   logEv('vista', id);
   try { await ({resumen:vResumen, ventas:vVentas, cotizaciones:vCotizaciones, catalogo:vCatalogo, inventario:vInventario, clientes:vClientes,
-    pedidos:vPedidos, caja:vCaja, finanzas:vFinanzas, usuarios:vUsuarios, importar:vImportar, actividad:vActividad})[id](); }
+    pedidos:vPedidos, apartados:vApartados, caja:vCaja, finanzas:vFinanzas, usuarios:vUsuarios, importar:vImportar, actividad:vActividad})[id](); }
   catch(e){ toast(errMsg(e), true); }
 }
 
@@ -2610,6 +2612,215 @@ async function recibirPedido(id){
   const {error} = await sb.rpc('recibir_pedido', {p_pedido_id:id});
   if(error){ toast(errMsg(error),true); return; }
   toast('Pedido recibido completo: inventario actualizado ✓'); vPedidos();
+}
+
+/* ============================================================
+   VISTA: APARTADOS (v79)
+   El cliente deja anticipo → la pieza queda reservada → al recoger paga el resto
+   y se genera la venta real (ahí se descuenta el inventario).
+============================================================ */
+let apItems = [];
+async function vApartados(){
+  if(puedeVender()) $('vtools').innerHTML = `<button class="btn" onclick="nuevoApartado()">+ Nuevo apartado</button>`;
+  const {data, error} = await sb.from('apartados').select('*, apartado_items(*)').order('fecha',{ascending:false});
+  if(error) throw error;
+  const hoy = new Date(); hoy.setHours(0,0,0,0);
+  const act = (data||[]).filter(a=>a.estado==='activo');
+  const venc = act.filter(a=>a.vence && new Date(a.vence+'T12:00:00') < hoy);
+  const totAnt = act.reduce((s,a)=>s+ +a.anticipo,0), totSal = act.reduce((s,a)=>s+ +a.saldo,0);
+  const f = window._apFiltro || 'activo';
+  const lista = (data||[]).filter(a=>f==='todos' ? true : a.estado===f);
+  const badge = {activo:'b-azul', entregado:'b-verde', cancelado:'b-gris'};
+  $('v-apartados').innerHTML = `
+    <div class="kpis">
+      <div class="kpi"><div class="l">Apartados activos</div><div class="v">${act.length}</div><div class="s">${act.reduce((s,a)=>s+(a.apartado_items||[]).reduce((q,i)=>q+ +i.cantidad,0),0)} pieza(s) reservada(s)</div></div>
+      <div class="kpi"><div class="l">Anticipos recibidos</div><div class="v">${fmt(totAnt)}</div><div class="s">ya está en la caja</div></div>
+      <div class="kpi"><div class="l">Por cobrar al entregar</div><div class="v">${fmt(totSal)}</div><div class="s">saldo pendiente</div></div>
+      ${venc.length?`<div class="kpi" style="outline:2px solid #b91c1c"><div class="l">Vencidos</div><div class="v">${venc.length}</div><div class="s">pasaron de 15 días</div></div>`:''}
+    </div>
+    <div class="card">
+      <div class="toolbar" style="margin-bottom:10px">
+        ${['activo','entregado','cancelado','todos'].map(x=>`<button class="btn ${f===x?'':'sec'} sm" onclick="window._apFiltro='${x}'; vApartados()">${x==='todos'?'Todos':x.charAt(0).toUpperCase()+x.slice(1)+'s'}</button>`).join('')}
+      </div>
+      <div class="tbl-scroll"><table>
+        <thead><tr><th>#</th><th>Cliente</th><th>Producto(s)</th><th>Apartado</th><th class="num">Total</th><th class="num">Anticipo</th><th class="num">Saldo</th><th>Estado</th><th></th></tr></thead>
+        <tbody>${lista.map(a=>{
+          const its = a.apartado_items||[];
+          const vencido = a.estado==='activo' && a.vence && new Date(a.vence+'T12:00:00') < hoy;
+          return `<tr${vencido?' style="background:#fef2f2"':''}>
+            <td><b>#${a.folio}</b></td>
+            <td>${esc(a.cliente_nombre)}${a.telefono?`<br><span class="small muted">${esc(a.telefono)}</span>`:''}</td>
+            <td class="small">${its.map(i=>`${+i.cantidad} × ${esc((i.descripcion||'').slice(0,38))}`).join('<br>')}</td>
+            <td class="small">${fecha(a.fecha)}${a.vence?`<br><span class="small ${vencido?'':'muted'}" ${vencido?'style="color:#b91c1c;font-weight:600"':''}>vence ${fecha(a.vence)}${vencido?' ⚠️':''}</span>`:''}</td>
+            <td class="num">${fmt(a.total)}</td><td class="num" style="color:var(--verde,#15803d)">${fmt(a.anticipo)}</td>
+            <td class="num"><b>${fmt(a.saldo)}</b></td>
+            <td><span class="badge ${badge[a.estado]}">${a.estado}</span></td>
+            <td style="white-space:nowrap">
+              ${a.estado==='activo' && puedeVender()?`<button class="btn sm" onclick="entregarApartado(${a.id})">✅ Entregar</button>
+                <button class="btn sec sm" onclick="cancelarApartado(${a.id})">✖</button>`:''}
+              <button class="btn sec sm" onclick="imprimirApartado(${a.id})">🖨</button></td>
+          </tr>`;}).join('') || '<tr><td colspan="9" class="muted">Sin apartados en este filtro.</td></tr>'}</tbody></table></div>
+      <p class="small muted" style="margin-top:8px">El anticipo ya entró a la caja. Al entregar se cobra el saldo y se registra la venta completa (ahí se descuenta el inventario).</p>
+    </div>`;
+}
+function nuevoApartado(){
+  apItems = [];
+  const hoy = new Date(); const v = new Date(hoy.getTime()+15*864e5);
+  abrirModal(`<h3>🔖 Nuevo apartado</h3>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div><label>Cliente</label><input id="ap-cli" placeholder="Nombre del cliente"></div>
+      <div><label>Teléfono (para avisarle)</label><input id="ap-tel" placeholder="33 1234 5678"></div>
+    </div>
+    <label>Buscar producto</label>
+    <input id="ap-q" placeholder="Código o descripción..." oninput="buscarProdAp()">
+    <div id="ap-res" class="small"></div>
+    <div id="ap-lista" style="margin:10px 0"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div><label>💵 Anticipo que deja</label><input type="number" id="ap-ant" step="0.01" placeholder="0.00" oninput="calcAp()"></div>
+      <div><label>Forma de pago del anticipo</label><select id="ap-met">
+        <option value="efectivo">💵 Efectivo</option><option value="tarjeta">💳 Tarjeta</option>
+        <option value="transferencia">🏦 Transferencia</option><option value="ak_pago">📱 AK Pago</option></select></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div><label>Guardar hasta</label><input type="date" id="ap-vence" value="${v.toISOString().slice(0,10)}"></div>
+      <div><label>Nota</label><input id="ap-nota" placeholder="Ej: lo recoge el sábado"></div>
+    </div>
+    <p id="ap-tot" style="font-size:17px;margin:10px 0"></p>
+    <div class="acciones"><button class="btn" onclick="guardarApartado()">Guardar apartado</button>
+      <button class="btn sec" onclick="cerrarModal()">Cancelar</button></div>`, true);
+  setTimeout(()=>$('ap-cli').focus(), 100);
+  calcAp();
+}
+async function buscarProdAp(){
+  const q = ($('ap-q').value||'').trim();
+  const el = $('ap-res');
+  if(q.length<2){ el.innerHTML=''; return; }
+  const r = await sb.from('productos').select('id,codigo,descripcion,precio,stock,unidad').or(`codigo.ilike.%${q}%,descripcion.ilike.%${q}%`).eq('activo',true).limit(8);
+  el.innerHTML = (r.data||[]).map(p=>`<div style="padding:7px;border-bottom:1px solid var(--linea);cursor:pointer" onclick='addProdAp(${JSON.stringify(p).replace(/'/g,"&#39;")})'>
+    <b>${esc(p.codigo)}</b> ${esc(p.descripcion.slice(0,42))} · <b>${fmt(p.precio)}</b>
+    <span class="small ${+p.stock>0?'muted':''}" ${+p.stock<=0?'style="color:#d97706"':''}>${+p.stock>0?'stock '+(+p.stock):'sin stock (se aparta para cuando llegue)'}</span></div>`).join('')
+    || '<p class="small muted" style="padding:6px">Sin resultados</p>';
+}
+function addProdAp(p){
+  const ex = apItems.find(x=>x.producto_id===p.id);
+  if(ex) ex.cantidad++; else apItems.push({producto_id:p.id, descripcion:p.codigo+' · '+p.descripcion, precio_unit:+p.precio, cantidad:1});
+  $('ap-q').value=''; $('ap-res').innerHTML='';
+  calcAp();
+}
+function calcAp(){
+  const el = $('ap-lista');
+  if(el) el.innerHTML = apItems.length ? `<table><tbody>${apItems.map((i,n)=>`<tr>
+    <td>${esc(i.descripcion.slice(0,42))}</td>
+    <td style="width:70px"><input type="number" min="1" value="${i.cantidad}" style="width:60px;padding:4px;text-align:right" onchange="apItems[${n}].cantidad=+this.value||1; calcAp()"></td>
+    <td style="width:90px"><input type="number" step="0.01" value="${i.precio_unit}" style="width:80px;padding:4px;text-align:right" onchange="apItems[${n}].precio_unit=+this.value||0; calcAp()"></td>
+    <td class="num" style="width:90px"><b>${fmt(i.cantidad*i.precio_unit)}</b></td>
+    <td style="width:30px"><button class="btn sec sm" onclick="apItems.splice(${n},1); calcAp()">✖</button></td></tr>`).join('')}</tbody></table>`
+    : '<p class="small muted">Busca y agrega los productos que va a apartar.</p>';
+  const tot = apItems.reduce((s,i)=>s+i.cantidad*i.precio_unit,0);
+  const ant = +($('ap-ant')?$('ap-ant').value:0)||0;
+  const t = $('ap-tot');
+  if(t) t.innerHTML = `Total: <b>${fmt(tot)}</b> · Anticipo: <b style="color:var(--verde,#15803d)">${fmt(ant)}</b> · Queda a pagar: <b>${fmt(Math.max(0, Math.round((tot-ant)*100)/100))}</b>`;
+}
+async function guardarApartado(){
+  const tot = apItems.reduce((s,i)=>s+i.cantidad*i.precio_unit,0);
+  const ant = +$('ap-ant').value||0;
+  if(!apItems.length){ toast('Agrega al menos un producto', true); return; }
+  if(ant<=0){ toast('Captura el anticipo que dejó el cliente', true); return; }
+  if(ant>tot){ toast('El anticipo no puede ser mayor al total', true); return; }
+  const cli = ($('ap-cli').value||'').trim() || 'Público en general';
+  const row = {cliente_nombre:cli, telefono:($('ap-tel').value||'').trim(), total:Math.round(tot*100)/100,
+    anticipo:ant, saldo:Math.round((tot-ant)*100)/100, metodo_anticipo:$('ap-met').value,
+    vence:$('ap-vence').value||null, vendedor:perfil.nombre||perfil.correo, vendedor_id:perfil.id, nota:($('ap-nota').value||'').trim()};
+  const {data, error} = await sb.from('apartados').insert(row).select().single();
+  if(error){ toast(errMsg(error), true); return; }
+  const its = apItems.map(i=>({apartado_id:data.id, producto_id:i.producto_id, descripcion:i.descripcion,
+    cantidad:i.cantidad, precio_unit:i.precio_unit, importe:Math.round(i.cantidad*i.precio_unit*100)/100}));
+  await sb.from('apartado_items').insert(its);
+  // El anticipo en efectivo entra a la caja del día
+  if(row.metodo_anticipo==='efectivo'){
+    await sb.from('caja_movs').insert({tipo:'entrada', monto:ant, concepto:'Anticipo apartado #'+data.folio+' · '+cli,
+      nombre:perfil.nombre||perfil.correo, usuario_id:perfil.id});
+  }
+  logEv('apartado', '#'+data.folio+' '+cli+' ant '+ant);
+  cerrarModal(); toast('Apartado #'+data.folio+' guardado ✓'); vApartados();
+  setTimeout(()=>imprimirApartado(data.id), 400);
+}
+async function entregarApartado(id){
+  const a = (await sb.from('apartados').select('*, apartado_items(*)').eq('id',id).single()).data;
+  if(!a) return;
+  abrirModal(`<h3>✅ Entregar apartado #${a.folio}</h3>
+    <p>Cliente: <b>${esc(a.cliente_nombre)}</b></p>
+    <table style="width:100%;margin:10px 0"><tbody>
+      ${(a.apartado_items||[]).map(i=>`<tr><td>${+i.cantidad} × ${esc(i.descripcion)}</td><td class="num">${fmt(i.importe)}</td></tr>`).join('')}
+      <tr><td>Total</td><td class="num">${fmt(a.total)}</td></tr>
+      <tr><td>− Anticipo (${esc(a.metodo_anticipo)}, ${fecha(a.fecha)})</td><td class="num" style="color:var(--verde,#15803d)">−${fmt(a.anticipo)}</td></tr>
+      <tr><th style="border-top:2px solid var(--linea);font-size:17px">Cobrar ahora</th><th class="num" style="border-top:2px solid var(--linea);font-size:19px">${fmt(a.saldo)}</th></tr>
+    </tbody></table>
+    <label>¿Cómo paga el saldo?</label>
+    <select id="ape-met"><option value="efectivo">💵 Efectivo</option><option value="tarjeta">💳 Tarjeta</option>
+      <option value="transferencia">🏦 Transferencia</option><option value="ak_pago">📱 AK Pago</option></select>
+    <div class="acciones"><button class="btn" onclick="confirmarEntrega(${id})">Cobrar y entregar</button>
+      <button class="btn sec" onclick="cerrarModal()">Cancelar</button></div>`, true);
+}
+async function confirmarEntrega(id){
+  const a = (await sb.from('apartados').select('*, apartado_items(*)').eq('id',id).single()).data;
+  if(!a) return;
+  const met = $('ape-met').value;
+  const items = (a.apartado_items||[]).filter(i=>i.producto_id).map(i=>({producto_id:i.producto_id, cantidad:+i.cantidad, precio_unit:+i.precio_unit}));
+  if(!items.length){ toast('El apartado no tiene productos del inventario', true); return; }
+  const {data:vid, error} = await sb.rpc('registrar_venta', {
+    p_cliente_id: a.cliente_id, p_metodo: met, p_descuento: 0, p_items: items,
+    p_notas: 'Apartado #'+a.folio+' · anticipo '+fmt(a.anticipo)+' el '+fecha(a.fecha)
+  });
+  if(error){ toast(errMsg(error), true); return; }
+  await sb.from('apartados').update({estado:'entregado', entregado_en:new Date().toISOString(), venta_id:vid}).eq('id',id);
+  // El anticipo ya había entrado a caja: se descuenta del efectivo del día para no contarlo dos veces
+  if(a.metodo_anticipo==='efectivo' && met==='efectivo' && +a.anticipo>0){
+    await sb.from('caja_movs').insert({tipo:'retiro', monto:+a.anticipo,
+      concepto:'Anticipo del apartado #'+a.folio+' ya cobrado el '+fecha(a.fecha)+' (ajuste, no salió dinero)',
+      nombre:perfil.nombre||perfil.correo, usuario_id:perfil.id});
+  }
+  logEv('apartado_entregado', '#'+a.folio+' venta '+vid);
+  cerrarModal(); toast('Entregado ✓ Venta registrada'); vApartados();
+}
+async function cancelarApartado(id){
+  const m = prompt('¿Por qué se cancela el apartado?\n(El anticipo se devuelve o se acuerda con el cliente — regístralo como retiro en caja si devuelves efectivo)');
+  if(m===null) return;
+  const {error} = await sb.from('apartados').update({estado:'cancelado', nota:m}).eq('id',id);
+  if(error){ toast(errMsg(error), true); return; }
+  logEv('apartado_cancelado', id+': '+m);
+  toast('Apartado cancelado'); vApartados();
+}
+async function imprimirApartado(id){
+  const a = (await sb.from('apartados').select('*, apartado_items(*)').eq('id',id).single()).data;
+  if(!a) return;
+  const w = window.open('','_blank','width=420,height=680');
+  if(!w){ toast('Permite las ventanas emergentes', true); return; }
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Apartado #${a.folio}</title><style>
+    body{font-family:Arial,Helvetica,sans-serif;font-size:15px;font-weight:600;line-height:1.35;color:#000;margin:0;padding:8px;width:270px}
+    .c{text-align:center}.b{font-weight:900}.chico{font-size:12px}
+    img{width:150px;display:block;margin:0 auto 4px}
+    hr{border:none;border-top:1.5px dashed #000;margin:7px 0}
+    table{width:100%;border-collapse:collapse;font-size:15px}td{padding:2px 0;vertical-align:top}
+    .n{text-align:right;white-space:nowrap}.tot{font-size:19px;font-weight:900}
+    @media print{.noprint{display:none}}</style></head><body>
+    <img src="https://axiontools.mx/logo-axion.png" onerror="this.style.display='none'">
+    <div class="c b" style="font-size:17px">DISTRIBUIDORA AXION</div>
+    <div class="c chico" style="font-weight:600">Av. Fidel Velázquez Sánchez 788<br>Santa Elena Estadio, 44230 · Tel 33 1010 7423</div>
+    <hr><div class="c b" style="font-size:17px">COMPROBANTE DE APARTADO</div>
+    <div>FOLIO: <b>#${a.folio}</b><br>FECHA: ${fecha(a.fecha)}<br>CLIENTE: ${esc(a.cliente_nombre)}${a.telefono?'<br>TEL: '+esc(a.telefono):''}<br>ATENDIÓ: ${esc(a.vendedor||'')}</div>
+    <hr><div class="b">PRODUCTOS APARTADOS</div>
+    <table>${(a.apartado_items||[]).map(i=>`<tr><td colspan="2">${esc(i.descripcion)}</td></tr><tr><td>&nbsp;&nbsp;${+i.cantidad} x ${fmt(i.precio_unit)}</td><td class="n">${fmt(i.importe)}</td></tr>`).join('')}</table>
+    <hr><table>
+      <tr><td>TOTAL</td><td class="n">${fmt(a.total)}</td></tr>
+      <tr><td>ANTICIPO PAGADO</td><td class="n">${fmt(a.anticipo)}</td></tr>
+      <tr><td class="tot">RESTA</td><td class="n tot">${fmt(a.saldo)}</td></tr>
+    </table>
+    ${a.vence?`<p class="c chico" style="margin:8px 0"><b>Guardamos tu producto hasta el ${fecha(a.vence)}</b></p>`:''}
+    <hr><div class="c chico">Presenta este comprobante al recoger.<br>Conserva tu ticket.<br>axiontools.mx</div>
+    <p class="noprint c" style="margin-top:10px"><button onclick="window.print()" style="padding:8px 18px;font-size:13px">🖨 Imprimir</button></p>
+    <scr`+`ipt>setTimeout(function(){ window.print(); }, 500);</scr`+`ipt></body></html>`);
+  w.document.close();
 }
 
 /* ============================================================
