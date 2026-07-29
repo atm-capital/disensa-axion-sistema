@@ -3281,12 +3281,11 @@ async function axBM(){
     var C=[].slice.call(D.querySelectorAll('.item-box[onclick*=showCotizacionModal]')).map(function(e){
       var n=(e.getAttribute('onclick').match(/\((\d+)\)/)||[])[1];
       var tx=e.textContent.replace(/\s+/g,' ').trim();
-      var fm=tx.match(/(\d{2})\/(\d{2})\/(\d{4})/);           // fecha REAL del pedido en Indar
+      var fm=tx.match(/(\d{2})\/(\d{2})\/(\d{4})/);
       var mm=tx.match(/\$([\d,]+\.\d\d)/);
       return {n:n, t:tx.slice(0,60), f: fm ? fm[3]+'-'+fm[2]+'-'+fm[1] : '', m: mm?mm[1]:''};
     }).filter(function(c){return c.n;});
     if(!C.length){alert('Abre Pedidos - Pedidos Anteriores y vuelve a dar clic al boton.');return;}
-    // ¿cuáles ya están en Axion? Vienen en el hash si entraste con el botón "Traer pedidos que faltan"
     var YA={};
     try{
       var hy=(location.hash||'').match(/[#&]axya=([^&]+)/);
