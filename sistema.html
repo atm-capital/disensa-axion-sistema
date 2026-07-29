@@ -3285,16 +3285,25 @@ async function axBM(){
       var mm=tx.match(/\$([\d,]+\.\d\d)/);
       return {n:n, t:tx.slice(0,60), f: fm ? fm[3]+'-'+fm[2]+'-'+fm[1] : '', m: mm?mm[1]:''};
     }).filter(function(c){return c.n;});
-    if(!C.length){alert('Abre Pedidos - Pedidos Anteriores y vuelve a dar clic al boton.');return;}
     var YA={};
     try{
       var hy=(location.hash||'').match(/[#&]axya=([^&]+)/);
-      if(hy) JSON.parse(decodeURIComponent(escape(atob(hy[1].replace(/-/g,'+').replace(/_/g,'/'))))).forEach(function(x){YA[String(x)]=1;});
+      var yaB64=null;
+      if(hy){ yaB64=hy[1]; localStorage.setItem('axya_v',yaB64); localStorage.setItem('axya_t',String(Date.now())); }
+      else{ var tv=+localStorage.getItem('axya_t')||0; if(Date.now()-tv < 30*60*1000) yaB64=localStorage.getItem('axya_v'); }
+      if(yaB64) JSON.parse(decodeURIComponent(escape(atob(yaB64.replace(/-/g,'+').replace(/_/g,'/'))))).forEach(function(x){YA[String(x)]=1;});
     }catch(ey){}
-    var FALTAN=C.filter(function(c){return !YA[c.n];});
-    var lista=C.map(function(c){return (YA[c.n]?'[YA ESTA] ':'[FALTA]  ')+c.n+'  '+c.f+'  $'+c.m;}).join('\n');
-    var sug = FALTAN.length ? FALTAN[FALTAN.length-1].n : C[0].n;
-    var F=prompt('Cual cotizacion importo a Axion Tools?\n\n'+lista+(FALTAN.length?('\n\nFALTAN POR IMPORTAR: '+FALTAN.map(function(x){return x.n;}).join(', ')):'\n\n(Todas estan importadas)')+'\n\nEscribe el numero:', sug);
+    if(!C.length){
+      if(Object.keys(YA).length){alert('Lista de Axion guardada.\n\nAhora: menu Pedidos - Pedidos Anteriores, y ahi vuelve a dar clic al marcador. Te dira cuales FALTAN.');}
+      else{alert('Abre Pedidos - Pedidos Anteriores y vuelve a dar clic al boton.');}
+      return;
+    }
+    var tieneYA = Object.keys(YA).length > 0;
+    var FALTAN = tieneYA ? C.filter(function(c){return !YA[c.n];}) : [];
+    var lista=C.map(function(c){return (tieneYA?(YA[c.n]?'[YA ESTA] ':'[FALTA]   '):'')+c.n+'  '+c.f+'  $'+c.m;}).join('\n');
+    var sug = FALTAN.length ? FALTAN[0].n : C[0].n;
+    var pie = tieneYA ? (FALTAN.length?('\n\nFALTAN POR IMPORTAR: '+FALTAN.map(function(x){return x.n;}).join(', ')):'\n\n(Todas estan importadas ya)') : '\n\n(Para ver cuales FALTAN: entra por el boton "Ver que pedidos me faltan" en Axion - Importar)';
+    var F=prompt('Cual cotizacion importo a Axion Tools?\n\n'+lista+pie+'\n\nEscribe el numero:', sug);
     if(!F){var e0=document.getElementById('axmsg');if(e0)e0.remove();return;}
     var CF=C.filter(function(c){return c.n===String(F).trim();})[0]||{};
     M('buscando partes de '+F+'...');
@@ -3366,8 +3375,13 @@ async function traerPedidosFaltantes(){
   const pf = await sb.from('pedidos_compra').select('folio_externo');
   const folios = (pf.data||[]).map(x=>String(x.folio_externo));
   const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(folios)))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
-  window.open('https://indar.mx/pedidosAnteriores#axya='+b64, '_blank');
-  toast('Se abrió Indar. Ahí dale clic al marcador 🔧 Enviar a Axion y te dirá cuáles FALTAN.');
+  window.open('https://indar.mx/MiCuenta#axya='+b64, '_blank');
+  abrirModal(`<h3>🔎 Ver qué pedidos faltan</h3><p>Se abrió Indar. Ahí:</p>
+    <ol style="margin:10px 0 10px 18px;line-height:1.9">
+      <li>Dale clic al marcador <b>🔧 Enviar a Axion</b> (guarda la lista de Axion).</li>
+      <li>Ve al menú <b>Pedidos → Pedidos Anteriores</b>.</li>
+      <li>Vuelve a dar clic al marcador: te mostrará <b>[FALTA]</b> / <b>[YA ESTA]</b> en cada pedido.</li>
+    </ol><div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`);
 }
 async function vImportar(){
   const raw = localStorage.getItem('ax_import');
