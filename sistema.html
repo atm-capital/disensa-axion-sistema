@@ -2399,7 +2399,22 @@ async function vPedidos(){
   const porEstado = {};
   for(const p of data){ if(!porEstado[p.estado]) porEstado[p.estado] = {n:0, t:0}; porEstado[p.estado].n++; porEstado[p.estado].t += +p.total; }
   const totalGral = data.filter(p=>p.estado!=='cancelado').reduce((s,p)=>s+ +p.total,0);
-  const dataF = window._pedFiltro ? data.filter(p=>p.estado===window._pedFiltro) : data;
+  // Clasificación práctica: ✅ completo (todo recibido y facturado) · ⏳ por llegar · ⚠️ con diferencias
+  const st = window._pp||{};
+  const clase = p => {
+    if(p.estado==='cancelado') return 'cancelado';
+    const partes = Object.values(st[p.id]||{});
+    const todoRec = partes.length && partes.every(x=>x.ped>0 && x.rec>=x.ped);
+    const sinFx = partes.filter(x=>x.rec>0 && x.fac<=0).length;   // llegó pero no hay factura
+    if(!todoRec) return 'porllegar';
+    return sinFx>0 ? 'difs' : 'completo';
+  };
+  const cl = {};
+  data.forEach(p=>{ const c=clase(p); cl[c]=(cl[c]||0)+1; });
+  const fEst = window._pedFiltro, fCla = window._pedClase;
+  let dataF = data;
+  if(fEst) dataF = dataF.filter(p=>p.estado===fEst);
+  if(fCla) dataF = dataF.filter(p=>clase(p)===fCla);
   $('v-pedidos').innerHTML = `
     <div class="kpis">
       ${['enviado','parcial','recibido','borrador','cancelado'].filter(e=>porEstado[e]).map(e=>`
@@ -2407,17 +2422,25 @@ async function vPedidos(){
       <div class="kpi" style="cursor:pointer;${!window._pedFiltro?'':'opacity:.75'}" title="Ver todos" onclick="window._pedFiltro=null; vPedidos()"><div class="l">Total pedidos (${data.filter(p=>p.estado!=='cancelado').length})</div><div class="v">${esFinanzas()?fmt(totalGral):data.filter(p=>p.estado!=='cancelado').length+' 📦'}</div></div>
     </div>` + `
     <div class="card"><h3>Pedidos de compra${window._pedFiltro?` · filtro: <span class="badge ${badges[window._pedFiltro]}">${window._pedFiltro}</span>`:''}</h3>
+    <div class="toolbar" style="margin-bottom:10px">
+      <button class="btn ${!fCla?'':'sec'} sm" onclick="window._pedClase=null; vPedidos()">Todos (${data.length})</button>
+      <button class="btn ${fCla==='porllegar'?'':'sec'} sm" onclick="window._pedClase='porllegar'; vPedidos()">⏳ Por llegar (${cl.porllegar||0})</button>
+      <button class="btn ${fCla==='difs'?'':'sec'} sm" onclick="window._pedClase='difs'; vPedidos()">⚠️ Sin factura (${cl.difs||0})</button>
+      <button class="btn ${fCla==='completo'?'':'sec'} sm" onclick="window._pedClase='completo'; vPedidos()">✅ Completos (${cl.completo||0})</button>
+    </div>
     ${puedeVender()?`<button class="btn sm" style="float:right;margin-left:10px" onclick="buscarFolio()">🔍 ¿Qué me están entregando?</button>`:''}
     <button class="btn sm" style="float:right;margin-left:10px" onclick="syncIndar()">🔄 Actualizar estatus Indar</button><button class="btn sm sec" style="float:right" onclick="traerFacturasIndar()">🧾 Traer facturas de Indar</button><p class="small muted" style="margin-bottom:10px">Los pedidos se capturan en el portal del proveedor (Indar / Holcim) y aquí se registran para dar seguimiento. Al marcar <b>Recibido</b>, las cantidades se suman al inventario automáticamente.</p>
     <div class="tbl-scroll"><table>
-      <thead><tr><th>Folio</th><th>Proveedor</th><th>Fecha</th><th>Estado</th><th>Partes / avance</th><th>Plazo</th>${esFinanzas()?'<th class="num">Total</th>':''}<th></th></tr></thead>
+      <thead><tr><th>Folio</th><th>Proveedor</th><th>Fecha pedido</th><th>Recibido</th><th>Estado</th><th>Partes / avance</th><th>Plazo</th>${esFinanzas()?'<th class="num">Total</th>':''}<th></th></tr></thead>
       <tbody>${dataF.map(p=>`<tr style="cursor:pointer" title="Clic: ver partes, cotejar factura y recibir" onclick="verPedido(${p.id}, '${p.estado}')">
         <td><b>${esc(p.folio_externo)||('#'+p.id)}</b></td><td>${esc(p.proveedores?.nombre)}</td>
-        <td>${fecha(p.fecha)}</td><td><span class="badge ${badges[p.estado]}">${p.estado}</span></td>
+        <td>${fecha(p.fecha)}</td>
+        <td class="small">${p.fecha_recibido?fecha(p.fecha_recibido):'<span class="muted">—</span>'}</td>
+        <td><span class="badge ${badges[p.estado]}">${p.estado}</span></td>
         <td class="small" style="white-space:nowrap">${resParteHTML(window._pp[p.id], window._pind && window._pind[p.id])}</td><td>${p.plazo_dias||0} días</td>${esFinanzas()?`<td class="num"><b>${fmt(p.total)}</b></td>`:''}
         <td style="white-space:nowrap" onclick="event.stopPropagation()"><button class="btn sec sm" onclick="verPedido(${p.id}, '${p.estado}')">Ver / Recibir</button>
         ${esAdmin() && ['enviado','parcial'].includes(p.estado) ? `<button class="btn sm" onclick="recibirPedido(${p.id})">Recibir todo ✓</button>`:''}</td>
-      </tr>`).join('') || '<tr><td colspan="8" class="muted">Sin pedidos registrados.</td></tr>'}</tbody></table></div></div>
+      </tr>`).join('') || '<tr><td colspan="9" class="muted">Sin pedidos con este filtro.</td></tr>'}</tbody></table></div></div>
     <div class="card"><h3>Portales de proveedores</h3><div class="tbl-scroll"><table id="prov-tabla"></table></div></div>`;
   const pr = await sb.from('proveedores').select('*').order('nombre');
   if(!pr.error) $('prov-tabla').innerHTML = `
@@ -3255,10 +3278,26 @@ async function axBM(){
     M('leyendo cotizaciones...');
     var D=document;
     if(!/pedidosAnteriores/i.test(location.pathname)){var h0=await fetch('/pedidosAnteriores').then(function(r){return r.text();});D=new DOMParser().parseFromString(h0,'text/html');}
-    var C=[].slice.call(D.querySelectorAll('.item-box[onclick*=showCotizacionModal]')).map(function(e){var n=(e.getAttribute('onclick').match(/\((\d+)\)/)||[])[1];return {n:n,t:e.textContent.replace(/\s+/g,' ').trim().slice(0,60)};}).filter(function(c){return c.n;});
+    var C=[].slice.call(D.querySelectorAll('.item-box[onclick*=showCotizacionModal]')).map(function(e){
+      var n=(e.getAttribute('onclick').match(/\((\d+)\)/)||[])[1];
+      var tx=e.textContent.replace(/\s+/g,' ').trim();
+      var fm=tx.match(/(\d{2})\/(\d{2})\/(\d{4})/);           // fecha REAL del pedido en Indar
+      var mm=tx.match(/\$([\d,]+\.\d\d)/);
+      return {n:n, t:tx.slice(0,60), f: fm ? fm[3]+'-'+fm[2]+'-'+fm[1] : '', m: mm?mm[1]:''};
+    }).filter(function(c){return c.n;});
     if(!C.length){alert('Abre Pedidos - Pedidos Anteriores y vuelve a dar clic al boton.');return;}
-    var F=prompt('Cual cotizacion importo a Axion Tools?\n\n'+C.map(function(c){return '- '+c.t;}).join('\n')+'\n\nEscribe el numero:',C[0].n);
+    // ¿cuáles ya están en Axion? Vienen en el hash si entraste con el botón "Traer pedidos que faltan"
+    var YA={};
+    try{
+      var hy=(location.hash||'').match(/[#&]axya=([^&]+)/);
+      if(hy) JSON.parse(decodeURIComponent(escape(atob(hy[1].replace(/-/g,'+').replace(/_/g,'/'))))).forEach(function(x){YA[String(x)]=1;});
+    }catch(ey){}
+    var FALTAN=C.filter(function(c){return !YA[c.n];});
+    var lista=C.map(function(c){return (YA[c.n]?'[YA ESTA] ':'[FALTA]  ')+c.n+'  '+c.f+'  $'+c.m;}).join('\n');
+    var sug = FALTAN.length ? FALTAN[FALTAN.length-1].n : C[0].n;
+    var F=prompt('Cual cotizacion importo a Axion Tools?\n\n'+lista+(FALTAN.length?('\n\nFALTAN POR IMPORTAR: '+FALTAN.map(function(x){return x.n;}).join(', ')):'\n\n(Todas estan importadas)')+'\n\nEscribe el numero:', sug);
     if(!F){var e0=document.getElementById('axmsg');if(e0)e0.remove();return;}
+    var CF=C.filter(function(c){return c.n===String(F).trim();})[0]||{};
     M('buscando partes de '+F+'...');
     var L=function(d){return [].slice.call(d.querySelectorAll('.item-box2[onclick*=openDetail]')).map(function(e){var i=(e.getAttribute('onclick').match(/'(\d+)'/)||[])[1];var m=e.textContent.match(new RegExp(F+'-(\\d+)\\/(\\d+)'));return (m&&i)?{id:i,s:+m[2]}:null;}).filter(Boolean);};
     var S=[];
@@ -3285,7 +3324,7 @@ async function axBM(){
         PR[c2].d=pd?pd.textContent.trim():c2;
       }catch(e2){PR[c2].d=c2;}}
     for(var n3=0;n3<KS.length;n3++){var i3=I[KS[n3]];var p3=PR[i3.c]||{};i3.l=p3.l;i3.s=p3.s;i3.d=p3.d||i3.c;}
-    var Y={v:2,tipo:'pedido',folio:String(F),fecha:new Date().toISOString().slice(0,10),serie:X,sos:U.map(function(x){return x.id;}),items:Object.values(I)};
+    var Y={v:2,tipo:'pedido',folio:String(F),fecha:(CF.f||new Date().toISOString().slice(0,10)),serie:X,sos:U.map(function(x){return x.id;}),items:Object.values(I)};
     var Q=A+'\x23import='+B(JSON.stringify(Y));
     var W=window.open(Q,'_blank');
     if(W){M('abriendo Axion Tools...');setTimeout(function(){var e3=document.getElementById('axmsg');if(e3)e3.remove();},3000);}
@@ -3323,6 +3362,14 @@ async function copiarBM(){
 }
 let impData = null;
 function deB64(s){ s = s.replace(/-/g,'+').replace(/_/g,'/'); return decodeURIComponent(escape(atob(s))); }
+// Abre Indar mandando la lista de folios YA importados, para que el marcador señale cuáles faltan
+async function traerPedidosFaltantes(){
+  const pf = await sb.from('pedidos_compra').select('folio_externo');
+  const folios = (pf.data||[]).map(x=>String(x.folio_externo));
+  const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(folios)))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+  window.open('https://indar.mx/pedidosAnteriores#axya='+b64, '_blank');
+  toast('Se abrió Indar. Ahí dale clic al marcador 🔧 Enviar a Axion y te dirá cuáles FALTAN.');
+}
 async function vImportar(){
   const raw = localStorage.getItem('ax_import');
   impData = null;
@@ -3337,6 +3384,8 @@ async function vImportar(){
         <p style="margin:14px 0"><a href="${BOOKMARKLET.replace(/"/g,'&quot;')}" class="btn" style="text-decoration:none"
           onclick="toast('Arrástralo a la barra de marcadores, no le des clic aquí', true); return false;">🔧 Enviar a Axion</a>
           <button class="btn sec" style="margin-left:8px" onclick="instalarBM()">📱 Instalar en iPad / iPhone</button></p>
+        <p style="margin:10px 0"><button class="btn" onclick="traerPedidosFaltantes()">🔎 Ver qué pedidos me faltan por importar</button>
+          <span class="small muted" style="margin-left:6px">Abre Indar marcando cuáles ya están en Axion y cuáles no.</span></p>
         <p class="small muted"><b>Cómo se usa:</b> 1) Entra a indar.mx con tu usuario → Pedidos → Pedidos Anteriores.
         2) Da clic en el marcador "Enviar a Axion". 3) Elige la cotización. 4) Se abre esta pantalla con todo precargado y confirmas.</p>
       </div>
