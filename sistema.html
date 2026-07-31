@@ -177,6 +177,7 @@ tr.oculto,tr.plegado{display:none}
       <div id="v-clientes" class="view"></div>
       <div id="v-pedidos" class="view"></div>
       <div id="v-apartados" class="view"></div>
+      <div id="v-devoluciones" class="view"></div>
       <div id="v-caja" class="view"></div>
       <div id="v-finanzas" class="view"></div>
       <div id="v-importar" class="view"></div>
@@ -293,6 +294,7 @@ const VISTAS = [
   {id:'clientes',   icono:'👥', titulo:'Clientes',   roles:['admin','vendedor','consulta']},
   {id:'pedidos',    icono:'🚚', titulo:'Pedidos a proveedor', roles:['admin','vendedor','consulta','contador']},
   {id:'apartados',  icono:'🔖', titulo:'Apartados',  roles:['admin','vendedor','consulta','contador']},
+  {id:'devoluciones', icono:'↩️', titulo:'Devoluciones', roles:['admin','vendedor','consulta','contador']},
   {id:'caja',       icono:'💵', titulo:'Corte de caja', roles:['admin','vendedor','contador']},
   {id:'finanzas',   icono:'💰', titulo:'Finanzas',   roles:['admin','consulta','contador']},
   {id:'importar',   icono:'📥', titulo:'Importar',   roles:['admin']},
@@ -317,7 +319,7 @@ async function irA(id){
   try{ localStorage.setItem('ax_vista', id); }catch(e){}
   logEv('vista', id);
   try { await ({resumen:vResumen, ventas:vVentas, cotizaciones:vCotizaciones, catalogo:vCatalogo, inventario:vInventario, clientes:vClientes,
-    pedidos:vPedidos, apartados:vApartados, caja:vCaja, finanzas:vFinanzas, usuarios:vUsuarios, importar:vImportar, actividad:vActividad})[id](); }
+    pedidos:vPedidos, apartados:vApartados, devoluciones:vDevoluciones, caja:vCaja, finanzas:vFinanzas, usuarios:vUsuarios, importar:vImportar, actividad:vActividad})[id](); }
   catch(e){ toast(errMsg(e), true); }
 }
 
@@ -2532,7 +2534,7 @@ async function verPedido(id, estado){
   const editando = esAdmin() && ['enviado','parcial'].includes(estado); // editar cantidades/quitar: solo admin
   const verCostos = esFinanzas(); // columnas de costo/importe: solo admin/contador
   const verFx = esFinanzas() || puedeVender(); // facturas (folio+monto+PDF): también vendedores, para cotejar cuál es cuál (decisión 24-jul)
-  const nCols = 3 + (recibiendo?1:0) + (verCostos?2:0) + (editando?1:0);
+  const nCols = 3 + (recibiendo?2:0) + (verCostos?2:0) + (editando?1:0);
   // agrupar por parte (sales order de Indar)
   const grupos = new Map();
   for(const i of data){ const p = i.parte || ''; if(!grupos.has(p)) grupos.set(p, []); grupos.get(p).push(i); }
@@ -2543,7 +2545,8 @@ async function verPedido(id, estado){
       <td class="num"><span class="badge ${pend<=0?'b-verde':(rec>0?'b-ambar':'b-gris')}">${rec}</span></td>
       ${recibiendo?`<td class="num">${pend>0?`<input id="rec-${i.id}" type="number" min="0" max="${pend}" value="0" style="width:64px;padding:5px;border:1px solid var(--linea);border-radius:6px;text-align:right">`:'✓'}</td>`:''}
       ${verCostos?`<td class="num">${fmt(i.costo_unit)}</td><td class="num">${fmt(i.importe)}</td>`:''}
-      ${editando?`<td style="text-align:center">${rec===0?`<input type="checkbox" id="ped-del-${i.id}">`:''}</td>`:''}</tr>`;
+      ${editando?`<td style="text-align:center">${rec===0?`<input type="checkbox" id="ped-del-${i.id}">`:''}</td>`:''}
+      ${recibiendo?`<td style="text-align:center"><button class="btn sec sm" title="Llegó dañado o equivocado" onclick='reportarDevolucion(${JSON.stringify({id:i.id,pid:i.producto_id,ped:id,parte:i.parte||'',d:(i.productos?i.productos.codigo+' · '+i.productos.descripcion:''),c:+i.costo_unit,q:+i.cantidad}).replace(/'/g,"&#39;")})'>⚠️</button></td>`:''}</tr>`;
   };
   const badgesParte = its => {
     const ped = its.reduce((s,i)=>s+ +i.cantidad,0), rec = its.reduce((s,i)=>s+ +(i.cantidad_recibida||0),0), fac = its.reduce((s,i)=>s+ +(i.cantidad_facturada||0),0);
@@ -2562,7 +2565,7 @@ async function verPedido(id, estado){
       <b>⚠️ Antes de recibir, checa el papel:</b> el número de <b>pedido ${esc(pedFolio||'')}</b> o de <b>parte</b> que trae la lista de empaque debe aparecer en esta pantalla. Si el papel dice otro número, ciérrala y abre el pedido correcto.
       <br><span class="small muted">Luego: 📦 Recibir esta parte → coteja cantidades → sube la foto del papel firmado → Registrar recepción.</span></div>`:''}
     <div class="tbl-scroll" style="max-height:400px;overflow-y:auto"><table>
-    <thead><tr><th>Producto</th><th class="num">Pedida</th><th class="num">Recibida</th>${recibiendo?'<th class="num">Recibir ahora</th>':''}${verCostos?'<th class="num">Costo</th><th class="num">Importe</th>':''}${editando?'<th>Quitar</th>':''}</tr></thead>
+    <thead><tr><th>Producto</th><th class="num">Pedida</th><th class="num">Recibida</th>${recibiendo?'<th class="num">Recibir ahora</th>':''}${verCostos?'<th class="num">Costo</th><th class="num">Importe</th>':''}${editando?'<th>Quitar</th>':''}${recibiendo?'<th title="Reportar dañado o equivocado">⚠️</th>':''}</tr></thead>
     <tbody>${cuerpo}</tbody>
     ${verCostos?`<tfoot><tr><th colspan="${nCols-1}" class="num">Suma</th><th class="num">${fmt(tot)}</th></tr></tfoot>`:''}</table></div>
     <div class="acciones">
@@ -2671,6 +2674,129 @@ async function recibirPedido(id){
   const {error} = await sb.rpc('recibir_pedido', {p_pedido_id:id});
   if(error){ toast(errMsg(error),true); return; }
   toast('Pedido recibido completo: inventario actualizado ✓'); vPedidos();
+}
+
+/* ============================================================
+   DEVOLUCIONES A PROVEEDOR (v87)
+   Llegó dañado/equivocado: se recibe (para cuadrar con la factura), sale del stock
+   y queda pendiente de nota de crédito o reposición.
+============================================================ */
+function reportarDevolucion(p){
+  abrirModal(`<h3>⚠️ Reportar producto dañado o equivocado</h3>
+    <p class="small muted" style="margin:0 0 8px">Se recibe normal (para que cuadre con la factura) pero <b>sale del stock vendible</b> y queda pendiente con Indar.</p>
+    <p style="margin:6px 0"><b>${esc(p.d)}</b><br><span class="small muted">Pedido ${esc(String(p.ped))}${p.parte?' · parte '+esc(p.parte):''} · costo ${fmt(p.c)}</span></p>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div><label>¿Cuántas piezas?</label><input type="number" id="dv-cant" min="1" max="${p.q}" value="1" step="1"></div>
+      <div><label>Motivo</label><select id="dv-motivo">
+        <option value="dañado">📦 Llegó dañado</option><option value="equivocado">🔄 No es lo que pedí</option>
+        <option value="calidad">👎 Mala calidad</option><option value="faltante">❓ Venía en la factura pero no llegó</option></select></div>
+    </div>
+    <label>¿Qué tiene? (para el reclamo)</label>
+    <input id="dv-detalle" placeholder="Ej: el mango de hule viene roto y cortado">
+    <label>Folio de la factura (si lo sabes)</label>
+    <input id="dv-fact" placeholder="Ej: 2796619">
+    <label>📷 Foto del daño (muy recomendable)</label>
+    <input type="file" id="dv-foto" accept="image/*" capture="environment">
+    <div class="acciones"><button class="btn" onclick='guardarDevolucion(${JSON.stringify(p).replace(/'/g,"&#39;")})'>Registrar devolución</button>
+      <button class="btn sec" onclick="cerrarModal()">Cancelar</button></div>`, true);
+}
+async function guardarDevolucion(p){
+  const cant = +$('dv-cant').value||0;
+  if(cant<=0){ toast('Escribe cuántas piezas', true); return; }
+  let foto = null;
+  const f = $('dv-foto').files && $('dv-foto').files[0];
+  if(f){
+    const path = 'devoluciones/'+p.ped+'/'+Date.now()+'_'+f.name.replace(/[^A-Za-z0-9_.-]/g,'_').slice(-50);
+    const up = await sb.storage.from('facturas').upload(path, f, {contentType:f.type||'image/jpeg'});
+    if(!up.error) foto = path;
+  }
+  const row = {pedido_id:p.ped, parte:p.parte||null, producto_id:p.pid, descripcion:p.d,
+    cantidad:cant, costo_unit:p.c, monto:Math.round(cant*p.c*100)/100,
+    motivo:$('dv-motivo').value, detalle:($('dv-detalle').value||'').trim(),
+    factura_folio:($('dv-fact').value||'').trim()||null, foto_path:foto,
+    nombre:perfil.nombre||perfil.correo, usuario_id:perfil.id};
+  const {data, error} = await sb.from('devoluciones_prov').insert(row).select().single();
+  if(error){ toast(errMsg(error), true); return; }
+  // sale del stock vendible (si ya se había recibido)
+  if(p.pid){
+    const pr = await sb.from('productos').select('stock').eq('id',p.pid).single();
+    if(pr.data && +pr.data.stock >= cant) await sb.from('productos').update({stock: +pr.data.stock - cant}).eq('id', p.pid);
+  }
+  logEv('devolucion','#'+data.folio+' '+p.d.slice(0,40)+' x'+cant);
+  cerrarModal(); toast('Devolución #'+data.folio+' registrada ⚠️ — queda pendiente con Indar');
+  vPedidos();
+}
+async function vDevoluciones(){
+  const {data, error} = await sb.from('devoluciones_prov').select('*, pedidos_compra(folio_externo)').order('fecha',{ascending:false});
+  if(error) throw error;
+  const pend = (data||[]).filter(d=>['pendiente','recogido'].includes(d.estado));
+  const f = window._dvFiltro || 'abiertas';
+  const lista = f==='abiertas' ? pend : (f==='todas' ? (data||[]) : (data||[]).filter(d=>d.estado===f));
+  const bad = {pendiente:'b-ambar', recogido:'b-azul', nota_credito:'b-verde', repuesto:'b-verde', rechazado:'b-rojo'};
+  const nom = {pendiente:'por recoger', recogido:'se lo llevaron', nota_credito:'nota de crédito ✓', repuesto:'repuesto ✓', rechazado:'rechazado'};
+  $('v-devoluciones').innerHTML = `
+    <div class="kpis">
+      <div class="kpi"><div class="l">Pendientes con Indar</div><div class="v">${pend.length}</div><div class="s">${pend.reduce((s,d)=>s+ +d.cantidad,0)} pieza(s)</div></div>
+      <div class="kpi"><div class="l">Dinero por recuperar</div><div class="v">${fmt(pend.reduce((s,d)=>s+ +d.monto,0))}</div><div class="s">nota de crédito o reposición</div></div>
+      <div class="kpi"><div class="l">Resueltas</div><div class="v">${(data||[]).filter(d=>['nota_credito','repuesto'].includes(d.estado)).length}</div><div class="s">de ${(data||[]).length} en total</div></div>
+    </div>
+    <div class="card">
+      <div class="toolbar" style="margin-bottom:10px">
+        ${[['abiertas','Abiertas'],['nota_credito','Con nota de crédito'],['repuesto','Repuestas'],['todas','Todas']].map(([k,t])=>
+          `<button class="btn ${f===k?'':'sec'} sm" onclick="window._dvFiltro='${k}'; vDevoluciones()">${t}</button>`).join('')}
+      </div>
+      <div class="tbl-scroll"><table>
+        <thead><tr><th>#</th><th>Producto</th><th>Pedido</th><th>Motivo</th><th class="num">Piezas</th>${esFinanzas()?'<th class="num">Monto</th>':''}<th>Estado</th><th></th></tr></thead>
+        <tbody>${lista.map(d=>`<tr>
+          <td><b>#${d.folio}</b><br><span class="small muted">${fecha(d.fecha)}</span></td>
+          <td>${esc((d.descripcion||'').slice(0,44))}${d.detalle?`<br><span class="small muted">${esc(d.detalle.slice(0,50))}</span>`:''}</td>
+          <td class="small">${esc(d.pedidos_compra?.folio_externo||'')}${d.factura_folio?`<br>🧾 ${esc(d.factura_folio)}`:''}</td>
+          <td><span class="badge b-gris">${esc(d.motivo)}</span></td>
+          <td class="num">${+d.cantidad}</td>
+          ${esFinanzas()?`<td class="num">${fmt(d.monto)}</td>`:''}
+          <td><span class="badge ${bad[d.estado]}">${nom[d.estado]||d.estado}</span>${d.nota_credito_folio?`<br><span class="small muted">NC ${esc(d.nota_credito_folio)}</span>`:''}</td>
+          <td style="white-space:nowrap">
+            ${d.foto_path?`<button class="btn sec sm" onclick="verEvidencia('${esc(d.foto_path)}')">📷</button>`:''}
+            ${['pendiente','recogido'].includes(d.estado) && puedeVender()?`<button class="btn sm" onclick="resolverDevolucion(${d.id})">Actualizar</button>`:''}</td>
+        </tr>`).join('') || '<tr><td colspan="8" class="muted">Sin devoluciones en este filtro 🎉</td></tr>'}</tbody></table></div>
+      <p class="small muted" style="margin-top:8px">Cuando Indar mande la <b>nota de crédito</b>, súbela en Importar como cualquier factura y luego marca aquí la devolución como resuelta.</p>
+    </div>`;
+}
+async function resolverDevolucion(id){
+  const d = (await sb.from('devoluciones_prov').select('*').eq('id',id).single()).data;
+  if(!d) return;
+  abrirModal(`<h3>Actualizar devolución #${d.folio}</h3>
+    <p class="small muted">${esc((d.descripcion||'').slice(0,60))} · ${+d.cantidad} pza(s) · ${fmt(d.monto)}</p>
+    <label>¿En qué quedó?</label>
+    <select id="rv-estado">
+      <option value="pendiente" ${d.estado==='pendiente'?'selected':''}>⏳ Sigue aquí, esperando que la recojan</option>
+      <option value="recogido" ${d.estado==='recogido'?'selected':''}>🚚 Ya se la llevaron, falta la nota de crédito</option>
+      <option value="nota_credito">✅ Llegó la nota de crédito</option>
+      <option value="repuesto">✅ Me repusieron la pieza</option>
+      <option value="rechazado">❌ Indar no la aceptó</option>
+    </select>
+    <label>Folio de la nota de crédito (si aplica)</label>
+    <input id="rv-nc" value="${esc(d.nota_credito_folio||'')}" placeholder="Ej: 2801234">
+    <label>Nota</label><input id="rv-nota" value="${esc(d.nota||'')}" placeholder="Ej: la recogió el chofer el viernes">
+    <div class="acciones"><button class="btn" onclick="guardarResolucion(${id})">Guardar</button>
+      <button class="btn sec" onclick="cerrarModal()">Cancelar</button></div>`);
+}
+async function guardarResolucion(id){
+  const est = $('rv-estado').value;
+  const upd = {estado:est, nota_credito_folio:($('rv-nc').value||'').trim()||null, nota:($('rv-nota').value||'').trim()};
+  if(['nota_credito','repuesto','rechazado'].includes(est)) upd.resuelto_en = new Date().toISOString();
+  const {error} = await sb.from('devoluciones_prov').update(upd).eq('id',id);
+  if(error){ toast(errMsg(error), true); return; }
+  // si me repusieron la pieza, regresa al stock
+  if(est==='repuesto'){
+    const d = (await sb.from('devoluciones_prov').select('producto_id,cantidad').eq('id',id).single()).data;
+    if(d && d.producto_id){
+      const pr = await sb.from('productos').select('stock').eq('id',d.producto_id).single();
+      if(pr.data) await sb.from('productos').update({stock: +pr.data.stock + +d.cantidad}).eq('id', d.producto_id);
+    }
+  }
+  logEv('devolucion_upd', id+' → '+est);
+  cerrarModal(); toast('Actualizado ✓'); vDevoluciones();
 }
 
 /* ============================================================
