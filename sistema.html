@@ -352,10 +352,26 @@ async function vActividad(){
 }
 
 /* ===== Resumen de partes en lista de pedidos ===== */
+/* Supabase entrega máximo 1000 filas por consulta: este helper las trae TODAS por bloques.
+   armar(q) debe devolver una consulta nueva cada vez (para poder pedirle otro rango). */
+async function traerTodo(armar){
+  const PAG = 1000; let desde = 0, out = [], hubo = true;
+  while(hubo){
+    const r = await armar().range(desde, desde+PAG-1);
+    if(r.error) throw r.error;
+    const filas = r.data||[];
+    out = out.concat(filas);
+    hubo = filas.length === PAG;
+    desde += PAG;
+    if(desde > 60000) break;
+  }
+  return out;
+}
 async function pedPartesStats(ids){
-  const r = await sb.from('pedido_compra_items').select('pedido_id,parte,cantidad,cantidad_recibida,cantidad_facturada').in('pedido_id', ids).range(0,9999);
+  const filas = await traerTodo(()=>sb.from('pedido_compra_items')
+    .select('pedido_id,parte,cantidad,cantidad_recibida,cantidad_facturada').in('pedido_id', ids).order('id'));
   const m = {};
-  for(const i of (r.data||[])){ const k=i.pedido_id, pt=i.parte||''; if(!m[k]) m[k]={}; if(!m[k][pt]) m[k][pt]={ped:0,rec:0,fac:0}; m[k][pt].ped+=+i.cantidad; m[k][pt].rec+=+(i.cantidad_recibida||0); m[k][pt].fac+=+(i.cantidad_facturada||0); }
+  for(const i of filas){ const k=i.pedido_id, pt=i.parte||''; if(!m[k]) m[k]={}; if(!m[k][pt]) m[k][pt]={ped:0,rec:0,fac:0}; m[k][pt].ped+=+i.cantidad; m[k][pt].rec+=+(i.cantidad_recibida||0); m[k][pt].fac+=+(i.cantidad_facturada||0); }
   return m;
 }
 function resParteHTML(g, pind){
@@ -431,7 +447,7 @@ async function syncIndar(){
   if(pr.error){ toast(errMsg(pr.error),true); return; }
   const ids = (pr.data||[]).map(function(x){ return x.id; });
   if(!ids.length){ toast('No hay pedidos activos (enviado/parcial) que consultar'); return; }
-  const it = await sb.from('pedido_compra_items').select('pedido_id,parte').in('pedido_id', ids).range(0,9999);
+  const it = {data: await traerTodo(()=>sb.from('pedido_compra_items').select('pedido_id,parte').in('pedido_id', ids).order('id'))};
   if(it.error){ toast(errMsg(it.error),true); return; }
   const m = {};
   for(const i of (it.data||[])){ const so = String(i.parte||''); if(so && !m[so]) m[so] = i.pedido_id; }
@@ -1968,8 +1984,8 @@ async function vInventario(){
     <button class="btn sec" id="btn-eti-nuevas" onclick="elegirEtiquetas()">🏷️ Etiquetas</button>`;
   const [{data, error}, mv, mr] = await Promise.all([
     sb.from('productos').select('*').order('descripcion'),
-    sb.from('venta_items').select('producto_id,cantidad,ventas!inner(cancelada)').eq('ventas.cancelada', false).range(0,9999),
-    sb.from('pedido_compra_items').select('producto_id').gt('cantidad_recibida', 0).range(0,9999)
+    traerTodo(()=>sb.from('venta_items').select('producto_id,cantidad,ventas!inner(cancelada)').eq('ventas.cancelada', false).order('id')).then(d=>({data:d})),
+    traerTodo(()=>sb.from('pedido_compra_items').select('producto_id').gt('cantidad_recibida', 0).order('id')).then(d=>({data:d}))
   ]);
   if(error) throw error;
   invData = data;
@@ -2136,12 +2152,12 @@ async function verResurtido(){
   // ritmo de venta: últimos 30 días (sin canceladas)
   const desde = new Date(Date.now() - 30*864e5).toISOString();
   const vi = await sb.from('venta_items').select('producto_id,cantidad,ventas!inner(fecha,cancelada)')
-    .gte('ventas.fecha', desde).eq('ventas.cancelada', false).range(0,9999);
+    .gte('ventas.fecha', desde).eq('ventas.cancelada', false).limit(5000);
   const v30 = {};
   (vi.data||[]).forEach(x=>{ v30[x.producto_id] = (v30[x.producto_id]||0) + (+x.cantidad||0); });
   // lo que ya viene en camino (pedidos enviados/parciales) no se vuelve a pedir
   const ped = await sb.from('pedido_compra_items').select('producto_id,cantidad,cantidad_recibida,pedidos_compra!inner(estado)')
-    .in('pedidos_compra.estado',['enviado','parcial']).range(0,9999);
+    .in('pedidos_compra.estado',['enviado','parcial']).limit(5000);
   const enCamino = {};
   (ped.data||[]).forEach(x=>{ const f=+x.cantidad - (+x.cantidad_recibida||0); if(f>0) enCamino[x.producto_id]=(enCamino[x.producto_id]||0)+f; });
   const OBJETIVO_DIAS = 28, ALERTA_DIAS = 14; // cubrir 4 semanas; avisar si no alcanza para 2
