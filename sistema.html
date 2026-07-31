@@ -866,10 +866,10 @@ async function rechazarCanc(id){
 async function nuevaVenta(){
   carrito = [];
   const [p, c] = await Promise.all([
-    sb.from('productos').select('*').eq('activo',true).order('descripcion'),
+    traerTodo(()=>sb.from('productos').select('*').eq('activo',true).order('descripcion')).then(d=>({data:d})),
     sb.from('clientes').select('id,nombre,oficio,desc_pct').order('nombre'),
   ]);
-  if(p.error||c.error){ toast(errMsg(p.error||c.error),true); return; }
+  if(c.error){ toast(errMsg(c.error),true); return; }
   prodCache = p.data; cliCache = c.data;
   abrirModal(`<h3>Nueva venta</h3>
     <div class="pos">
@@ -1363,7 +1363,7 @@ async function pintarCuadreSafdi(){
   const [vs, mapr, pr] = await Promise.all([
     sb.from('ventas').select('id,folio,fecha,total,cancelada,notas').gte('fecha',ini.toISOString()).lte('fecha',fin.toISOString()),
     sb.from('safdi_map').select('id_item,producto_id'),
-    sb.from('productos').select('id,codigo,descripcion,precio,stock')
+    traerTodo(()=>sb.from('productos').select('id,codigo,descripcion,precio,stock').order('id')).then(d=>({data:d}))
   ]);
   window._safdiMap = {}; (mapr.data||[]).forEach(m=>window._safdiMap[m.id_item]=m.producto_id);
   window._safdiProds = pr.data||[];
@@ -1985,7 +1985,7 @@ async function vInventario(){
   else if(puedeVender()) $('vtools').innerHTML = `<button class="btn" onclick="solicitarResurtido()">🛒 Pedir resurtido</button>
     <button class="btn sec" id="btn-eti-nuevas" onclick="elegirEtiquetas()">🏷️ Etiquetas</button>`;
   const [{data, error}, mv, mr] = await Promise.all([
-    sb.from('productos').select('*').order('descripcion'),
+    traerTodo(()=>sb.from('productos').select('*').order('descripcion')).then(d=>({data:d, error:null})),
     traerTodo(()=>sb.from('venta_items').select('producto_id,cantidad,ventas!inner(cancelada)').eq('ventas.cancelada', false).order('id')).then(d=>({data:d})),
     traerTodo(()=>sb.from('pedido_compra_items').select('producto_id').gt('cantidad_recibida', 0).order('id')).then(d=>({data:d}))
   ]);
@@ -4071,7 +4071,7 @@ async function subirListaPrecios(){
     let actualizados = 0;
     if($('lp-mios').checked){
       st('Actualizando costos y precios de tus productos...');
-      const {data:mios} = await sb.from('productos').select('id,codigo');
+      const mios = await traerTodo(()=>sb.from('productos').select('id,codigo,precio').order('id'));
       const mapa = new Map(regs.map(r=>[r.codigo, r]));
       for(const p of (mios||[])){
         const r = mapa.get(p.codigo);
