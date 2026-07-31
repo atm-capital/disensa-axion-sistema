@@ -129,7 +129,14 @@ tr.oculto,tr.plegado{display:none}
       <div class="field"><label>Correo</label><input id="li-email" type="email" autocomplete="username"></div>
       <div class="field"><label>Contraseña</label><input id="li-pass" type="password" autocomplete="current-password"></div>
       <button class="btn full" onclick="login()">Entrar</button>
-      <p style="margin-top:12px;text-align:center"><button class="link" onclick="modoRegistro(true)">¿No tienes cuenta? Regístrate</button></p>
+      <p style="margin-top:12px;text-align:center"><button class="link" onclick="olvidePass()">¿Olvidaste tu contraseña?</button></p>
+      <p style="margin-top:4px;text-align:center"><button class="link" onclick="modoRegistro(true)">¿No tienes cuenta? Regístrate</button></p>
+    </div>
+    <div id="f-nueva" class="hidden">
+      <p style="margin-bottom:14px">Escribe tu <b>nueva contraseña</b> para <span id="np-quien"></span></p>
+      <div class="field"><label>Nueva contraseña</label><input id="np-1" type="password" autocomplete="new-password" placeholder="mínimo 6 caracteres"></div>
+      <div class="field"><label>Repítela</label><input id="np-2" type="password" autocomplete="new-password"></div>
+      <button class="btn full" onclick="guardarNuevaPass()">Guardar y entrar</button>
     </div>
     <div id="f-reg" class="hidden">
       <div class="field"><label>Nombre completo</label><input id="rg-nombre"></div>
@@ -235,8 +242,15 @@ window.addEventListener('DOMContentLoaded', async () => {
   const {url, key} = getCfg();
   if(!url || !key){ $('scr-config').classList.remove('hidden'); return; }
   sb = supabase.createClient(url, key);
+  // ¿viene de la liga de "olvidé mi contraseña"? → pedir la nueva antes de entrar
+  const hashAuth = (location.hash||'');
+  const esRecuperacion = /type=recovery/.test(hashAuth) || /[?&]type=recovery/.test(location.search);
+  sb.auth.onAuthStateChange((ev, s) => {
+    if(ev === 'PASSWORD_RECOVERY'){ modoNuevaPass(s && s.user ? s.user.email : ''); return; }
+    if(!s && sesion) location.reload();
+  });
   const {data:{session}} = await sb.auth.getSession();
-  sb.auth.onAuthStateChange((_e, s) => { if(!s && sesion) location.reload(); });
+  if(esRecuperacion){ modoNuevaPass(session && session.user ? session.user.email : ''); return; }
   if(!session){ $('scr-login').classList.remove('hidden'); return; }
   sesion = session;
   await cargarPerfil();
@@ -269,6 +283,36 @@ async function login(){
   const {data, error} = await sb.auth.signInWithPassword({email:$('li-email').value.trim(), password:$('li-pass').value});
   if(error){ $('login-err').innerHTML = `<div class="error-box">${esc(errMsg(error))}</div>`; return; }
   sesion = data.session; await cargarPerfil();
+}
+/* ===== Recuperar contraseña (v92) ===== */
+async function olvidePass(){
+  const correo = ($('li-email').value||'').trim() || (prompt('¿Cuál es tu correo? Te mandamos una liga para cambiar tu contraseña:')||'').trim();
+  if(!correo){ return; }
+  $('login-err').innerHTML = '<div class="card" style="padding:10px">Enviando...</div>';
+  const {error} = await sb.auth.resetPasswordForEmail(correo, {redirectTo: location.origin + '/sistema.html'});
+  if(error){ $('login-err').innerHTML = `<div class="error-box">${esc(errMsg(error))}</div>`; return; }
+  $('login-err').innerHTML = `<div class="card" style="border-left:4px solid var(--verde,#15803d);padding:10px">
+    ✅ <b>Te mandamos un correo a ${esc(correo)}</b><br>
+    <span class="small">Ábrelo y dale a la liga para poner tu nueva contraseña. Si no lo ves, revisa <b>spam</b> o correo no deseado.</span></div>`;
+}
+function modoNuevaPass(correo){
+  $('scr-login').classList.remove('hidden');
+  $('f-login').classList.add('hidden'); $('f-reg').classList.add('hidden');
+  $('f-nueva').classList.remove('hidden');
+  $('np-quien').textContent = correo || 'tu cuenta';
+  setTimeout(()=>$('np-1').focus(), 150);
+}
+async function guardarNuevaPass(){
+  const p1 = $('np-1').value, p2 = $('np-2').value;
+  if(p1.length < 6){ $('login-err').innerHTML = '<div class="error-box">La contraseña debe tener al menos 6 caracteres.</div>'; return; }
+  if(p1 !== p2){ $('login-err').innerHTML = '<div class="error-box">Las dos contraseñas no son iguales.</div>'; return; }
+  const {error} = await sb.auth.updateUser({password: p1});
+  if(error){ $('login-err').innerHTML = `<div class="error-box">${esc(errMsg(error))}</div>`; return; }
+  $('f-nueva').classList.add('hidden'); $('f-login').classList.remove('hidden');
+  $('login-err').innerHTML = '<div class="card" style="border-left:4px solid var(--verde,#15803d);padding:10px">✅ Contraseña actualizada. Entrando...</div>';
+  try{ history.replaceState(null,'',location.pathname); }catch(e){}
+  const {data} = await sb.auth.getSession();
+  if(data && data.session){ sesion = data.session; await cargarPerfil(); }
 }
 async function registrar(){
   $('login-err').innerHTML='';
