@@ -2412,6 +2412,15 @@ async function vPedidos(){
   const {data, error} = await sb.from('pedidos_compra').select('*, proveedores(nombre)').order('fecha',{ascending:false});
   if(error) throw error;
   window._pp = await pedPartesStats(data.map(p=>p.id));
+  // devoluciones por pedido, para marcarlas en la lista
+  try{
+    const dv = await sb.from('devoluciones_prov').select('pedido_id,cantidad,estado');
+    window._pdev = {};
+    (dv.data||[]).forEach(d=>{ if(!d.pedido_id) return; const k=d.pedido_id;
+      if(!window._pdev[k]) window._pdev[k]={n:0, pz:0, abiertas:0};
+      window._pdev[k].n++; window._pdev[k].pz += +d.cantidad;
+      if(['pendiente','recogido'].includes(d.estado)) window._pdev[k].abiertas++; });
+  }catch(e){ window._pdev = {}; }
   try{ const _pir = await sb.from('partes_indar').select('*').in('pedido_id', data.map(p=>p.id)); window._pind = {}; for(const z of ((_pir&&_pir.data)||[])){ if(!window._pind[z.pedido_id]) window._pind[z.pedido_id]={}; window._pind[z.pedido_id][String(z.parte)]=z; } }catch(e){ window._pind={}; }
   const badges = {borrador:'b-gris', enviado:'b-azul', parcial:'b-ambar', recibido:'b-verde', cancelado:'b-rojo'};
   const porEstado = {};
@@ -2432,7 +2441,8 @@ async function vPedidos(){
   const fEst = window._pedFiltro, fCla = window._pedClase;
   let dataF = data;
   if(fEst) dataF = dataF.filter(p=>p.estado===fEst);
-  if(fCla) dataF = dataF.filter(p=>clase(p)===fCla);
+  if(fCla==='condev') dataF = dataF.filter(p=>window._pdev && window._pdev[p.id]);
+  else if(fCla) dataF = dataF.filter(p=>clase(p)===fCla);
   $('v-pedidos').innerHTML = `
     <div class="kpis">
       ${['enviado','parcial','recibido','borrador','cancelado'].filter(e=>porEstado[e]).map(e=>`
@@ -2445,6 +2455,7 @@ async function vPedidos(){
       <button class="btn ${fCla==='porllegar'?'':'sec'} sm" onclick="window._pedClase='porllegar'; vPedidos()">⏳ Por llegar (${cl.porllegar||0})</button>
       <button class="btn ${fCla==='difs'?'':'sec'} sm" onclick="window._pedClase='difs'; vPedidos()">⚠️ Sin factura (${cl.difs||0})</button>
       <button class="btn ${fCla==='completo'?'':'sec'} sm" onclick="window._pedClase='completo'; vPedidos()">✅ Completos (${cl.completo||0})</button>
+      ${Object.keys(window._pdev||{}).length?`<button class="btn ${fCla==='condev'?'':'sec'} sm" onclick="window._pedClase='condev'; vPedidos()">↩️ Con devolución (${Object.keys(window._pdev).length})</button>`:''}
     </div>
     ${puedeVender()?`<button class="btn sm" style="float:right;margin-left:10px" onclick="buscarFolio()">🔍 ¿Qué me están entregando?</button>`:''}
     <button class="btn sm" style="float:right;margin-left:10px" onclick="syncIndar()">🔄 Actualizar estatus Indar</button><button class="btn sm sec" style="float:right" onclick="traerFacturasIndar()">🧾 Traer facturas de Indar</button><p class="small muted" style="margin-bottom:10px">Los pedidos se capturan en el portal del proveedor (Indar / Holcim) y aquí se registran para dar seguimiento. Al marcar <b>Recibido</b>, las cantidades se suman al inventario automáticamente.</p>
@@ -2455,7 +2466,7 @@ async function vPedidos(){
         <td>${fecha(p.fecha)}</td>
         <td class="small">${p.fecha_recibido?fecha(p.fecha_recibido):'<span class="muted">—</span>'}</td>
         <td><span class="badge ${badges[p.estado]}">${p.estado}</span></td>
-        <td class="small" style="white-space:nowrap">${resParteHTML(window._pp[p.id], window._pind && window._pind[p.id])}</td><td>${p.plazo_dias||0} días</td>${esFinanzas()?`<td class="num"><b>${fmt(p.total)}</b></td>`:''}
+        <td class="small" style="white-space:nowrap">${resParteHTML(window._pp[p.id], window._pind && window._pind[p.id])}${(window._pdev&&window._pdev[p.id])?`<br><span class="badge ${window._pdev[p.id].abiertas?'b-ambar':'b-verde'}" title="Tiene devolución con Indar">↩️ ${window._pdev[p.id].pz} devuelta(s)${window._pdev[p.id].abiertas?'':' ✓'}</span>`:''}</td><td>${p.plazo_dias||0} días</td>${esFinanzas()?`<td class="num"><b>${fmt(p.total)}</b></td>`:''}
         <td style="white-space:nowrap" onclick="event.stopPropagation()"><button class="btn sec sm" onclick="verPedido(${p.id}, '${p.estado}')">Ver / Recibir</button>
         ${esAdmin() && ['enviado','parcial'].includes(p.estado) ? `<button class="btn sm" onclick="recibirPedido(${p.id})">Recibir todo ✓</button>`:''}</td>
       </tr>`).join('') || '<tr><td colspan="9" class="muted">Sin pedidos con este filtro.</td></tr>'}</tbody></table></div></div>
