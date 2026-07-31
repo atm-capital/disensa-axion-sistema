@@ -2524,6 +2524,10 @@ async function verPedido(id, estado){
   ]);
   if(it.error){ toast(errMsg(it.error),true); return; }
   const data = it.data, facturas = fx.error ? [] : (fx.data||[]); const pindar = (pix && !pix.error && pix.data) ? pix.data : [];
+  const devR = await sb.from('devoluciones_prov').select('*').eq('pedido_id', id);
+  const devs = devR.data||[];
+  const devPorProd = {}; devs.forEach(d=>{ if(d.producto_id) devPorProd[d.producto_id] = (devPorProd[d.producto_id]||[]).concat(d); });
+  const nomDev = {pendiente:'por recoger', recogido:'ya se la llevaron', nota_credito:'nota de crédito ✓', repuesto:'repuesto ✓', rechazado:'rechazada'};
   const pedR = await sb.from('pedidos_compra').select('folio_externo').eq('id', id).maybeSingle();
   const pedFolio = (pedR.data||{}).folio_externo || '';
   window._pedFolioAct = pedFolio; window._recOk = false;
@@ -2534,7 +2538,7 @@ async function verPedido(id, estado){
   const editando = esAdmin() && ['enviado','parcial'].includes(estado); // editar cantidades/quitar: solo admin
   const verCostos = esFinanzas(); // columnas de costo/importe: solo admin/contador
   const verFx = esFinanzas() || puedeVender(); // facturas (folio+monto+PDF): también vendedores, para cotejar cuál es cuál (decisión 24-jul)
-  const nCols = 3 + (recibiendo?2:0) + (verCostos?2:0) + (editando?1:0);
+  const nCols = 3 + (recibiendo?1:0) + (puedeVender()?1:0) + (verCostos?2:0) + (editando?1:0);
   // agrupar por parte (sales order de Indar)
   const grupos = new Map();
   for(const i of data){ const p = i.parte || ''; if(!grupos.has(p)) grupos.set(p, []); grupos.get(p).push(i); }
@@ -2546,7 +2550,8 @@ async function verPedido(id, estado){
       ${recibiendo?`<td class="num">${pend>0?`<input id="rec-${i.id}" type="number" min="0" max="${pend}" value="0" style="width:64px;padding:5px;border:1px solid var(--linea);border-radius:6px;text-align:right">`:'✓'}</td>`:''}
       ${verCostos?`<td class="num">${fmt(i.costo_unit)}</td><td class="num">${fmt(i.importe)}</td>`:''}
       ${editando?`<td style="text-align:center">${rec===0?`<input type="checkbox" id="ped-del-${i.id}">`:''}</td>`:''}
-      ${recibiendo?`<td style="text-align:center"><button class="btn sec sm" title="Llegó dañado o equivocado" onclick='reportarDevolucion(${JSON.stringify({id:i.id,pid:i.producto_id,ped:id,parte:i.parte||'',d:(i.productos?i.productos.codigo+' · '+i.productos.descripcion:''),c:+i.costo_unit,q:+i.cantidad}).replace(/'/g,"&#39;")})'>⚠️</button></td>`:''}</tr>`;
+      ${puedeVender()?`<td style="text-align:center;white-space:nowrap">${(devPorProd[i.producto_id]||[]).map(d=>`<span class="badge ${['nota_credito','repuesto'].includes(d.estado)?'b-verde':'b-ambar'}" title="${esc(d.detalle||'')}">↩️ ${+d.cantidad} ${nomDev[d.estado]||d.estado}</span>`).join(' ')}
+        <button class="btn sec sm" title="Llegó dañado o equivocado" onclick='reportarDevolucion(${JSON.stringify({id:i.id,pid:i.producto_id,ped:id,parte:i.parte||'',d:(i.productos?i.productos.codigo+' · '+i.productos.descripcion:''),c:+i.costo_unit,q:+i.cantidad}).replace(/'/g,"&#39;")})'>⚠️</button></td>`:''}</tr>`;
   };
   const badgesParte = its => {
     const ped = its.reduce((s,i)=>s+ +i.cantidad,0), rec = its.reduce((s,i)=>s+ +(i.cantidad_recibida||0),0), fac = its.reduce((s,i)=>s+ +(i.cantidad_facturada||0),0);
@@ -2559,13 +2564,18 @@ async function verPedido(id, estado){
     ${its.map(fila).join('')}`).join('');
   abrirModal(`<h3>Partidas del pedido (${data.length}${grupos.size>1?` · ${grupos.size} partes`:''})</h3>
     ${resumenPartes(grupos, facturas, data, pindar)}
+    ${devs.length?`<div class="card" style="border-left:4px solid ${devs.some(d=>['pendiente','recogido'].includes(d.estado))?'#d97706':'#15803d'};padding:10px;margin-bottom:10px">
+      <b>↩️ Este pedido tiene ${devs.length} devolución(es) con Indar:</b>
+      ${devs.map(d=>`<br>• ${+d.cantidad} × ${esc((d.descripcion||'').slice(0,42))} — <b>${esc(d.motivo)}</b>${d.detalle?' ('+esc(d.detalle.slice(0,45))+')':''} · <span class="badge ${['nota_credito','repuesto'].includes(d.estado)?'b-verde':'b-ambar'}">${nomDev[d.estado]||d.estado}</span>`).join('')}
+      <br><span class="small muted">Esas piezas ya NO cuentan en el inventario. Dale seguimiento en la pestaña ↩️ Devoluciones.</span>
+      <br><button class="btn sec sm" style="margin-top:6px" onclick="cerrarModal(); irA('devoluciones')">Ver devoluciones</button></div>`:''}
     <div id="ev-ped" class="small" style="margin:0 0 8px"></div>
     ${facturas.length ? `<p class="small" style="margin-bottom:6px">🧾 <b>Facturas de este pedido:</b> ${facturas.map(f=>`${esc(f.folio)}${verFx?` (${fmt(f.total)})${f.pdf_path?` <button class="btn sm sec" onclick="verPdfFactura('${esc(f.pdf_path)}')">📄 Ver</button>`:''}`:''}`).join(' · ')}</p>` : ''}
     ${recibiendo?`<div class="card" style="border-left:4px solid var(--naranja,#e8862d);padding:10px;margin-bottom:10px">
       <b>⚠️ Antes de recibir, checa el papel:</b> el número de <b>pedido ${esc(pedFolio||'')}</b> o de <b>parte</b> que trae la lista de empaque debe aparecer en esta pantalla. Si el papel dice otro número, ciérrala y abre el pedido correcto.
       <br><span class="small muted">Luego: 📦 Recibir esta parte → coteja cantidades → sube la foto del papel firmado → Registrar recepción.</span></div>`:''}
     <div class="tbl-scroll" style="max-height:400px;overflow-y:auto"><table>
-    <thead><tr><th>Producto</th><th class="num">Pedida</th><th class="num">Recibida</th>${recibiendo?'<th class="num">Recibir ahora</th>':''}${verCostos?'<th class="num">Costo</th><th class="num">Importe</th>':''}${editando?'<th>Quitar</th>':''}${recibiendo?'<th title="Reportar dañado o equivocado">⚠️</th>':''}</tr></thead>
+    <thead><tr><th>Producto</th><th class="num">Pedida</th><th class="num">Recibida</th>${recibiendo?'<th class="num">Recibir ahora</th>':''}${verCostos?'<th class="num">Costo</th><th class="num">Importe</th>':''}${editando?'<th>Quitar</th>':''}${puedeVender()?'<th title="Reportar dañado o equivocado">Devolución</th>':''}</tr></thead>
     <tbody>${cuerpo}</tbody>
     ${verCostos?`<tfoot><tr><th colspan="${nCols-1}" class="num">Suma</th><th class="num">${fmt(tot)}</th></tr></tfoot>`:''}</table></div>
     <div class="acciones">
