@@ -2756,11 +2756,22 @@ async function vDevoluciones(){
           ${esFinanzas()?`<td class="num">${fmt(d.monto)}</td>`:''}
           <td><span class="badge ${bad[d.estado]}">${nom[d.estado]||d.estado}</span>${d.nota_credito_folio?`<br><span class="small muted">NC ${esc(d.nota_credito_folio)}</span>`:''}</td>
           <td style="white-space:nowrap">
-            ${d.foto_path?`<button class="btn sec sm" onclick="verEvidencia('${esc(d.foto_path)}')">📷</button>`:''}
+            ${d.foto_path?`<button class="btn sec sm" onclick="verEvidencia('${esc(d.foto_path)}')">📷 Ver</button>`
+              :(puedeVender()?`<label class="btn sec sm" style="cursor:pointer">📷 Subir<input type="file" accept="image/*" capture="environment" style="display:none" onchange="subirFotoDev(${d.id}, ${d.pedido_id||0}, this)"></label>`:'')}
             ${['pendiente','recogido'].includes(d.estado) && puedeVender()?`<button class="btn sm" onclick="resolverDevolucion(${d.id})">Actualizar</button>`:''}</td>
         </tr>`).join('') || '<tr><td colspan="8" class="muted">Sin devoluciones en este filtro 🎉</td></tr>'}</tbody></table></div>
       <p class="small muted" style="margin-top:8px">Cuando Indar mande la <b>nota de crédito</b>, súbela en Importar como cualquier factura y luego marca aquí la devolución como resuelta.</p>
     </div>`;
+}
+async function subirFotoDev(id, ped, inp){
+  const f = inp.files && inp.files[0]; if(!f) return;
+  toast('Subiendo foto...');
+  const path = 'devoluciones/'+(ped||0)+'/'+Date.now()+'_'+f.name.replace(/[^A-Za-z0-9_.-]/g,'_').slice(-50);
+  const up = await sb.storage.from('facturas').upload(path, f, {contentType:f.type||'image/jpeg'});
+  if(up.error){ toast(errMsg(up.error), true); return; }
+  const {error} = await sb.from('devoluciones_prov').update({foto_path:path}).eq('id',id);
+  if(error){ toast(errMsg(error), true); return; }
+  toast('Foto guardada ✓'); vDevoluciones();
 }
 async function resolverDevolucion(id){
   const d = (await sb.from('devoluciones_prov').select('*').eq('id',id).single()).data;
