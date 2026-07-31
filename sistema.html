@@ -651,11 +651,11 @@ async function vResumen(){
   const mes = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
   const hace14 = new Date(hoy); hace14.setDate(hace14.getDate()-13);
   const [ventasMes, prods, cxp, pedCurso, itemsMes] = await Promise.all([
-    sb.from('ventas').select('fecha,total,descuento,cancelada').gte('fecha', mes.toISOString()).eq('cancelada', false),
-    sb.from('productos').select('costo,precio,stock,stock_min,activo').eq('activo', true),
+    traerTodo(()=>sb.from('ventas').select('fecha,total,descuento,cancelada').gte('fecha', mes.toISOString()).eq('cancelada', false).order('id')).then(d=>({data:d})),
+    traerTodo(()=>sb.from('productos').select('costo,precio,stock,stock_min,activo').eq('activo', true).order('id')).then(d=>({data:d})),
     sb.from('cuentas_pagar').select('*, proveedores(nombre)').neq('estado','pagada').order('fecha_vencimiento'),
     sb.from('pedidos_compra').select('folio_externo,fecha,estado,total,proveedores(nombre)').in('estado',['borrador','enviado','parcial']).order('fecha',{ascending:false}),
-    esFinanzas() ? sb.from('venta_items').select('cantidad,precio_unit,costo_unit,ventas!inner(fecha,cancelada)').gte('ventas.fecha', mes.toISOString()).eq('ventas.cancelada', false) : Promise.resolve({data:null, error:null}),
+    esFinanzas() ? traerTodo(()=>sb.from('venta_items').select('cantidad,precio_unit,costo_unit,ventas!inner(fecha,cancelada)').gte('ventas.fecha', mes.toISOString()).eq('ventas.cancelada', false).order('id')).then(d=>({data:d, error:null})) : Promise.resolve({data:null, error:null}),
   ]);
   for(const r of [ventasMes,prods,cxp,pedCurso]) if(r.error) throw r.error;
   let utilMes = null, margenPct = 0;
@@ -752,7 +752,7 @@ async function vVentas(){
   if(error) throw error;
   const utilPor = {};
   if(esFinanzas() && data.length){
-    const it = await sb.from('venta_items').select('venta_id,cantidad,precio_unit,costo_unit').in('venta_id', data.map(v=>v.id));
+    const it = {data: await traerTodo(()=>sb.from('venta_items').select('venta_id,cantidad,precio_unit,costo_unit').in('venta_id', data.map(v=>v.id)).order('id'))};
     (it.data||[]).forEach(i=>{ utilPor[i.venta_id] = (utilPor[i.venta_id]||0) + (+i.precio_unit/1.16 - +i.costo_unit) * +i.cantidad; });
     data.forEach(v=>{ if(utilPor[v.id]!==undefined) utilPor[v.id] = Math.round((utilPor[v.id] - +(v.descuento||0)/1.16)*100)/100; });
   }
@@ -2153,13 +2153,13 @@ function calcMargen(){
 async function verResurtido(){
   // ritmo de venta: últimos 30 días (sin canceladas)
   const desde = new Date(Date.now() - 30*864e5).toISOString();
-  const vi = await sb.from('venta_items').select('producto_id,cantidad,ventas!inner(fecha,cancelada)')
-    .gte('ventas.fecha', desde).eq('ventas.cancelada', false).limit(5000);
+  const vi = {data: await traerTodo(()=>sb.from('venta_items').select('producto_id,cantidad,ventas!inner(fecha,cancelada)')
+    .gte('ventas.fecha', desde).eq('ventas.cancelada', false).order('id'))};
   const v30 = {};
   (vi.data||[]).forEach(x=>{ v30[x.producto_id] = (v30[x.producto_id]||0) + (+x.cantidad||0); });
   // lo que ya viene en camino (pedidos enviados/parciales) no se vuelve a pedir
-  const ped = await sb.from('pedido_compra_items').select('producto_id,cantidad,cantidad_recibida,pedidos_compra!inner(estado)')
-    .in('pedidos_compra.estado',['enviado','parcial']).limit(5000);
+  const ped = {data: await traerTodo(()=>sb.from('pedido_compra_items').select('producto_id,cantidad,cantidad_recibida,pedidos_compra!inner(estado)')
+    .in('pedidos_compra.estado',['enviado','parcial']).order('id'))};
   const enCamino = {};
   (ped.data||[]).forEach(x=>{ const f=+x.cantidad - (+x.cantidad_recibida||0); if(f>0) enCamino[x.producto_id]=(enCamino[x.producto_id]||0)+f; });
   const OBJETIVO_DIAS = 28, ALERTA_DIAS = 14; // cubrir 4 semanas; avisar si no alcanza para 2
@@ -3103,8 +3103,8 @@ async function vCaja(){
 async function acumHistorico(){
   const el = $('caja-hist'); if(!el) return;
   const [v, m] = await Promise.all([
-    sb.from('ventas').select('total,metodo_pago').eq('cancelada',false),
-    sb.from('caja_movs').select('tipo,monto')
+    traerTodo(()=>sb.from('ventas').select('total,metodo_pago').eq('cancelada',false).order('id')).then(d=>({data:d})),
+    traerTodo(()=>sb.from('caja_movs').select('tipo,monto').order('id')).then(d=>({data:d}))
   ]);
   const ef = (v.data||[]).filter(x=>x.metodo_pago==='efectivo').reduce((s,x)=>s+ +x.total,0);
   const ret = (m.data||[]).filter(x=>x.tipo!=='entrada').reduce((s,x)=>s+ +x.monto,0);
