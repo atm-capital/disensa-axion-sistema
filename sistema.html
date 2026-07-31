@@ -3301,38 +3301,49 @@ async function axBM(){
     var tieneYA = Object.keys(YA).length > 0;
     var FALTAN = tieneYA ? C.filter(function(c){return !YA[c.n];}) : [];
     var lista=C.map(function(c){return (tieneYA?(YA[c.n]?'[YA ESTA] ':'[FALTA]   '):'')+c.n+'  '+c.f+'  $'+c.m;}).join('\n');
-    var sug = FALTAN.length ? FALTAN[0].n : C[0].n;
+    var sug = FALTAN.length ? FALTAN.map(function(x){return x.n;}).join(',') : C[0].n;
     var pie = tieneYA ? (FALTAN.length?('\n\nFALTAN POR IMPORTAR: '+FALTAN.map(function(x){return x.n;}).join(', ')):'\n\n(Todas estan importadas ya)') : '\n\n(Para ver cuales FALTAN: entra por el boton "Ver que pedidos me faltan" en Axion - Importar)';
-    var F=prompt('Cual cotizacion importo a Axion Tools?\n\n'+lista+pie+'\n\nEscribe el numero:', sug);
+    var F=prompt('Cual(es) importo a Axion Tools?\n\n'+lista+pie+'\n\nEscribe el numero (o varios separados por coma):', sug);
     if(!F){var e0=document.getElementById('axmsg');if(e0)e0.remove();return;}
-    var CF=C.filter(function(c){return c.n===String(F).trim();})[0]||{};
-    M('buscando partes de '+F+'...');
-    var L=function(d){return [].slice.call(d.querySelectorAll('.item-box2[onclick*=openDetail]')).map(function(e){var i=(e.getAttribute('onclick').match(/'(\d+)'/)||[])[1];var m=e.textContent.match(new RegExp(F+'-(\\d+)\\/(\\d+)'));return (m&&i)?{id:i,s:+m[2]}:null;}).filter(Boolean);};
-    var S=[];
-    if(typeof showCotizacionModal==='function'&&/pedidosAnteriores/i.test(location.pathname)){showCotizacionModal(+F);await new Promise(function(r){setTimeout(r,900);});S=L(document);}else{S=L(D);}
-    if(!S.length){alert('No encontre las partes de '+F+'. Da clic a la cotizacion para ver sus partes y reintenta.');return;}
-    var vistos={},U=S.filter(function(x){if(vistos[x.id])return false;vistos[x.id]=1;return true;});
-    var X=Math.max.apply(null,S.map(function(x){return x.s;}));
-    M('leyendo partidas de '+U.length+' parte(s)...');
-    var I={},o,d1,t1,k;
-    for(var a=0;a<U.length;a++){o=U[a];d1=await P('/pedidosAnteriores/getDetalleFacturado','id='+o.id);
-      if(Array.isArray(d1))for(var b=0;b<d1.length;b++){t1=d1[b];k=o.id+'|'+t1.itemid;if(!I[k])I[k]={c:t1.itemid,so:String(o.id),q:0,e:0,f:0};I[k].q+=+t1.cantPedido||0;I[k].e+=+t1.cantEmpacada||0;I[k].f+=+t1.cantFacturada||0;}}
-    var KS=Object.keys(I);
-    if(!KS.length){alert('Las partes no regresaron partidas. Intenta mas tarde.');return;}
-    var PR={},CS=[];
-    for(var n1=0;n1<KS.length;n1++){var cx=I[KS[n1]].c;if(!PR[cx]){PR[cx]={};CS.push(cx);}}
-    for(var n2=0;n2<CS.length;n2++){var c2=CS[n2];M('precios '+(n2+1)+'/'+CS.length+'...');
-      try{var h=await fetch('/portal/detallesProducto/'+encodeURIComponent(c2.replace(/ /g,'_'))).then(function(r){return r.text();});
-        var dd=new DOMParser().parseFromString(h,'text/html');
-        var l=(h.match(/Precio Lista:[\s\S]{0,120}?\$\s*([\d,]+\.?\d*)/)||[])[1];
-        var sg=(h.match(/sugerido de venta:[\s\S]{0,120}?\$\s*([\d,]+\.?\d*)/)||[])[1];
-        PR[c2].l=l?parseFloat(l.replace(/,/g,'')):null;
-        PR[c2].s=sg?parseFloat(sg.replace(/,/g,'')):null;
-        var pd=dd.querySelector('.purchasedescription');
-        PR[c2].d=pd?pd.textContent.trim():c2;
-      }catch(e2){PR[c2].d=c2;}}
-    for(var n3=0;n3<KS.length;n3++){var i3=I[KS[n3]];var p3=PR[i3.c]||{};i3.l=p3.l;i3.s=p3.s;i3.d=p3.d||i3.c;}
-    var Y={v:2,tipo:'pedido',folio:String(F),fecha:(CF.f||new Date().toISOString().slice(0,10)),serie:X,sos:U.map(function(x){return x.id;}),items:Object.values(I)};
+    var FL=String(F).split(/[\s,;]+/).filter(function(x){return /^\d+$/.test(x);});
+    if(!FL.length){alert('No entendi los numeros.');return;}
+    F=FL[0];
+    var PR={};
+    var LOTE=[];
+    for(var fi=0;fi<FL.length;fi++){
+      var FA=FL[fi];
+      var CFa=C.filter(function(c){return c.n===String(FA);})[0]||{};
+      M('['+(fi+1)+'/'+FL.length+'] buscando partes de '+FA+'...');
+      var La=(function(fol){return function(d){return [].slice.call(d.querySelectorAll('.item-box2[onclick*=openDetail]')).map(function(e){var i=(e.getAttribute('onclick').match(/'(\d+)'/)||[])[1];var m=e.textContent.match(new RegExp(fol+'-(\\d+)\\/(\\d+)'));return (m&&i)?{id:i,s:+m[2]}:null;}).filter(Boolean);};})(FA);
+      var S=[];
+      if(typeof showCotizacionModal==='function'&&/pedidosAnteriores/i.test(location.pathname)){showCotizacionModal(+FA);await new Promise(function(r){setTimeout(r,900);});S=La(document);}else{S=La(D);}
+      if(!S.length){alert('No encontre las partes de '+FA+'. Lo salto y sigo con los demas.');continue;}
+      var vistos={},U=S.filter(function(x){if(vistos[x.id])return false;vistos[x.id]=1;return true;});
+      var X=Math.max.apply(null,S.map(function(x){return x.s;}));
+      M('['+(fi+1)+'/'+FL.length+'] partidas de '+U.length+' parte(s)...');
+      var I={},o,d1,t1,k;
+      for(var a=0;a<U.length;a++){o=U[a];d1=await P('/pedidosAnteriores/getDetalleFacturado','id='+o.id);
+        if(Array.isArray(d1))for(var b=0;b<d1.length;b++){t1=d1[b];k=o.id+'|'+t1.itemid;if(!I[k])I[k]={c:t1.itemid,so:String(o.id),q:0,e:0,f:0};I[k].q+=+t1.cantPedido||0;I[k].e+=+t1.cantEmpacada||0;I[k].f+=+t1.cantFacturada||0;}}
+      var KS=Object.keys(I);
+      if(!KS.length){alert('Las partes de '+FA+' no regresaron partidas. Lo salto.');continue;}
+      var CS=[];
+      for(var n1=0;n1<KS.length;n1++){var cx=I[KS[n1]].c;if(!PR[cx]){PR[cx]={pend:1};CS.push(cx);}}
+      for(var n2=0;n2<CS.length;n2++){var c2=CS[n2];M('['+(fi+1)+'/'+FL.length+'] precios '+(n2+1)+'/'+CS.length+'...');
+        try{var h=await fetch('/portal/detallesProducto/'+encodeURIComponent(c2.replace(/ /g,'_'))).then(function(r){return r.text();});
+          var dd=new DOMParser().parseFromString(h,'text/html');
+          var l=(h.match(/Precio Lista:[\s\S]{0,120}?\$\s*([\d,]+\.?\d*)/)||[])[1];
+          var sg=(h.match(/sugerido de venta:[\s\S]{0,120}?\$\s*([\d,]+\.?\d*)/)||[])[1];
+          PR[c2].l=l?parseFloat(l.replace(/,/g,'')):null;
+          PR[c2].s=sg?parseFloat(sg.replace(/,/g,'')):null;
+          var pd=dd.querySelector('.purchasedescription');
+          PR[c2].d=pd?pd.textContent.trim():c2;
+        }catch(e2){PR[c2].d=c2;}}
+      for(var n3=0;n3<KS.length;n3++){var i3=I[KS[n3]];var p3=PR[i3.c]||{};i3.l=p3.l;i3.s=p3.s;i3.d=p3.d||i3.c;}
+      LOTE.push({folio:String(FA),fecha:(CFa.f||new Date().toISOString().slice(0,10)),serie:X,sos:U.map(function(x){return x.id;}),items:Object.values(I)});
+    }
+    if(!LOTE.length){alert('No pude leer ningun pedido.');return;}
+    var Y = LOTE.length===1 ? {v:2,tipo:'pedido',folio:LOTE[0].folio,fecha:LOTE[0].fecha,serie:LOTE[0].serie,sos:LOTE[0].sos,items:LOTE[0].items}
+                            : {v:3,tipo:'pedidos',lista:LOTE};
     var Q=A+'\x23import='+B(JSON.stringify(Y));
     var W=window.open(Q,'_blank');
     if(W){M('abriendo Axion Tools...');setTimeout(function(){var e3=document.getElementById('axmsg');if(e3)e3.remove();},3000);}
@@ -3466,6 +3477,28 @@ async function vImportar(){
         <button class="btn" id="lote-btn" onclick="agregarLoteLista()">Agregar todos a la lista</button>
         <button class="btn sec" onclick="localStorage.removeItem('ax_import'); vImportar();">Descartar</button>
       </div></div>`;
+    return;
+  }
+  // LOTE de pedidos (v85)
+  if(impData.tipo === 'pedidos'){
+    const folios = impData.lista.map(p=>p.folio);
+    const ya = await sb.from('pedidos_compra').select('folio_externo').in('folio_externo', folios);
+    const yaSet = new Set((ya.data||[]).map(x=>String(x.folio_externo)));
+    const nuevos = impData.lista.filter(p=>!yaSet.has(p.folio));
+    window._loteImp = nuevos;
+    $('v-importar').innerHTML = `<div class="card">
+      <h3>📥 Importar ${impData.lista.length} pedidos de Indar</h3>
+      ${impData.lista.map(p=>{
+        const sub=p.items.reduce((s,i)=>s+i.q*(i.l||0),0);
+        return `<p style="margin:6px 0">${yaSet.has(p.folio)?'⏭️':'🆕'} <b>#${esc(p.folio)}</b> · ${fecha(p.fecha)} · ${p.items.length} partidas · ${fmt(sub*1.16)} c/IVA ${yaSet.has(p.folio)?'<span class="badge b-gris">ya estaba — se salta</span>':'<span class="badge b-azul">se importará</span>'}</p>`;
+      }).join('')}
+      <div class="field"><label><input type="checkbox" id="imp-precios" checked> Actualizar precios de venta al sugerido de Indar</label></div>
+      <div class="field"><label><input type="checkbox" id="imp-cxp" checked> Crear cuenta por pagar (plazo 30 días) por cada pedido</label></div>
+      <div style="display:flex;gap:10px;margin:12px 0">
+        <button class="btn" id="imp-btn" onclick="ejecutarImportLote()" ${nuevos.length?'':'disabled'}>Importar ${nuevos.length} pedido(s)</button>
+        <button class="btn sec" onclick="localStorage.removeItem('ax_import'); vImportar();">Descartar</button>
+      </div>
+      <p class="small" id="imp-lote-st"></p></div>`;
     return;
   }
   // hay datos: previsualizar
@@ -3905,6 +3938,65 @@ function impManual(){
   if(!v) return;
   localStorage.setItem('ax_import', v.replace(/^.*#import=/,''));
   vImportar();
+}
+async function ejecutarImportLote(){
+  const lote = window._loteImp||[];
+  if(!lote.length) return;
+  $('imp-btn').disabled = true;
+  const st = $('imp-lote-st');
+  let ok=0, errs=[];
+  for(let n=0;n<lote.length;n++){
+    if(st) st.textContent = `Importando ${n+1}/${lote.length}: pedido #${lote[n].folio}...`;
+    try{ await importarUnPedido(lote[n]); ok++; }
+    catch(e){ errs.push('#'+lote[n].folio+': '+errMsg(e)); }
+  }
+  localStorage.removeItem('ax_import');
+  if(errs.length) toast(ok+' importados, '+errs.length+' con error: '+errs.join(' · '), true);
+  else toast(ok+' pedido(s) importados ✓');
+  irA('pedidos');
+}
+async function importarUnPedido(ped){
+  const codigos = [...new Set(ped.items.map(i=>i.c))];
+  const {data:exis, error:e0} = await sb.from('productos').select('id,codigo').in('codigo', codigos);
+  if(e0) throw e0;
+  const mapa = new Map((exis||[]).map(p=>[p.codigo, p.id]));
+  const nuevos = codigos.filter(c=>!mapa.has(c)).map(c=>{
+    const i = ped.items.find(x=>x.c===c);
+    return { codigo:c, descripcion:i.d||c, categoria:'General', costo:i.l||0, precio:redondearPrecio(i.s||i.l||0), stock:0, stock_min:3 };
+  });
+  if(nuevos.length){
+    const {error} = await sb.from('productos').insert(nuevos);
+    if(error) throw error;
+    const {data:re} = await sb.from('productos').select('id,codigo').in('codigo', codigos);
+    (re||[]).forEach(p=>mapa.set(p.codigo, p.id));
+  }
+  if($('imp-precios') && $('imp-precios').checked){
+    for(const c of codigos){
+      const i = ped.items.find(x=>x.c===c);
+      if(mapa.has(c) && i.s) await sb.from('productos').update({precio:redondearPrecio(i.s), costo:i.l||undefined, etiqueta_at:null}).eq('id', mapa.get(c));
+    }
+  }
+  const sub = Math.round(ped.items.reduce((s,i)=>s + i.q*(i.l||0),0)*100)/100;
+  const iva = Math.round(sub*16)/100, tot = Math.round((sub+iva)*100)/100;
+  const {data:prov} = await sb.from('proveedores').select('id').eq('nombre','Indar').single();
+  const {data:pc, error:e1} = await sb.from('pedidos_compra').insert({
+    proveedor_id: prov.id, folio_externo: ped.folio, fecha: ped.fecha,
+    estado:'enviado', plazo_dias:30, subtotal:sub, iva, total:tot,
+    notas:'Importado del portal Indar (lote). Partes: '+(ped.sos||[]).join(', ')+' (serie /'+(ped.serie||'?')+'). Capturado a precio de lista; ajustar contra factura.'
+  }).select('id').single();
+  if(e1) throw e1;
+  const items = ped.items.map(i=>({ pedido_id: pc.id, producto_id: mapa.get(i.c), parte: i.so||'',
+    cantidad: i.q, costo_unit: i.l||0, importe: Math.round(i.q*(i.l||0)*100)/100 }));
+  const {error:e2} = await sb.from('pedido_compra_items').insert(items);
+  if(e2) throw e2;
+  if($('imp-cxp') && $('imp-cxp').checked){
+    const vence = new Date(ped.fecha+'T00:00:00'); vence.setDate(vence.getDate()+30);
+    await sb.from('cuentas_pagar').insert({ proveedor_id: prov.id,
+      concepto:'Pedido Web #'+ped.folio, referencia:'Plazo 30 días',
+      fecha_emision: ped.fecha, fecha_vencimiento: vence.toISOString().slice(0,10),
+      monto: tot, saldo: tot });
+  }
+  logEv('importar', 'pedido '+ped.folio+' ('+items.length+' partidas)');
 }
 async function ejecutarImport(){
   if(!impData) return;
