@@ -694,11 +694,12 @@ async function vResumen(){
   const hoy = new Date(); hoy.setHours(0,0,0,0);
   // Mes elegido (por default el actual). window._resMes = 'YYYY-MM'
   const mesSel = window._resMes || (hoy.getFullYear()+'-'+String(hoy.getMonth()+1).padStart(2,'0'));
-  const [aa, mm] = mesSel.split('-').map(Number);
-  const mes = new Date(aa, mm-1, 1);
-  const finMes = new Date(aa, mm, 1);
-  const esMesActual = (aa===hoy.getFullYear() && mm===hoy.getMonth()+1);
-  const nombreMes = mes.toLocaleDateString('es-MX',{month:'long', year:'numeric'});
+  const esTodo = (mesSel === 'todo');   // GENERAL: todo el histórico
+  const [aa, mm] = esTodo ? [2000, 1] : mesSel.split('-').map(Number);
+  const mes = esTodo ? new Date(2000,0,1) : new Date(aa, mm-1, 1);
+  const finMes = esTodo ? new Date(2100,0,1) : new Date(aa, mm, 1);
+  const esMesActual = !esTodo && (aa===hoy.getFullYear() && mm===hoy.getMonth()+1);
+  const nombreMes = esTodo ? 'todo el histórico' : mes.toLocaleDateString('es-MX',{month:'long', year:'numeric'});
   const hace14 = new Date(esMesActual?hoy:new Date(finMes-864e5)); hace14.setDate(hace14.getDate()-13);
   const [ventasMes, prods, cxp, pedCurso, itemsMes] = await Promise.all([
     traerTodo(()=>sb.from('ventas').select('fecha,total,descuento,cancelada').gte('fecha', mes.toISOString()).lt('fecha', finMes.toISOString()).eq('cancelada', false).order('id')).then(d=>({data:d})),
@@ -753,20 +754,27 @@ async function vResumen(){
     mesesOpt = window._resMeses = [...set].sort().reverse();
   }
   const nomMes = m => { const [a,b]=m.split('-').map(Number); return new Date(a,b-1,1).toLocaleDateString('es-MX',{month:'long',year:'numeric'}); };
-  const diasMes = esMesActual ? hoy.getDate() : new Date(aa, mm, 0).getDate();
+  let diasMes = esMesActual ? hoy.getDate() : new Date(aa, mm, 0).getDate();
+  if(esTodo && ventasMes.data.length){
+    const f1 = new Date(Math.min(...ventasMes.data.map(v=>+new Date(v.fecha)))); f1.setHours(0,0,0,0);
+    diasMes = Math.max(1, Math.round((hoy - f1)/864e5) + 1);
+  }
   const promDia = ventasMes.data.length ? totMes/diasMes : 0;
 
   $('v-resumen').innerHTML = alertaCxp + `
     <div class="card" style="padding:10px;margin-bottom:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
       <b>📅 Mes:</b>
       <select onchange="window._resMes=this.value; vResumen()" style="padding:8px;border:1px solid var(--linea);border-radius:8px;font-size:15px">
+        <option value="todo" ${esTodo?'selected':''}>📊 GENERAL — todo el histórico</option>
         ${mesesOpt.map(m=>`<option value="${m}" ${m===mesSel?'selected':''}>${nomMes(m).charAt(0).toUpperCase()+nomMes(m).slice(1)}</option>`).join('')}
       </select>
-      ${!esMesActual?`<button class="btn sec sm" onclick="window._resMes=null; vResumen()">↩️ Volver al mes actual</button>
+      ${esTodo?`<button class="btn sec sm" onclick="window._resMes=null; vResumen()">↩️ Volver al mes actual</button>
+        <span class="small muted">Estás viendo <b>el acumulado de todo</b> (desde la primera venta)</span>`
+      : !esMesActual?`<button class="btn sec sm" onclick="window._resMes=null; vResumen()">↩️ Volver al mes actual</button>
         <span class="small muted">Estás viendo <b>${nombreMes}</b> (mes cerrado)</span>`:'<span class="small muted">Mes en curso</span>'}
     </div>
     <div class="kpis">
-      ${esMesActual?`<div class="kpi" style="cursor:pointer" title="Ir a Ventas" onclick="irA('ventas')"><div class="l">Ventas de hoy</div><div class="v">${fmt(totHoy)}</div><div class="s">${vHoy.length} venta(s)</div></div>`:''}
+      ${(esMesActual||esTodo)?`<div class="kpi" style="cursor:pointer" title="Ir a Ventas" onclick="irA('ventas')"><div class="l">Ventas de hoy</div><div class="v">${fmt(totHoy)}</div><div class="s">${vHoy.length} venta(s)</div></div>`:''}
       <div class="kpi" style="cursor:pointer" title="Ir a Ventas" onclick="irA('ventas')"><div class="l">Ventas de ${esc(nombreMes)}</div><div class="v">${fmt(totMes)}</div><div class="s">${ventasMes.data.length} venta(s) · ${fmt(promDia)} por día</div></div>
       ${utilMes!==null ? `<div class="kpi" style="cursor:pointer" title="Ir a Ventas" onclick="irA('ventas')"><div class="l">Utilidad de ${esc(nombreMes)}</div><div class="v" style="color:${utilMes>=0?'#15803d':'#b91c1c'}">${fmt(utilMes)}</div><div class="s">margen <b>${margenPct.toFixed(0)}%</b> sobre costo · sin IVA</div></div>` : ''}
       <div class="kpi" style="cursor:pointer" title="Ir a Inventario" onclick="irA('inventario')"><div class="l">Valor de inventario (sin IVA)</div><div class="v">${fmt(valInv)}</div><div class="s">con IVA: <b>${fmt(Math.round(valInv*116)/100)}</b> · a costo · ${prods.data.length} productos</div></div>
@@ -775,7 +783,7 @@ async function vResumen(){
         <div class="s">${prox ? 'próximo: '+fecha(prox.fecha_vencimiento) : 'sin pendientes'}</div></div>
     </div>
     <div class="grid2">
-      <div class="card"><h3>Ventas día por día · ${esc(nombreMes)}</h3><canvas id="ch-ventas" height="190"></canvas></div>
+      <div class="card"><h3>${esTodo?'Ventas mes por mes · histórico completo':'Ventas día por día · '+esc(nombreMes)}</h3><canvas id="ch-ventas" height="190"></canvas></div>
       <div class="card"><h3>Cuentas por pagar próximas</h3>
         <div class="tbl-scroll"><table><thead><tr><th>Proveedor</th><th>Concepto</th><th>Vence</th><th class="num">Saldo</th></tr></thead>
         <tbody>${cxp.data.slice(0,6).map(c=>{
@@ -796,17 +804,29 @@ async function vResumen(){
     </div>`;
 
   // gráfica: TODOS los días del mes elegido (hasta hoy si es el mes en curso)
-  const ultDia = esMesActual ? hoy.getDate() : new Date(aa, mm, 0).getDate();
-  const dias = [...Array(ultDia)].map((_,i)=>new Date(aa, mm-1, i+1));
-  const porDia = dias.map(d=>{
-    const d2 = new Date(d); d2.setDate(d2.getDate()+1);
-    return ventasMes.data.filter(v=>{ const f=new Date(v.fecha); return f>=d && f<d2; }).reduce((s,v)=>s+ +v.total,0);
-  });
+  let etiq = [], porDia = [], tituloEje = 'Día ';
+  if(esTodo){
+    // agrupado por mes
+    const acum = {};
+    ventasMes.data.forEach(v=>{ const k=String(v.fecha).slice(0,7); acum[k]=(acum[k]||0)+ +v.total; });
+    const claves = Object.keys(acum).sort();
+    etiq = claves.map(k=>{ const [a,b]=k.split('-').map(Number); return new Date(a,b-1,1).toLocaleDateString('es-MX',{month:'short',year:'2-digit'}); });
+    porDia = claves.map(k=>acum[k]);
+    tituloEje = '';
+  } else {
+    const ultDia = esMesActual ? hoy.getDate() : new Date(aa, mm, 0).getDate();
+    const dias = [...Array(ultDia)].map((_,i)=>new Date(aa, mm-1, i+1));
+    porDia = dias.map(d=>{
+      const d2 = new Date(d); d2.setDate(d2.getDate()+1);
+      return ventasMes.data.filter(v=>{ const f=new Date(v.fecha); return f>=d && f<d2; }).reduce((s,v)=>s+ +v.total,0);
+    });
+    etiq = dias.map(d=>String(d.getDate()));
+  }
   if(window._chVtas){ try{ window._chVtas.destroy(); }catch(e){} }
   window._chVtas = new Chart($('ch-ventas'), {type:'bar',
-    data:{labels:dias.map(d=>String(d.getDate())),
+    data:{labels:etiq,
       datasets:[{data:porDia, backgroundColor:'#E1251B'}]},
-    options:{plugins:{legend:{display:false}, tooltip:{callbacks:{title:i=>'Día '+i[0].label, label:c=>fmt(c.raw)}}},
+    options:{plugins:{legend:{display:false}, tooltip:{callbacks:{title:i=>tituloEje+i[0].label, label:c=>fmt(c.raw)}}},
       scales:{y:{beginAtZero:true, ticks:{callback:v=>'$'+v.toLocaleString('es-MX')}}}}
   });
 }
@@ -819,10 +839,25 @@ async function vVentas(){
     $('vtools').innerHTML = `<button class="btn" onclick="nuevaVenta()">+ Nueva venta</button>
       <button class="btn sec" onclick="cuadreSafdiModal()">⚖️ Cuadre SAFDI</button>`;
   }
-  const {data, error} = await sb.from('ventas')
-    .select('*, clientes(nombre), perfiles(nombre)')
-    .order('fecha',{ascending:false}).limit(100);
-  if(error) throw error;
+  // Periodo: hoy / semana / mes / mes pasado / todo / rango a mano
+  const hoyD = new Date(); hoyD.setHours(0,0,0,0);
+  const per = window._vtPer || 'mes';
+  let desde = null, hasta = null;
+  if(per==='hoy'){ desde = new Date(hoyD); hasta = new Date(hoyD.getTime()+864e5); }
+  else if(per==='semana'){ desde = new Date(hoyD); desde.setDate(hoyD.getDate() - ((hoyD.getDay()+6)%7)); hasta = new Date(hoyD.getTime()+864e5); }
+  else if(per==='mes'){ desde = new Date(hoyD.getFullYear(), hoyD.getMonth(), 1); hasta = new Date(hoyD.getFullYear(), hoyD.getMonth()+1, 1); }
+  else if(per==='mespasado'){ desde = new Date(hoyD.getFullYear(), hoyD.getMonth()-1, 1); hasta = new Date(hoyD.getFullYear(), hoyD.getMonth(), 1); }
+  else if(per==='rango'){
+    const d1 = window._vtDesde, d2 = window._vtHasta;
+    if(d1) desde = new Date(d1+'T00:00:00');
+    if(d2){ hasta = new Date(d2+'T00:00:00'); hasta.setDate(hasta.getDate()+1); }
+  }
+  const data = await traerTodo(()=>{
+    let c = sb.from('ventas').select('*, clientes(nombre), perfiles(nombre)');
+    if(desde) c = c.gte('fecha', desde.toISOString());
+    if(hasta) c = c.lt('fecha', hasta.toISOString());
+    return c.order('fecha',{ascending:false});
+  });
   const utilPor = {};
   if(esFinanzas() && data.length){
     const it = {data: await traerTodo(()=>sb.from('venta_items').select('venta_id,cantidad,precio_unit,costo_unit').in('venta_id', data.map(v=>v.id)).order('id'))};
@@ -834,6 +869,16 @@ async function vVentas(){
   const solicitadas = data.filter(v=>v.cancel_solicitada && !v.cancelada).length;
   $('v-ventas').innerHTML = `
     ${esAdmin() && solicitadas ? `<div class="card" style="border-left:4px solid #d97706;margin-bottom:14px"><b>⚠️ ${solicitadas} venta(s) con cancelación solicitada por un vendedor</b> — abajo puedes Aprobar o Rechazar cada una.</div>`:''}
+    <div class="card" style="padding:10px;margin-bottom:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <b>📅 Ver:</b>
+      ${[['hoy','Hoy'],['semana','Esta semana'],['mes','Este mes'],['mespasado','Mes pasado'],['todo','Todo el histórico'],['rango','Entre fechas…']].map(([k,t])=>
+        `<button class="btn ${per===k?'':'sec'} sm" onclick="window._vtPer='${k}'; vVentas()">${t}</button>`).join('')}
+      ${per==='rango'?`<span style="display:flex;gap:6px;align-items:center;margin-left:6px">
+        <input type="date" id="vt-d1" value="${window._vtDesde||''}" onchange="window._vtDesde=this.value; vVentas()" style="padding:6px;border:1px solid var(--linea);border-radius:6px">
+        <span class="small">a</span>
+        <input type="date" id="vt-d2" value="${window._vtHasta||''}" onchange="window._vtHasta=this.value; vVentas()" style="padding:6px;border:1px solid var(--linea);border-radius:6px"></span>`:''}
+      <span class="small muted" style="margin-left:auto">${data.length} venta(s) en el periodo</span>
+    </div>
     <div class="kpis" id="vt-kpis" style="margin-bottom:14px"></div>
     <div class="toolbar">
       <input type="search" id="vt-q" placeholder="Buscar por folio o cliente..." oninput="pintarVentas()">
@@ -863,10 +908,20 @@ function pintarVentas(){
   data.forEach(v=>{ if(v.cancelada) return; const f=new Date(v.fecha);
     if(f>=hoy0){ tHoy+=+v.total; nHoy++; if(utilPor[v.id]!==undefined) uHoy+=utilPor[v.id]; }
     if(f>=iniSem){ tSem+=+v.total; nSem++; } });
+  // Totales del PERIODO elegido (respetando los filtros de pago/vendedor/búsqueda)
+  const vivas = rows.filter(v=>!v.cancelada);
+  const tPer = vivas.reduce((s,v)=>s+ +v.total,0);
+  const uPer = vivas.reduce((s,v)=>s+ (utilPor[v.id]||0),0);
+  const ticket = vivas.length ? tPer/vivas.length : 0;
+  const porPago = {}; vivas.forEach(v=>{ porPago[v.metodo_pago]=(porPago[v.metodo_pago]||0)+ +v.total; });
+  const nomPer = {hoy:'hoy', semana:'esta semana', mes:'este mes', mespasado:'el mes pasado', todo:'histórico', rango:'el periodo'}[window._vtPer||'mes'];
+  const ICO0 = {efectivo:'💵', tarjeta:'💳', transferencia:'🏦', ak_pago:'📱', credito:'📄'};
+  const perAct = window._vtPer || 'mes';
   $('vt-kpis').innerHTML = `
-    <div class="kpi"><div class="l">Vendido hoy</div><div class="v">${fmt(tHoy)}</div><div class="s">${nHoy} venta(s)</div></div>
-    <div class="kpi"><div class="l">Esta semana</div><div class="v">${fmt(tSem)}</div><div class="s">${nSem} venta(s) desde el lunes</div></div>
-    ${esFinanzas()?`<div class="kpi"><div class="l">Utilidad de hoy</div><div class="v">${fmt(Math.round(uHoy*100)/100)}</div><div class="s">sin IVA · sin canceladas</div></div>`:''}`;
+    <div class="kpi" style="border-top-width:5px"><div class="l">Vendido ${nomPer}</div><div class="v">${fmt(tPer)}</div><div class="s">${vivas.length} venta(s) · ticket promedio ${fmt(ticket)}</div></div>
+    ${esFinanzas()?`<div class="kpi"><div class="l">Utilidad ${nomPer}</div><div class="v" style="color:${uPer>=0?'var(--verde)':'#b91c1c'}">${fmt(Math.round(uPer*100)/100)}</div><div class="s">${tPer>0?('margen '+Math.round(uPer/(tPer/1.16)*100)+'% · sin IVA'):'sin IVA'}</div></div>`:''}
+    ${perAct!=='hoy'?`<div class="kpi"><div class="l">Vendido hoy</div><div class="v">${fmt(tHoy)}</div><div class="s">${nHoy} venta(s)${perAct==='mespasado'?' · fuera del periodo':''}</div></div>`:''}
+    <div class="kpi"><div class="l">Cómo pagaron</div><div class="v" style="font-size:15px;line-height:1.5">${Object.keys(porPago).length?Object.entries(porPago).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${ICO0[k]||''} ${fmt(v)}`).join('<br>'):'—'}</div><div class="s">en el periodo</div></div>`;
   const ICO = {efectivo:'💵', tarjeta:'💳', transferencia:'🏦', ak_pago:'📱', credito:'📄'};
   const dias = {};
   rows.forEach(v=>{ const f=new Date(v.fecha); const k=f.getFullYear()+'-'+f.getMonth()+'-'+f.getDate(); (dias[k]=dias[k]||[]).push(v); });
@@ -904,7 +959,7 @@ function pintarVentas(){
         <h3 style="margin:0;text-transform:capitalize">${nomDia(vs[0].fecha)}</h3>
         <span><span class="muted small">${vs.length} venta(s) · </span><b>${fmt(tot)}</b></span></div>
       ${vs.map(fila).join('')}</div>`;
-  }).join('') || '<div class="card muted">No hay ventas con esos filtros. Las últimas 100 ventas aparecen aquí.</div>';
+  }).join('') || '<div class="card muted">No hay ventas en el periodo elegido con esos filtros. Cambia el periodo arriba (📅 Ver) o quita los filtros.</div>';
 }
 async function verVenta(id){
   const {data, error} = await sb.from('venta_items').select('*, productos(codigo,descripcion)').eq('venta_id', id);
