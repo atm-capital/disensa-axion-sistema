@@ -611,7 +611,7 @@ function compartirFactura(medio, path, folio, total, ped){
   });
 }
 function cxpAgrupado(rows, hoy){
-  if(!rows.length) return '<tr><td colspan="8" class="muted">Sin cuentas registradas.</td></tr>';
+  if(!rows.length) return '<tr><td colspan="9" class="muted">Sin cuentas registradas.</td></tr>';
   const grupos = {};
   rows.forEach(function(c){ const nom = (c.proveedores && c.proveedores.nombre) || 'Otro'; (grupos[nom]=grupos[nom]||[]).push(c); });
   let html='', gi=0;
@@ -619,12 +619,14 @@ function cxpAgrupado(rows, hoy){
     const g = grupos[nom]; gi++;
     const pend = g.filter(function(c){return c.estado!=='pagada';});
     const saldo = pend.reduce(function(s,c){return s+ +c.saldo;},0);
-    html += '<tr data-ghd="'+gi+'" data-abierto="1" onclick="finToggleGrp('+gi+')" style="background:#eef1f5;cursor:pointer" title="Clic para plegar/desplegar"><td colspan="8"><b>▾ '+esc(nom)+'</b> · '+g.length+' cuenta(s)'+(pend.length? ' · por pagar: <b>'+fmt(saldo)+'</b> ('+pend.length+')' : ' · <span class="badge b-verde">todo pagado</span>')+'</td></tr>';
+    html += '<tr data-ghd="'+gi+'" data-abierto="1" onclick="finToggleGrp('+gi+')" style="background:#eef1f5;cursor:pointer" title="Clic para plegar/desplegar"><td colspan="9"><b>▾ '+esc(nom)+'</b> · '+g.length+' cuenta(s)'+(pend.length? ' · por pagar: <b>'+fmt(saldo)+'</b> ('+pend.length+')' : ' · <span class="badge b-verde">todo pagado</span>')+'</td></tr>';
     g.forEach(function(c){
       const dias = Math.ceil((aDate(c.fecha_vencimiento)-hoy)/864e5);
       const est = c.estado==='pagada' ? 'pagada' : (dias<0 ? 'vencida' : 'pendiente');
       const b = c.estado==='pagada'?'b-verde':(dias<0?'b-rojo':(dias<=7?'b-ambar':'b-gris'));
-      html += '<tr data-grp="'+gi+'" data-est="'+est+'"'+(est==='pagada'?' class="oculto"':'')+'><td><b>'+esc(nom)+'</b></td><td>'+esc(c.concepto)+'</td><td class="small muted">'+esc(c.referencia)+'</td><td><span class="badge '+b+'">'+fecha(c.fecha_vencimiento)+(c.estado!=='pagada' ? (dias<0?' · '+Math.abs(dias)+'d vencida':' · '+dias+'d') : '')+'</span></td><td class="num">'+fmt(c.monto)+'</td><td class="num"><b>'+fmt(c.saldo)+'</b></td><td><span class="badge '+(c.estado==='pagada'?'b-verde':c.estado==='parcial'?'b-ambar':'b-gris')+'">'+c.estado+'</span></td><td>'+(esAdmin() && c.estado!=='pagada' ? '<button class="btn sm" onclick="pagarCuenta('+c.id+')">Pagar</button>':'')+'</td></tr>';
+      const chk = (esAdmin() && c.estado!=='pagada' && +c.saldo>0)
+        ? '<input type="checkbox" class="cxp-sel" data-id="'+c.id+'" title="Seleccionar para pagar en lote" onclick="event.stopPropagation();togglePagoSel('+c.id+',this.checked)"'+((window._pagoSel&&window._pagoSel[c.id])?' checked':'')+'>' : '';
+      html += '<tr data-grp="'+gi+'" data-est="'+est+'"'+(est==='pagada'?' class="oculto"':'')+'><td>'+chk+'</td><td><b>'+esc(nom)+'</b></td><td>'+esc(c.concepto)+'</td><td class="small muted">'+esc(c.referencia)+'</td><td><span class="badge '+b+'">'+fecha(c.fecha_vencimiento)+(c.estado!=='pagada' ? (dias<0?' · '+Math.abs(dias)+'d vencida':' · '+dias+'d') : '')+'</span></td><td class="num">'+fmt(c.monto)+'</td><td class="num"><b>'+fmt(c.saldo)+'</b></td><td><span class="badge '+(c.estado==='pagada'?'b-verde':c.estado==='parcial'?'b-ambar':'b-gris')+'">'+c.estado+'</span></td><td>'+(esAdmin() && c.estado!=='pagada' ? '<button class="btn sm" onclick="pagarCuenta('+c.id+')">Pagar</button>':'')+'</td></tr>';
     });
   });
   return html;
@@ -917,8 +919,10 @@ function pintarVentas(){
   const nomPer = {hoy:'hoy', semana:'esta semana', mes:'este mes', mespasado:'el mes pasado', todo:'histórico', rango:'el periodo'}[window._vtPer||'mes'];
   const ICO0 = {efectivo:'💵', tarjeta:'💳', transferencia:'🏦', ak_pago:'📱', credito:'📄'};
   const perAct = window._vtPer || 'mes';
+  const NPAGO = {efectivo:'💵 efectivo', tarjeta:'💳 tarjeta', transferencia:'🏦 transferencia', ak_pago:'📱 AK Pago', credito:'📄 crédito'};
+  const filtros = [pago?('solo '+NPAGO[pago]):'', vend?('solo '+vend):'', q?('búsqueda "'+q+'"'):''].filter(Boolean).join(' · ');
   $('vt-kpis').innerHTML = `
-    <div class="kpi" style="border-top-width:5px"><div class="l">Vendido ${nomPer}</div><div class="v">${fmt(tPer)}</div><div class="s">${vivas.length} venta(s) · ticket promedio ${fmt(ticket)}</div></div>
+    <div class="kpi" style="border-top-width:5px${filtros?';background:#fffbeb':''}"><div class="l">Vendido ${nomPer}${filtros?' — '+esc(filtros):''}</div><div class="v">${fmt(tPer)}</div><div class="s">${vivas.length} venta(s) · ticket promedio ${fmt(ticket)}${filtros?' · <b>total del filtro</b>':''}</div></div>
     ${esFinanzas()?`<div class="kpi"><div class="l">Utilidad ${nomPer}</div><div class="v" style="color:${uPer>=0?'var(--verde)':'#b91c1c'}">${fmt(Math.round(uPer*100)/100)}</div><div class="s">${tPer>0?('margen '+Math.round(uPer/(tPer/1.16)*100)+'% · sin IVA'):'sin IVA'}</div></div>`:''}
     ${perAct!=='hoy'?`<div class="kpi"><div class="l">Vendido hoy</div><div class="v">${fmt(tHoy)}</div><div class="s">${nHoy} venta(s)${perAct==='mespasado'?' · fuera del periodo':''}</div></div>`:''}
     <div class="kpi"><div class="l">Cómo pagaron</div><div class="v" style="font-size:15px;line-height:1.5">${Object.keys(porPago).length?Object.entries(porPago).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${ICO0[k]||''} ${fmt(v)}`).join('<br>'):'—'}</div><div class="s">en el periodo</div></div>`;
@@ -3410,15 +3414,139 @@ async function guardarFondo(){
    VISTA: FINANZAS
 ============================================================ */
 let cxpData = [];
+/* ============================================================
+   ¿CUÁNTO DINERO TENEMOS? (v97)
+   Capturado = lo que TÚ dices que hay (banco + otros) + efectivo real de caja.
+   Calculado = ese saldo capturado + lo que entró y salió DESPUÉS, según el sistema.
+   La diferencia entre los dos es la señal de que algo no se registró.
+============================================================ */
+async function calcularDinero(hoy){
+  const D = {ok:false};
+  try{
+    const cap = await sb.from('dinero_saldos').select('*').order('fecha',{ascending:false}).order('id',{ascending:false}).limit(1);
+    if(cap.error) return D;                    // falta correr 29_dinero.sql
+    D.ok = true;
+    D.cap = (cap.data||[])[0] || null;
+    // efectivo en caja: fondo + ventas en efectivo del día - movimientos, según el último corte
+    const cortes = await sb.from('cortes_caja').select('fecha,deja_fondo,contado').order('fecha',{ascending:false}).limit(1);
+    D.corte = (cortes.data||[])[0] || null;
+    const cfg = await sb.from('caja_config').select('fondo_fijo').eq('id',1).single();
+    D.fondo = +(cfg.data?.fondo_fijo || 0);
+    D.efectivoCaja = D.corte ? +(D.corte.deja_fondo || 0) : D.fondo;
+    if(!D.cap){ D.banco = 0; D.otros = 0; D.desde = null; return D; }
+    D.banco = +D.cap.banco; D.otros = +D.cap.otros;
+    D.desde = D.cap.fecha;
+    const desdeISO = new Date(D.cap.fecha+'T00:00:00').toISOString();
+    // ENTRÓ: ventas no-crédito desde la captura
+    const vts = await traerTodo(()=>sb.from('ventas').select('total,metodo_pago,cancelada').gte('fecha', desdeISO).eq('cancelada',false).order('id'));
+    D.entroVentas = (vts||[]).filter(v=>v.metodo_pago!=='credito').reduce((s,v)=>s+ +v.total,0);
+    // SALIÓ: pagos a proveedores + gastos, desde la captura
+    const pg = await sb.from('pagos_cxp').select('monto').gte('fecha', D.cap.fecha);
+    D.salioPagos = (pg.data||[]).reduce((s,x)=>s+ +x.monto,0);
+    const gs = await sb.from('gastos').select('monto,tipo').gte('fecha', D.cap.fecha);
+    D.salioGastos = (gs.data||[]).reduce((s,x)=>s+ +x.monto,0);
+    D.calculado = Math.round((D.banco + D.otros + D.efectivoCaja + D.entroVentas - D.salioPagos - D.salioGastos)*100)/100;
+    D.capturado = Math.round((D.banco + D.otros + D.efectivoCaja)*100)/100;
+    D.dias = Math.round((hoy - new Date(D.cap.fecha+'T00:00:00'))/864e5);
+  }catch(e){ D.ok = false; }
+  return D;
+}
+function panelDinero(D){
+  if(!D.ok) return `<div class="card" style="margin-bottom:14px;border-left:4px solid var(--ambar)">
+    <b>💰 ¿Cuánto dinero tenemos?</b>
+    <p class="small muted" style="margin:6px 0 0">Para activar esta sección corre <b>29_dinero.sql</b> en Supabase (SQL Editor). Después vas a poder capturar el saldo del banco y comparar contra lo que dice el sistema.</p></div>`;
+  if(!D.cap) return `<div class="card" style="margin-bottom:14px;border-left:5px solid var(--rojo)">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+      <div><b>💰 ¿Cuánto dinero tenemos?</b>
+        <p class="small muted" style="margin:4px 0 0">Todavía no capturas ningún saldo. Captura lo que trae el banco hoy y de ahí el sistema lleva la cuenta solo.</p></div>
+      <button class="btn" onclick="capturarSaldo()">💵 Capturar saldo de hoy</button></div></div>`;
+  const dif = Math.round((D.calculado - D.capturado - D.entroVentas + D.salioPagos + D.salioGastos)*100)/100; // 0 por construcción
+  const viejo = D.dias > 7;
+  return `<div class="card" style="margin-bottom:14px;border-left:5px solid var(--verde)">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
+      <b style="font-size:17px">💰 ¿Cuánto dinero tenemos?</b>
+      <span class="small muted">Último saldo capturado: <b>${fecha(D.desde)}</b>${viejo?` <span class="badge b-ambar">hace ${D.dias} días — conviene actualizarlo</span>`:''}</span></div>
+    <div class="kpis" style="margin-top:10px">
+      <div class="kpi" style="border-top-color:var(--verde)"><div class="l">Deberíamos tener HOY</div>
+        <div class="v" style="font-size:27px;color:#15803d">${fmt(D.calculado)}</div>
+        <div class="s">banco + caja + lo que entró − lo que salió</div></div>
+      <div class="kpi"><div class="l">Lo que capturaste el ${fecha(D.desde)}</div><div class="v">${fmt(D.capturado)}</div>
+        <div class="s">🏦 banco ${fmt(D.banco)}${D.otros?' · otros '+fmt(D.otros):''} · 💵 caja ${fmt(D.efectivoCaja)}</div></div>
+      <div class="kpi" style="border-top-color:var(--verde)"><div class="l">Entró desde entonces</div><div class="v" style="color:#15803d">+${fmt(D.entroVentas)}</div>
+        <div class="s">ventas cobradas (sin crédito)</div></div>
+      <div class="kpi" style="border-top-color:var(--rojo)"><div class="l">Salió desde entonces</div><div class="v" style="color:#b91c1c">−${fmt(D.salioPagos + D.salioGastos)}</div>
+        <div class="s">pagos ${fmt(D.salioPagos)} · gastos ${fmt(D.salioGastos)}</div></div>
+    </div>
+    <div class="acciones" style="margin-top:8px">
+      <button class="btn" onclick="capturarSaldo()">💵 Capturar saldo real de hoy</button>
+      <button class="btn sec" onclick="historialSaldos()">📜 Historial y diferencias</button></div>
+    <p class="small muted" style="margin:6px 0 0">Cuando captures el saldo real de hoy, el sistema te va a decir <b>si cuadra o no</b> con lo que él calculó — así detectas ventas o gastos que no se registraron.</p>
+  </div>`;
+}
+async function capturarSaldo(){
+  const D = await calcularDinero(new Date());
+  abrirModal(`<h3>💵 Capturar saldo real</h3>
+    <p class="small muted" style="margin:0 0 10px">Abre tu banca en línea y pon el saldo tal cual está hoy. El efectivo de la tienda se toma del corte de caja.</p>
+    ${D.cap?`<div class="card" style="padding:10px;background:#f8fafc;margin-bottom:10px"><div class="small">Según el sistema, <b>hoy deberías tener ${fmt(D.calculado)}</b> en total (banco + caja).</div></div>`:''}
+    <div class="frow">
+      <div class="field"><label>🏦 Saldo en el banco</label><input id="sd-banco" type="number" step="0.01" value="${D.cap?+D.cap.banco:''}" style="font-size:18px" oninput="cmpSaldo(${D.calculado||0}, ${D.efectivoCaja||0})"></div>
+      <div class="field"><label>Otra cuenta / caja fuerte (opcional)</label><input id="sd-otros" type="number" step="0.01" value="${D.cap?+D.cap.otros:0}" oninput="cmpSaldo(${D.calculado||0}, ${D.efectivoCaja||0})"></div>
+    </div>
+    <p class="small muted" style="margin:-4px 0 8px">💵 Efectivo en caja según el último corte: <b>${fmt(D.efectivoCaja||0)}</b> (se suma solo)</p>
+    <div id="sd-cmp"></div>
+    <div class="field"><label>Nota (opcional)</label><input id="sd-nota" placeholder="Ej. después de pagarle a Indar"></div>
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cancelar</button>
+      <button class="btn" onclick="guardarSaldo()">Guardar saldo</button></div>`);
+  setTimeout(()=>$('sd-banco')?.focus(), 100);
+}
+function cmpSaldo(esperado, efectivo){
+  const el = $('sd-cmp'); if(!el || !esperado) return;
+  const real = (+($('sd-banco').value||0)) + (+($('sd-otros').value||0)) + efectivo;
+  const dif = Math.round((real - esperado)*100)/100;
+  if(!$('sd-banco').value){ el.innerHTML=''; return; }
+  const ok = Math.abs(dif) < 50;
+  el.innerHTML = `<div class="card" style="padding:11px;margin-bottom:10px;background:${ok?'#f0fdf4':'#fef2f2'};border:1px solid ${ok?'var(--verde)':'#b91c1c'}">
+    <b>${ok?'✅ Cuadra':(dif>0?'⚠️ Hay '+fmt(dif)+' de MÁS':'⚠️ Faltan '+fmt(-dif))}</b>
+    <div class="small muted">Sistema calcula ${fmt(esperado)} · tú tienes ${fmt(real)}${ok?'':'. Puede ser una venta no registrada, un gasto sin capturar o un pago que no se anotó.'}</div></div>`;
+}
+async function guardarSaldo(){
+  const banco = +($('sd-banco').value||0);
+  if(!$('sd-banco').value){ toast('Pon el saldo del banco', true); return; }
+  const {error} = await sb.from('dinero_saldos').insert({
+    banco: banco, otros: +($('sd-otros').value||0), nota: ($('sd-nota').value||'').trim(),
+    nombre: (typeof perfil!=='undefined'&&perfil?perfil.nombre:'')});
+  if(error){ toast(errMsg(error), true); return; }
+  cerrarModal(); toast('Saldo guardado ✓ De aquí en adelante el sistema lleva la cuenta');
+  logEv('finanzas','saldo capturado: banco '+fmt(banco));
+  vFinanzas();
+}
+async function historialSaldos(){
+  const r = await sb.from('dinero_saldos').select('*').order('fecha',{ascending:false}).order('id',{ascending:false}).limit(40);
+  if(r.error){ toast(errMsg(r.error), true); return; }
+  abrirModal(`<h3>📜 Historial de saldos</h3>
+    <div class="tbl-scroll"><table><thead><tr><th>Fecha</th><th class="num">🏦 Banco</th><th class="num">Otros</th><th class="num">Total</th><th>Quién</th><th>Nota</th></tr></thead>
+    <tbody>${(r.data||[]).map(s=>`<tr><td>${fecha(s.fecha)}</td><td class="num">${fmt(s.banco)}</td><td class="num">${fmt(s.otros)}</td>
+      <td class="num"><b>${fmt(+s.banco + +s.otros)}</b></td><td class="small">${esc(s.nombre||'')}</td><td class="small muted">${esc(s.nota||'')}</td></tr>`).join('')
+      || '<tr><td colspan="6" class="muted">Aún no capturas saldos.</td></tr>'}</tbody></table></div>
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
+}
 async function vFinanzas(){
   if(esAdmin()) $('vtools').innerHTML = `<button class="btn" onclick="nuevaCuenta()">+ Cuenta por pagar</button>
     <button class="btn sec" onclick="nuevoGasto()">+ Gasto</button>`;
   const hoy = new Date(); hoy.setHours(0,0,0,0);
   const mes = new Date(hoy.getFullYear(), hoy.getMonth(), 1).toISOString().slice(0,10);
+  // periodo para la sección de gastos/inversiones
+  const gPer = window._gPer || 'mes';
+  const iso = d => d.toISOString().slice(0,10);
+  let gD = mes, gH = null, gNom = 'este mes';
+  if(gPer==='mespasado'){ gD = iso(new Date(hoy.getFullYear(), hoy.getMonth()-1, 1)); gH = mes; gNom = 'mes pasado'; }
+  else if(gPer==='anio'){ gD = iso(new Date(hoy.getFullYear(),0,1)); gNom = 'este año'; }
+  else if(gPer==='todo'){ gD = '2000-01-01'; gNom = 'todo el histórico'; }
   const [cxp, pagos, gastos, provs, compras, facts] = await Promise.all([
     sb.from('cuentas_pagar').select('*, proveedores(nombre)').order('fecha_vencimiento'),
     sb.from('pagos_cxp').select('*').gte('fecha', mes),
-    sb.from('gastos').select('*').gte('fecha', mes).order('fecha',{ascending:false}),
+    (gH ? sb.from('gastos').select('*').gte('fecha', gD).lt('fecha', gH).order('fecha',{ascending:false})
+        : sb.from('gastos').select('*').gte('fecha', gD).order('fecha',{ascending:false})),
     sb.from('proveedores').select('id,nombre').order('nombre'),
     sb.from('pedidos_compra').select('total, estado, proveedores(nombre)').gte('fecha', mes).neq('estado','cancelado'),
     sb.from('facturas').select('*, pedidos_compra(folio_externo,estado)').order('fecha',{ascending:false}).order('folio',{ascending:false}),
@@ -3433,19 +3561,33 @@ async function vFinanzas(){
   const total = pend.reduce((s,c)=>s+ +c.saldo,0);
   const vencido = pend.filter(c=>aDate(c.fecha_vencimiento)<hoy).reduce((s,c)=>s+ +c.saldo,0);
   const pagadoMes = pagos.data.reduce((s,p)=>s+ +p.monto,0);
-  const gastoMes = gastos.data.reduce((s,g)=>s+ +g.monto,0);
+  const gastoMes = gastos.data.filter(g=>(g.tipo||'gasto')==='gasto').reduce((s,g)=>s+ +g.monto,0);
+  const gTot = {gasto:0, inversion:0, retiro:0};
+  const gCat = {};
+  gastos.data.forEach(g=>{ const t = g.tipo||'gasto'; gTot[t] = (gTot[t]||0) + +g.monto;
+    if(t==='gasto') gCat[g.categoria||'General'] = (gCat[g.categoria||'General']||0) + +g.monto; });
   const factPend = pend.filter(c=>/^factura/i.test(c.concepto||''));
   const factTotal = factPend.reduce((s,c)=>s+ +c.saldo,0);
   const factProx = factPend.slice().sort((a,b)=>a.fecha_vencimiento<b.fecha_vencimiento?-1:1)[0];
   const factDias = factProx ? Math.ceil((aDate(factProx.fecha_vencimiento)-hoy)/864e5) : null;
-  $('v-finanzas').innerHTML = `
+  // fechas de vencimiento cercanas, para los botones de "seleccionar todo lo que vence el..."
+  const vAcum = {};
+  pend.filter(c=>+c.saldo>0 && c.fecha_vencimiento).forEach(c=>{ const k=c.fecha_vencimiento;
+    if(!vAcum[k]) vAcum[k]={n:0,t:0}; vAcum[k].n++; vAcum[k].t += +c.saldo; });
+  const venceOpts = Object.keys(vAcum).sort().slice(0,4).map(f=>{
+    const hastaF = Object.keys(vAcum).filter(x=>x<=f);
+    return {f, n: hastaF.reduce((s,x)=>s+vAcum[x].n,0), t: hastaF.reduce((s,x)=>s+vAcum[x].t,0)};
+  });
+  window._pagoSel = window._pagoSel || {};
+  const dinero = await calcularDinero(hoy);
+  $('v-finanzas').innerHTML = panelDinero(dinero) + `
     <div class="kpis">
       <div class="kpi" style="cursor:pointer" title="Ver cuentas" onclick="$('fin-cxp').scrollIntoView({behavior:'smooth'})"><div class="l">Total por pagar</div><div class="v">${fmt(total)}</div><div class="s">${pend.length} cuenta(s)</div></div>
       <div class="kpi" style="cursor:pointer;border-top-color:${factDias!==null&&factDias<=7?'var(--ambar)':'inherit'}" title="Ver facturas" onclick="$('fin-fact').scrollIntoView({behavior:'smooth'})"><div class="l">Facturas por pagar</div><div class="v">${fmt(factTotal)}</div>
         <div class="s">${factProx ? `${factPend.length} factura(s) · próxima vence ${fecha(factProx.fecha_vencimiento)} (${factDias<0?'⚠️ '+Math.abs(factDias)+'d vencida':'en '+factDias+'d'})` : 'sin facturas pendientes'}</div></div>
       <div class="kpi" style="cursor:pointer" title="Ver cuentas" onclick="$('fin-cxp').scrollIntoView({behavior:'smooth'})"><div class="l">Vencido</div><div class="v" style="color:${vencido>0?'var(--rojo)':'inherit'}">${fmt(vencido)}</div></div>
       <div class="kpi"><div class="l">Pagado este mes</div><div class="v">${fmt(pagadoMes)}</div></div>
-      <div class="kpi" style="cursor:pointer" title="Ver gastos" onclick="$('fin-gastos').scrollIntoView({behavior:'smooth'})"><div class="l">Gastos este mes</div><div class="v">${fmt(gastoMes)}</div></div>
+      <div class="kpi" style="cursor:pointer" title="Ver gastos" onclick="$('fin-gastos').scrollIntoView({behavior:'smooth'})"><div class="l">Gastos ${esc(gNom)}</div><div class="v">${fmt(gTot.gasto)}</div><div class="s">${gTot.inversion?'+ '+fmt(gTot.inversion)+' de inversión':'sin inversiones'}</div></div>
       <div class="kpi" style="cursor:pointer;border-top-color:${faltaMeta>0?'var(--ambar)':'var(--verde)'}" title="Ir a Pedidos" onclick="irA('pedidos')">
         <div class="l">Compra Holcim del mes</div>
         <div class="v">${fmt(compraHolcim)}</div>
@@ -3455,8 +3597,14 @@ async function vFinanzas(){
       </div>
     </div>
     <div class="card" id="fin-cxp"><h3>Cuentas por pagar</h3>
-      <div style="margin:6px 0 10px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn sm" id="cxpf-pend" onclick="finFiltroCxp('pend')">Por pagar</button><button class="btn sm sec" id="cxpf-venc" onclick="finFiltroCxp('venc')">Vencidas</button><button class="btn sm sec" id="cxpf-todas" onclick="finFiltroCxp('todas')">Todas</button></div><div class="tbl-scroll"><table>
-      <thead><tr><th>Proveedor</th><th>Concepto</th><th>Referencia</th><th>Vence</th><th class="num">Monto</th><th class="num">Saldo</th><th>Estado</th><th></th></tr></thead>
+      <div style="margin:6px 0 10px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn sm" id="cxpf-pend" onclick="finFiltroCxp('pend')">Por pagar</button><button class="btn sm sec" id="cxpf-venc" onclick="finFiltroCxp('venc')">Vencidas</button><button class="btn sm sec" id="cxpf-todas" onclick="finFiltroCxp('todas')">Todas</button>
+        ${esAdmin()?`<span style="width:14px"></span><span class="small muted" style="align-self:center">Pagar en lote:</span>
+        ${venceOpts.map(v=>`<button class="btn sec sm" onclick="selPagoVence('${v.f}')" title="Selecciona todo lo que vence ese día o antes">📅 hasta ${fecha(v.f)} (${v.n} · ${fmt(v.t)})</button>`).join('')}
+        <button class="btn sec sm" onclick="selPagoVence(null)">Todas las pendientes</button>`:''}
+      </div>
+      <div class="card" id="cxp-barra" style="display:none;position:sticky;top:56px;z-index:9;background:#fffbeb;border:2px solid var(--ambar);padding:12px;margin-bottom:10px"></div>
+      <div class="tbl-scroll"><table>
+      <thead><tr><th style="width:26px"></th><th>Proveedor</th><th>Concepto</th><th>Referencia</th><th>Vence</th><th class="num">Monto</th><th class="num">Saldo</th><th>Estado</th><th></th></tr></thead>
       <tbody>${cxpAgrupado(cxp.data, hoy)}</tbody></table></div></div>
     <div class="card" id="fin-fact"><h3>🧾 Facturas</h3>
       ${factRows === null
@@ -3472,17 +3620,161 @@ async function vFinanzas(){
               <td style="white-space:nowrap">${f.pdf_path ? `<button class="btn sm sec" onclick="verPdfFactura('${esc(f.pdf_path)}')">📄 Ver</button> <button class="btn sm sec" title="Mandar liga por WhatsApp" onclick="compartirFactura('wa','${esc(f.pdf_path)}','${esc(f.folio)}',${+f.total||0},'${esc(f.pedidos_compra?.folio_externo||'')}')">📱 WhatsApp</button> <button class="btn sm sec" title="Mandar liga por correo" onclick="compartirFactura('mail','${esc(f.pdf_path)}','${esc(f.folio)}',${+f.total||0},'${esc(f.pedidos_compra?.folio_externo||'')}')">✉️</button>` : '<span class="muted small">—</span>'}</td></tr>`;
           }).join('') || '<tr><td colspan="8" class="muted">Aún no hay facturas archivadas. Súbelas en Importar → Facturas Indar (XML).</td></tr>'}</tbody></table></div>`}
     </div>
-    <div class="card" id="fin-gastos"><h3>Gastos del mes</h3><div class="tbl-scroll"><table>
-      <thead><tr><th>Fecha</th><th>Concepto</th><th>Categoría</th><th class="num">Monto</th></tr></thead>
-      <tbody>${gastos.data.map(g=>`<tr><td>${fecha(g.fecha)}</td><td>${esc(g.concepto)}</td>
-        <td><span class="badge b-gris">${esc(g.categoria)}</span></td><td class="num">${fmt(g.monto)}</td></tr>`).join('')
-        || '<tr><td colspan="4" class="muted">Sin gastos este mes.</td></tr>'}</tbody></table></div></div>`;
+    <div class="card" id="fin-gastos"><h3>💸 Gastos, inversiones y retiros</h3>
+      <div class="toolbar" style="margin-bottom:10px">
+        ${[['mes','Este mes'],['mespasado','Mes pasado'],['anio','Este año'],['todo','Todo']].map(([k,t])=>
+          `<button class="btn ${gPer===k?'':'sec'} sm" onclick="window._gPer='${k}'; vFinanzas()">${t}</button>`).join('')}
+        <span class="small muted" style="margin-left:auto">${gastos.data.length} movimiento(s) · ${esc(gNom)}</span>
+      </div>
+      <div class="kpis" style="margin-bottom:12px">
+        <div class="kpi" style="border-top-color:var(--rojo)"><div class="l">💸 Gastos</div><div class="v">${fmt(gTot.gasto)}</div><div class="s">bajan la utilidad</div></div>
+        <div class="kpi" style="border-top-color:var(--azul)"><div class="l">🏗️ Inversiones</div><div class="v">${fmt(gTot.inversion)}</div><div class="s">compras que quedan como activo</div></div>
+        <div class="kpi" style="border-top-color:var(--gris)"><div class="l">👤 Retiros de socios</div><div class="v">${fmt(gTot.retiro)}</div><div class="s">no son gasto del negocio</div></div>
+        <div class="kpi"><div class="l">Salida total de dinero</div><div class="v">${fmt(gTot.gasto+gTot.inversion+gTot.retiro)}</div><div class="s">sin contar pagos a proveedor</div></div>
+      </div>
+      ${Object.keys(gCat).length?`<p class="small" style="margin:0 0 8px"><b>Por categoría:</b> ${Object.entries(gCat).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${esc(k)} <b>${fmt(v)}</b>`).join(' · ')}</p>`:''}
+      <div class="tbl-scroll"><table>
+      <thead><tr><th>Fecha</th><th>Tipo</th><th>Concepto</th><th>Categoría</th><th>Pagado con</th><th class="num">Monto</th></tr></thead>
+      <tbody>${gastos.data.map(g=>{
+        const tb = {gasto:'<span class="badge b-rojo">💸 gasto</span>', inversion:'<span class="badge b-azul">🏗️ inversión</span>', retiro:'<span class="badge b-gris">👤 retiro</span>'};
+        return `<tr><td>${fecha(g.fecha)}</td><td>${tb[g.tipo||'gasto']||tb.gasto}</td><td>${esc(g.concepto)}</td>
+        <td><span class="badge b-gris">${esc(g.categoria)}</span></td><td class="small muted">${esc(g.metodo||'')}</td><td class="num"><b>${fmt(g.monto)}</b></td></tr>`;}).join('')
+        || '<tr><td colspan="6" class="muted">Sin movimientos en este periodo. Usa <b>+ Gasto</b> arriba para registrar gastos, inversiones o retiros.</td></tr>'}</tbody></table></div></div>`;
 }
 async function verPdfFactura(path){
   const {data, error} = await sb.storage.from('facturas').createSignedUrl(path, 300);
   if(error || !data?.signedUrl){ toast('No pude abrir el PDF: '+errMsg(error||{}), true); return; }
   logEv('descarga', 'PDF factura: '+path);
   window.open(data.signedUrl, '_blank');
+}
+/* ============================================================
+   PAGO EN LOTE con descuento por pronto pago (v97)
+   Indar descuenta AL PAGAR: si la factura es $10,000 y aplica 4.5%,
+   transfieres $9,550 y la factura queda saldada.
+============================================================ */
+function togglePagoSel(id, on){
+  window._pagoSel = window._pagoSel || {};
+  if(on) window._pagoSel[id] = true; else delete window._pagoSel[id];
+  pintarBarraPago();
+}
+function selPagoVence(hasta){
+  window._pagoSel = {};
+  const lim = hasta ? aDate(hasta) : null;
+  (cxpData||[]).filter(c=>c.estado!=='pagada' && +c.saldo>0)
+    .filter(c=>!lim || aDate(c.fecha_vencimiento) <= lim)
+    .forEach(c=>{ window._pagoSel[c.id] = true; });
+  document.querySelectorAll('.cxp-sel').forEach(ch=>{ ch.checked = !!window._pagoSel[+ch.dataset.id]; });
+  pintarBarraPago();
+}
+function limpiarPagoSel(){
+  window._pagoSel = {};
+  document.querySelectorAll('.cxp-sel').forEach(ch=>{ ch.checked = false; });
+  pintarBarraPago();
+}
+function pintarBarraPago(){
+  const bar = $('cxp-barra'); if(!bar) return;
+  const sel = Object.keys(window._pagoSel||{}).map(Number);
+  if(!sel.length){ bar.style.display='none'; bar.innerHTML=''; return; }
+  const cs = (cxpData||[]).filter(c=>sel.includes(c.id));
+  const suma = cs.reduce((s,c)=>s+ +c.saldo, 0);
+  const pct = window._pagoPct===undefined ? 4.5 : window._pagoPct;
+  const desc = Math.round(suma * pct/100 * 100)/100;
+  const transf = Math.round((suma - desc)*100)/100;
+  bar.style.display='';
+  bar.innerHTML = `
+    <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+      <div><div class="l">Seleccionadas</div><div style="font-size:19px"><b>${cs.length}</b> factura(s)</div></div>
+      <div><div class="l">Suman</div><div style="font-size:19px"><b>${fmt(suma)}</b></div></div>
+      <div><div class="l">Descuento pronto pago</div>
+        <div style="display:flex;gap:5px;align-items:center">
+          <input type="number" step="0.1" value="${pct}" style="width:70px;padding:6px;border:1px solid var(--linea);border-radius:6px"
+            oninput="window._pagoPct=+this.value||0; pintarBarraPago(); this.focus()"> %
+          <span style="color:var(--verde)"><b>−${fmt(desc)}</b></span>
+        </div></div>
+      <div style="padding:6px 12px;background:#f0fdf4;border:2px solid var(--verde);border-radius:8px">
+        <div class="l">A TRANSFERIR</div><div style="font-size:23px;color:#15803d"><b>${fmt(transf)}</b></div></div>
+      <div style="margin-left:auto;display:flex;gap:6px">
+        <button class="btn sec sm" onclick="limpiarPagoSel()">Limpiar</button>
+        <button class="btn" onclick="modalPagoLote()">💸 Registrar pago</button></div>
+    </div>`;
+}
+function modalPagoLote(){
+  const sel = Object.keys(window._pagoSel||{}).map(Number);
+  const cs = (cxpData||[]).filter(c=>sel.includes(c.id));
+  if(!cs.length){ toast('No hay facturas seleccionadas', true); return; }
+  const suma = cs.reduce((s,c)=>s+ +c.saldo, 0);
+  const pct = window._pagoPct===undefined ? 4.5 : window._pagoPct;
+  const transf = Math.round((suma - suma*pct/100)*100)/100;
+  abrirModal(`<h3>💸 Pagar ${cs.length} factura(s)</h3>
+    <div class="tbl-scroll" style="max-height:230px"><table><thead><tr><th>Concepto</th><th>Vence</th><th class="num">Saldo</th></tr></thead>
+      <tbody>${cs.sort((a,b)=>a.fecha_vencimiento<b.fecha_vencimiento?-1:1).map(c=>
+        `<tr><td class="small">${esc(c.concepto)}</td><td class="small">${fecha(c.fecha_vencimiento)}</td><td class="num">${fmt(c.saldo)}</td></tr>`).join('')}
+      <tr style="border-top:2px solid var(--linea)"><td colspan="2"><b>Suma de saldos</b></td><td class="num"><b>${fmt(suma)}</b></td></tr></tbody></table></div>
+    <div class="frow" style="margin-top:12px">
+      <div class="field"><label>¿Cuánto vas a transferir realmente?</label>
+        <input id="pl-monto" type="number" step="0.01" value="${transf}" oninput="calcPagoLote(${suma})" style="font-size:19px"></div>
+      <div class="field"><label>Método</label><select id="pl-metodo"><option value="transferencia">Transferencia</option>
+        <option value="efectivo">Efectivo</option><option value="cheque">Cheque</option><option value="ak_pago">AK Pago</option></select></div>
+    </div>
+    <div style="display:flex;gap:8px;margin:-4px 0 10px;flex-wrap:wrap">
+      <span class="small muted">Atajos:</span>
+      ${[0,3,4,4.5,5].map(p=>`<button class="btn sec sm" onclick="$('pl-monto').value=(${suma}*(1-${p}/100)).toFixed(2);calcPagoLote(${suma})">${p?p+'%':'sin descuento'}</button>`).join('')}
+    </div>
+    <div id="pl-calc" class="card" style="padding:11px;margin-bottom:10px;background:#f8fafc"></div>
+    <div class="field"><label>Referencia del banco (opcional)</label><input id="pl-ref" placeholder="Ej. SPEI 0031234"></div>
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cancelar</button>
+      <button class="btn" onclick="confirmarPagoLote()">✅ Registrar y saldar</button></div>`, true);
+  window._plCuentas = cs; calcPagoLote(suma);
+}
+function calcPagoLote(suma){
+  const m = +($('pl-monto')?.value||0);
+  const desc = Math.round((suma - m)*100)/100;
+  const pct = suma>0 ? desc/suma*100 : 0;
+  const el = $('pl-calc'); if(!el) return;
+  if(desc < -0.01){
+    el.innerHTML = `<b style="color:#b91c1c">⚠️ Estás transfiriendo ${fmt(-desc)} de MÁS que la suma de los saldos.</b>
+      <div class="small muted">Revisa el monto: no debería ser mayor a ${fmt(suma)}.</div>`;
+    return;
+  }
+  el.innerHTML = `
+    <div style="display:flex;gap:20px;flex-wrap:wrap">
+      <div><div class="l">Suma de saldos</div><b>${fmt(suma)}</b></div>
+      <div><div class="l">Transfieres</div><b>${fmt(m)}</b></div>
+      <div><div class="l">Descuento que te ahorras</div><b style="color:#15803d">${fmt(desc)} (${pct.toFixed(2)}%)</b></div>
+    </div>
+    <div class="small muted" style="margin-top:6px">Las ${window._plCuentas.length} factura(s) quedarán <b>saldadas al 100%</b>: se registra el pago de ${fmt(m)} y el descuento de ${fmt(desc)} cierra el resto.</div>`;
+}
+async function confirmarPagoLote(){
+  const cs = window._plCuentas||[]; if(!cs.length) return;
+  const suma = cs.reduce((s,c)=>s+ +c.saldo, 0);
+  const total = +($('pl-monto').value||0);
+  if(total < 0 || total > suma + 0.01){ toast('El monto no puede ser mayor a la suma de los saldos', true); return; }
+  const descTot = Math.round((suma - total)*100)/100;
+  const metodo = $('pl-metodo').value, refBase = ($('pl-ref').value||'').trim();
+  const lote = 'L' + new Date().toISOString().slice(0,10).replace(/-/g,'') + '-' + String(Date.now()).slice(-4);
+  const btn = event?.target; if(btn){ btn.disabled = true; btn.textContent = 'Registrando...'; }
+  let ok = 0, fallos = [];
+  for(const c of cs){
+    // reparto proporcional del descuento
+    const prop = suma>0 ? +c.saldo/suma : 0;
+    const dsc = Math.round(descTot*prop*100)/100;
+    const monto = Math.round((+c.saldo - dsc)*100)/100;
+    const ref = [refBase, 'lote '+lote, dsc>0?('desc '+fmt(dsc)):''].filter(Boolean).join(' · ');
+    const {error} = await sb.rpc('registrar_pago', {p_cuenta_id:c.id, p_monto:monto, p_metodo:metodo, p_referencia:ref});
+    if(error){ fallos.push(c.concepto+': '+errMsg(error)); continue; }
+    // el descuento cierra el resto del saldo
+    const {data:c2} = await sb.from('cuentas_pagar').select('saldo').eq('id', c.id).single();
+    if(c2 && +c2.saldo > 0 && +c2.saldo <= dsc + 0.02)
+      await sb.from('cuentas_pagar').update({saldo:0, estado:'pagada'}).eq('id', c.id);
+    try{ await sb.from('pagos_cxp').update({lote:lote, descuento:dsc}).eq('cuenta_id', c.id).order('id',{ascending:false}).limit(1); }catch(e){}
+    ok++;
+  }
+  window._pagoSel = {};
+  cerrarModal();
+  logEv('finanzas', 'pago en lote '+lote+': '+ok+' factura(s), '+fmt(total)+' transferido, '+fmt(descTot)+' de descuento');
+  if(fallos.length) alert('Se registraron '+ok+' pago(s).\n\nNo se pudieron registrar:\n'+fallos.join('\n'));
+  else toast('✅ '+ok+' factura(s) saldadas · transferiste '+fmt(total)+' y te ahorraste '+fmt(descTot));
+  vFinanzas();
 }
 function pagarCuenta(id){
   const c = cxpData.find(x=>x.id===id);
@@ -3540,23 +3832,48 @@ async function guardarCuenta(){
   cerrarModal(); toast('Cuenta registrada'); vFinanzas();
 }
 function nuevoGasto(){
-  abrirModal(`<h3>Registrar gasto</h3>
+  abrirModal(`<h3>Registrar salida de dinero</h3>
+    <div class="field"><label>¿Qué tipo de salida es?</label>
+      <select id="gs-tipo" onchange="pistaGasto()">
+        <option value="gasto">💸 Gasto — se consume (renta, luz, gasolina, sueldos)</option>
+        <option value="inversion">🏗️ Inversión — queda algo (anaqueles, equipo, obra, letrero)</option>
+        <option value="retiro">👤 Retiro de socios — dinero que sacan los dueños</option>
+      </select></div>
+    <p class="small muted" id="gs-pista" style="margin:-6px 0 10px"></p>
     <div class="field"><label>Concepto</label><input id="gs-concepto" placeholder="Ej. Gasolina, renta, luz..."></div>
     <div class="frow">
       <div class="field"><label>Monto</label><input id="gs-monto" type="number" step="0.01"></div>
       <div class="field"><label>Categoría</label><select id="gs-cat"><option>General</option><option>Renta</option>
-        <option>Servicios</option><option>Transporte</option><option>Nómina</option><option>Otro</option></select></div>
+        <option>Servicios</option><option>Transporte</option><option>Nómina</option><option>Publicidad</option>
+        <option>Mantenimiento</option><option>Equipo</option><option>Mobiliario</option><option>Obra</option><option>Otro</option></select></div>
+    </div>
+    <div class="frow">
+      <div class="field"><label>¿De dónde salió?</label><select id="gs-metodo">
+        <option value="efectivo">💵 Efectivo de caja</option><option value="transferencia">🏦 Transferencia</option>
+        <option value="tarjeta">💳 Tarjeta</option></select></div>
+      <div class="field"><label>Fecha</label><input id="gs-fecha" type="date" value="${new Date().toISOString().slice(0,10)}"></div>
     </div>
     <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cancelar</button>
       <button class="btn" onclick="guardarGasto()">Guardar</button></div>`);
+  pistaGasto();
+}
+function pistaGasto(){
+  const t = $('gs-tipo')?.value, el = $('gs-pista'); if(!el) return;
+  el.innerHTML = {gasto:'Baja la utilidad del mes. Es el día a día de operar la tienda.',
+    inversion:'No es pérdida: cambias dinero por un activo. Se ve aparte para que no ensucie la utilidad.',
+    retiro:'No es gasto del negocio: es reparto a los dueños. Sale del dinero disponible pero no de la utilidad.'}[t]||'';
 }
 async function guardarGasto(){
   const monto = +$('gs-monto').value;
   if(!$('gs-concepto').value.trim() || !monto){ toast('Faltan datos', true); return; }
-  const {error} = await sb.from('gastos').insert({concepto:$('gs-concepto').value.trim(),
-    categoria:$('gs-cat').value, monto, usuario_id:sesion.user.id});
+  const fila = {concepto:$('gs-concepto').value.trim(), categoria:$('gs-cat').value, monto,
+    metodo: $('gs-metodo')?.value || 'efectivo', usuario_id:sesion.user.id};
+  const f = $('gs-fecha')?.value; if(f) fila.fecha = f;
+  const t = $('gs-tipo')?.value; if(t) fila.tipo = t;
+  let {error} = await sb.from('gastos').insert(fila);
+  if(error && /tipo/.test(errMsg(error))){ delete fila.tipo; ({error} = await sb.from('gastos').insert(fila)); }
   if(error){ toast(errMsg(error), true); return; }
-  cerrarModal(); toast('Gasto registrado'); vFinanzas();
+  cerrarModal(); toast('Registrado ✓'); vFinanzas();
 }
 
 /* ============================================================
