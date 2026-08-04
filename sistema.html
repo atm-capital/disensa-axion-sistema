@@ -2550,6 +2550,10 @@ async function vPedidos(){
       if(['pendiente','recogido'].includes(d.estado)) window._pdev[k].abiertas++; });
   }catch(e){ window._pdev = {}; }
   try{ const _pir = await sb.from('partes_indar').select('*').in('pedido_id', data.map(p=>p.id)); window._pind = {}; for(const z of ((_pir&&_pir.data)||[])){ if(!window._pind[z.pedido_id]) window._pind[z.pedido_id]={}; window._pind[z.pedido_id][String(z.parte)]=z; } }catch(e){ window._pind={}; }
+  // facturas por pedido, para poder buscar el pedido con el número de factura (v95)
+  try{ const _fx = await sb.from('facturas').select('folio,pedido_id'); window._pfac = {};
+    (_fx.data||[]).forEach(f=>{ if(!f.pedido_id) return; (window._pfac[f.pedido_id]=window._pfac[f.pedido_id]||[]).push(String(f.folio)); });
+  }catch(e){ window._pfac = {}; }
   const badges = {borrador:'b-gris', enviado:'b-azul', parcial:'b-ambar', recibido:'b-verde', cancelado:'b-rojo'};
   const porEstado = {};
   for(const p of data){ if(!porEstado[p.estado]) porEstado[p.estado] = {n:0, t:0}; porEstado[p.estado].n++; porEstado[p.estado].t += +p.total; }
@@ -2578,6 +2582,11 @@ async function vPedidos(){
       <div class="kpi" style="cursor:pointer;${!window._pedFiltro?'':'opacity:.75'}" title="Ver todos" onclick="window._pedFiltro=null; vPedidos()"><div class="l">Total pedidos (${data.filter(p=>p.estado!=='cancelado').length})</div><div class="v">${esFinanzas()?fmt(totalGral):data.filter(p=>p.estado!=='cancelado').length+' 📦'}</div></div>
     </div>` + `
     <div class="card"><h3>Pedidos de compra${window._pedFiltro?` · filtro: <span class="badge ${badges[window._pedFiltro]}">${window._pedFiltro}</span>`:''}</h3>
+    <div class="toolbar" style="margin-bottom:8px">
+      <input type="search" id="ped-q" placeholder="🔍 Busca CUALQUIER número del papel: pedido, parte (sales order) o factura…" oninput="filtrarPedidos()" style="flex:1;min-width:280px;font-size:15px;padding:11px 13px">
+      <span class="small muted" id="ped-qn"></span>
+    </div>
+    <p class="small muted" style="margin:0 0 10px">Indar usa <b>dos números</b>: el del pedido (ej. <b>1411378</b>) y el de la <b>parte / sales order</b> que viene en la lista de empaque (ej. <b>2957693</b>). Aquí puedes buscar con cualquiera de los dos, o con el de la factura.</p>
     <div class="toolbar" style="margin-bottom:10px">
       <button class="btn ${!fCla?'':'sec'} sm" onclick="window._pedClase=null; vPedidos()">Todos (${data.length})</button>
       <button class="btn ${fCla==='porllegar'?'':'sec'} sm" onclick="window._pedClase='porllegar'; vPedidos()">⏳ Por llegar (${cl.porllegar||0})</button>
@@ -2589,15 +2598,22 @@ async function vPedidos(){
     <button class="btn sm" style="float:right;margin-left:10px" onclick="syncIndar()">🔄 Actualizar estatus Indar</button><button class="btn sm sec" style="float:right" onclick="traerFacturasIndar()">🧾 Traer facturas de Indar</button><p class="small muted" style="margin-bottom:10px">Los pedidos se capturan en el portal del proveedor (Indar / Holcim) y aquí se registran para dar seguimiento. Al marcar <b>Recibido</b>, las cantidades se suman al inventario automáticamente.</p>
     <div class="tbl-scroll"><table>
       <thead><tr><th>Folio</th><th>Proveedor</th><th>Fecha pedido</th><th>Recibido</th><th>Estado</th><th>Partes / avance</th><th>Plazo</th>${esFinanzas()?'<th class="num">Total</th>':''}<th></th></tr></thead>
-      <tbody>${dataF.map(p=>`<tr style="cursor:pointer" title="Clic: ver partes, cotejar factura y recibir" onclick="verPedido(${p.id}, '${p.estado}')">
-        <td><b>${esc(p.folio_externo)||('#'+p.id)}</b></td><td>${esc(p.proveedores?.nombre)}</td>
+      <tbody>${dataF.map(p=>{
+        const _pts = Object.keys(window._pp[p.id]||{});
+        const _fxs = (window._pfac||{})[p.id]||[];
+        const _busca = [p.folio_externo, p.proveedores?.nombre, ..._pts, ..._fxs].filter(Boolean).join(' ').toLowerCase();
+        return `<tr class="ped-row" data-busca="${esc(_busca)}" style="cursor:pointer" title="Clic: ver partes, cotejar factura y recibir" onclick="verPedido(${p.id}, '${p.estado}')">
+        <td><b>${esc(p.folio_externo)||('#'+p.id)}</b>
+          ${_pts.length?`<div class="small muted" title="Parte / sales order — el número que viene en la lista de empaque">📦 ${_pts.map(esc).join(' · ')}</div>`:''}
+          ${_fxs.length?`<div class="small muted" title="Factura(s) de este pedido">🧾 ${_fxs.map(esc).join(' · ')}</div>`:''}</td><td>${esc(p.proveedores?.nombre)}</td>
         <td>${fecha(p.fecha)}</td>
         <td class="small">${p.fecha_recibido?fecha(p.fecha_recibido):'<span class="muted">—</span>'}</td>
         <td><span class="badge ${badges[p.estado]}">${p.estado}</span></td>
         <td class="small" style="white-space:nowrap">${resParteHTML(window._pp[p.id], window._pind && window._pind[p.id])}${(window._pdev&&window._pdev[p.id])?`<br><span class="badge ${window._pdev[p.id].abiertas?'b-ambar':'b-verde'}" title="Tiene devolución con Indar">↩️ ${window._pdev[p.id].pz} devuelta(s)${window._pdev[p.id].abiertas?'':' ✓'}</span>`:''}</td><td>${p.plazo_dias||0} días</td>${esFinanzas()?`<td class="num"><b>${fmt(p.total)}</b></td>`:''}
         <td style="white-space:nowrap" onclick="event.stopPropagation()"><button class="btn sec sm" onclick="verPedido(${p.id}, '${p.estado}')">Ver / Recibir</button>
         ${esAdmin() && ['enviado','parcial'].includes(p.estado) ? `<button class="btn sm" onclick="recibirPedido(${p.id})">Recibir todo ✓</button>`:''}</td>
-      </tr>`).join('') || '<tr><td colspan="9" class="muted">Sin pedidos con este filtro.</td></tr>'}</tbody></table></div></div>
+      </tr>`;}).join('') || '<tr><td colspan="9" class="muted">Sin pedidos con este filtro.</td></tr>'}
+      <tr id="ped-vacio" style="display:none"><td colspan="9" class="muted">Ese número no aparece en ningún pedido. Revisa que esté bien escrito, o usa el botón <b>🔍 ¿Qué me están entregando?</b>.</td></tr></tbody></table></div></div>
     <div class="card"><h3>Portales de proveedores</h3><div class="tbl-scroll"><table id="prov-tabla"></table></div></div>`;
   const pr = await sb.from('proveedores').select('*').order('nombre');
   if(!pr.error) $('prov-tabla').innerHTML = `
@@ -2605,6 +2621,16 @@ async function vPedidos(){
     <tbody>${pr.data.map(x=>`<tr><td><b>${esc(x.nombre)}</b></td><td>${esc(x.codigo_cliente)}</td>
       <td>${x.portal?`<a href="${esc(x.portal)}" target="_blank">${esc(x.portal)}</a>`:''}</td>
       <td class="small">${esc(x.contacto)}</td></tr>`).join('')}</tbody>`;
+}
+/* Filtra la lista de pedidos sin re-dibujar (no pierde el foco al escribir) — v95 */
+function filtrarPedidos(){
+  const inp = $('ped-q'); if(!inp) return;
+  const q = (inp.value||'').toLowerCase().trim();
+  const filas = document.querySelectorAll('#v-pedidos tr.ped-row');
+  let n = 0;
+  filas.forEach(tr=>{ const ok = !q || (tr.dataset.busca||'').includes(q); tr.style.display = ok?'':'none'; if(ok) n++; });
+  const vac = $('ped-vacio'); if(vac) vac.style.display = (q && n===0)?'':'none';
+  const et = $('ped-qn'); if(et) et.textContent = q ? `${n} pedido(s) con "${inp.value.trim()}"` : '';
 }
 /* ===== Buscador universal de folios: "¿qué me están entregando?" (v76) =====
    Indar entrega agrupando: un papel puede traer varias facturas y partes de distintos pedidos.
