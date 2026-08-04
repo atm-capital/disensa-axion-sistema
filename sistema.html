@@ -3531,8 +3531,10 @@ async function historialSaldos(){
     <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
 }
 async function vFinanzas(){
-  if(esAdmin()) $('vtools').innerHTML = `<button class="btn" onclick="nuevaCuenta()">+ Cuenta por pagar</button>
-    <button class="btn sec" onclick="nuevoGasto()">+ Gasto</button>`;
+  if(esAdmin()) $('vtools').innerHTML = `<button class="btn" onclick="asistentePago()">💸 Pagar facturas</button>
+    <button class="btn sec" onclick="nuevaCuenta()">+ Cuenta por pagar</button>
+    <button class="btn sec" onclick="nuevoGasto()">+ Gasto</button>
+    <button class="btn sec" onclick="historialPagos()">📜 Pagos hechos</button>`;
   const hoy = new Date(); hoy.setHours(0,0,0,0);
   const mes = new Date(hoy.getFullYear(), hoy.getMonth(), 1).toISOString().slice(0,10);
   // periodo para la sección de gastos/inversiones
@@ -3570,14 +3572,6 @@ async function vFinanzas(){
   const factTotal = factPend.reduce((s,c)=>s+ +c.saldo,0);
   const factProx = factPend.slice().sort((a,b)=>a.fecha_vencimiento<b.fecha_vencimiento?-1:1)[0];
   const factDias = factProx ? Math.ceil((aDate(factProx.fecha_vencimiento)-hoy)/864e5) : null;
-  // fechas de vencimiento cercanas, para los botones de "seleccionar todo lo que vence el..."
-  const vAcum = {};
-  pend.filter(c=>+c.saldo>0 && c.fecha_vencimiento).forEach(c=>{ const k=c.fecha_vencimiento;
-    if(!vAcum[k]) vAcum[k]={n:0,t:0}; vAcum[k].n++; vAcum[k].t += +c.saldo; });
-  const venceOpts = Object.keys(vAcum).sort().slice(0,4).map(f=>{
-    const hastaF = Object.keys(vAcum).filter(x=>x<=f);
-    return {f, n: hastaF.reduce((s,x)=>s+vAcum[x].n,0), t: hastaF.reduce((s,x)=>s+vAcum[x].t,0)};
-  });
   window._pagoSel = window._pagoSel || {};
   const dinero = await calcularDinero(hoy);
   $('v-finanzas').innerHTML = panelDinero(dinero) + `
@@ -3598,9 +3592,7 @@ async function vFinanzas(){
     </div>
     <div class="card" id="fin-cxp"><h3>Cuentas por pagar</h3>
       <div style="margin:6px 0 10px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn sm" id="cxpf-pend" onclick="finFiltroCxp('pend')">Por pagar</button><button class="btn sm sec" id="cxpf-venc" onclick="finFiltroCxp('venc')">Vencidas</button><button class="btn sm sec" id="cxpf-todas" onclick="finFiltroCxp('todas')">Todas</button>
-        ${esAdmin()?`<span style="width:14px"></span><span class="small muted" style="align-self:center">Pagar en lote:</span>
-        ${venceOpts.map(v=>`<button class="btn sec sm" onclick="selPagoVence('${v.f}')" title="Selecciona todo lo que vence ese día o antes">📅 hasta ${fecha(v.f)} (${v.n} · ${fmt(v.t)})</button>`).join('')}
-        <button class="btn sec sm" onclick="selPagoVence(null)">Todas las pendientes</button>`:''}
+        ${esAdmin()?`<span style="flex:1"></span><button class="btn sm" onclick="asistentePago()">💸 Pagar lo que se vence</button>`:''}
       </div>
       <div class="card" id="cxp-barra" style="display:none;position:sticky;top:56px;z-index:9;background:#fffbeb;border:2px solid var(--ambar);padding:12px;margin-bottom:10px"></div>
       <div class="tbl-scroll"><table>
@@ -3698,6 +3690,54 @@ function pintarBarraPago(){
         <button class="btn" onclick="modalPagoLote()">💸 Registrar pago</button></div>
     </div>`;
 }
+/* ===== Asistente: "voy a pagar todo lo que se vence" — 2 clics (v98) ===== */
+function asistentePago(){
+  const hoy = new Date(); hoy.setHours(0,0,0,0);
+  const pend = (cxpData||[]).filter(c=>c.estado!=='pagada' && +c.saldo>0 && c.fecha_vencimiento);
+  if(!pend.length){ toast('No hay nada pendiente de pago 🎉'); return; }
+  const dd = f => Math.round((aDate(f) - hoy)/864e5);
+  // grupos útiles: vencido · vence hoy-mañana · esta semana · 15 días · todo
+  const defs = [
+    {k:'venc',  t:'🔴 Ya vencidas',            f:c=>dd(c.fecha_vencimiento) < 0},
+    {k:'sem',   t:'⏰ Vencen en 7 días o menos', f:c=>dd(c.fecha_vencimiento) <= 7},
+    {k:'q',     t:'📅 Vencen en 15 días o menos', f:c=>dd(c.fecha_vencimiento) <= 15},
+    {k:'mes',   t:'🗓️ Vencen en 30 días o menos', f:c=>dd(c.fecha_vencimiento) <= 30},
+    {k:'todo',  t:'📦 Absolutamente todo lo pendiente', f:()=>true},
+  ];
+  const cards = defs.map(d=>{
+    const g = pend.filter(d.f);
+    if(!g.length) return '';
+    const t = g.reduce((s,c)=>s+ +c.saldo,0);
+    const provs = [...new Set(g.map(c=>c.proveedores?.nombre).filter(Boolean))];
+    const ahorro = t*0.045;
+    const prox = g.map(c=>c.fecha_vencimiento).sort()[0];
+    return `<div class="card" style="padding:13px;margin-bottom:9px;cursor:pointer;border-left:4px solid ${d.k==='venc'?'#b91c1c':'var(--rojo)'}"
+      onclick="pagarGrupo('${d.k}')" title="Clic para pagar estas">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+        <div><b style="font-size:15px">${d.t}</b>
+          <div class="small muted">${g.length} factura(s) · ${provs.join(', ')} · la más próxima vence ${fecha(prox)}</div></div>
+        <div style="text-align:right"><div style="font-size:21px"><b>${fmt(t)}</b></div>
+          <div class="small" style="color:#15803d">pagando ya te ahorras ~${fmt(ahorro)}</div></div>
+      </div></div>`;
+  }).join('');
+  abrirModal(`<h3>💸 Pagar facturas</h3>
+    <p class="small muted" style="margin:0 0 10px">Escoge el grupo que vas a pagar. No tienes que ir una por una: el sistema selecciona todas, reparte el descuento y las salda.</p>
+    ${cards}
+    <p class="small muted" style="margin:10px 0 0">¿Necesitas escoger a mano? Cierra esto y palomea las facturas en la tabla de abajo.</p>
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
+}
+function pagarGrupo(k){
+  const hoy = new Date(); hoy.setHours(0,0,0,0);
+  const dd = f => Math.round((aDate(f) - hoy)/864e5);
+  const f = {venc:c=>dd(c.fecha_vencimiento)<0, sem:c=>dd(c.fecha_vencimiento)<=7,
+             q:c=>dd(c.fecha_vencimiento)<=15, mes:c=>dd(c.fecha_vencimiento)<=30, todo:()=>true}[k];
+  window._pagoSel = {};
+  (cxpData||[]).filter(c=>c.estado!=='pagada' && +c.saldo>0 && c.fecha_vencimiento).filter(f)
+    .forEach(c=>{ window._pagoSel[c.id] = true; });
+  document.querySelectorAll('.cxp-sel').forEach(ch=>{ ch.checked = !!window._pagoSel[+ch.dataset.id]; });
+  pintarBarraPago();
+  modalPagoLote();
+}
 function modalPagoLote(){
   const sel = Object.keys(window._pagoSel||{}).map(Number);
   const cs = (cxpData||[]).filter(c=>sel.includes(c.id));
@@ -3721,9 +3761,13 @@ function modalPagoLote(){
       ${[0,3,4,4.5,5].map(p=>`<button class="btn sec sm" onclick="$('pl-monto').value=(${suma}*(1-${p}/100)).toFixed(2);calcPagoLote(${suma})">${p?p+'%':'sin descuento'}</button>`).join('')}
     </div>
     <div id="pl-calc" class="card" style="padding:11px;margin-bottom:10px;background:#f8fafc"></div>
+    <div class="field"><label>📎 Comprobante de la transferencia (recomendado)</label>
+      <input type="file" id="pl-file" accept="image/*,application/pdf" capture="environment" onchange="prevComprobante(this)">
+      <p class="small muted" style="margin:4px 0 0">Foto o PDF del comprobante del banco. Queda guardado con el pago para que tú y los contadores lo tengan.</p>
+      <div id="pl-prev"></div></div>
     <div class="field"><label>Referencia del banco (opcional)</label><input id="pl-ref" placeholder="Ej. SPEI 0031234"></div>
     <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cancelar</button>
-      <button class="btn" onclick="confirmarPagoLote()">✅ Registrar y saldar</button></div>`, true);
+      <button class="btn" onclick="confirmarPagoLote()">✅ Registrar y saldar todas</button></div>`, true);
   window._plCuentas = cs; calcPagoLote(suma);
 }
 function calcPagoLote(suma){
@@ -3744,6 +3788,12 @@ function calcPagoLote(suma){
     </div>
     <div class="small muted" style="margin-top:6px">Las ${window._plCuentas.length} factura(s) quedarán <b>saldadas al 100%</b>: se registra el pago de ${fmt(m)} y el descuento de ${fmt(desc)} cierra el resto.</div>`;
 }
+function prevComprobante(inp){
+  const f = inp.files && inp.files[0]; const el = $('pl-prev'); if(!el) return;
+  if(!f){ el.innerHTML=''; return; }
+  const mb = (f.size/1048576).toFixed(1);
+  el.innerHTML = `<div class="small" style="margin-top:6px;color:#15803d">✓ ${esc(f.name)} (${mb} MB) — se sube al registrar el pago</div>`;
+}
 async function confirmarPagoLote(){
   const cs = window._plCuentas||[]; if(!cs.length) return;
   const suma = cs.reduce((s,c)=>s+ +c.saldo, 0);
@@ -3753,6 +3803,19 @@ async function confirmarPagoLote(){
   const metodo = $('pl-metodo').value, refBase = ($('pl-ref').value||'').trim();
   const lote = 'L' + new Date().toISOString().slice(0,10).replace(/-/g,'') + '-' + String(Date.now()).slice(-4);
   const btn = event?.target; if(btn){ btn.disabled = true; btn.textContent = 'Registrando...'; }
+  // sube el comprobante primero: si falla, mejor enterarse antes de tocar saldos
+  let compPath = null;
+  const fInp = $('pl-file'), file = fInp && fInp.files && fInp.files[0];
+  if(file){
+    const ext = (file.name.split('.').pop()||'bin').toLowerCase();
+    const path = 'pagos/'+lote+'.'+ext;
+    const up = await sb.storage.from('facturas').upload(path, file, {upsert:true});
+    if(up.error){
+      if(!confirm('No pude subir el comprobante ('+errMsg(up.error)+').\n\n¿Registro el pago de todas formas?')){
+        if(btn){ btn.disabled=false; btn.textContent='✅ Registrar y saldar todas'; } return;
+      }
+    } else compPath = path;
+  }
   let ok = 0, fallos = [];
   for(const c of cs){
     // reparto proporcional del descuento
@@ -3769,12 +3832,33 @@ async function confirmarPagoLote(){
     try{ await sb.from('pagos_cxp').update({lote:lote, descuento:dsc}).eq('cuenta_id', c.id).order('id',{ascending:false}).limit(1); }catch(e){}
     ok++;
   }
+  // cabecera del lote con el comprobante
+  try{
+    await sb.from('pagos_lote').insert({lote, proveedor_id: cs[0].proveedor_id||null, n_facturas: ok,
+      suma_saldos: Math.round(suma*100)/100, transferido: total, descuento: descTot,
+      metodo, referencia: refBase, comprobante_path: compPath,
+      nombre: (typeof perfil!=='undefined'&&perfil?perfil.nombre:'')});
+  }catch(e){}
   window._pagoSel = {};
   cerrarModal();
-  logEv('finanzas', 'pago en lote '+lote+': '+ok+' factura(s), '+fmt(total)+' transferido, '+fmt(descTot)+' de descuento');
+  logEv('finanzas', 'pago en lote '+lote+': '+ok+' factura(s), '+fmt(total)+' transferido, '+fmt(descTot)+' de descuento'+(compPath?' (con comprobante)':''));
   if(fallos.length) alert('Se registraron '+ok+' pago(s).\n\nNo se pudieron registrar:\n'+fallos.join('\n'));
   else toast('✅ '+ok+' factura(s) saldadas · transferiste '+fmt(total)+' y te ahorraste '+fmt(descTot));
   vFinanzas();
+}
+/* ===== Historial de pagos en lote, con su comprobante ===== */
+async function historialPagos(){
+  const r = await sb.from('pagos_lote').select('*').order('fecha',{ascending:false}).order('id',{ascending:false}).limit(50);
+  if(r.error){ toast('Para ver el historial corre 29_dinero.sql en Supabase', true); return; }
+  abrirModal(`<h3>📜 Pagos hechos</h3>
+    <div class="tbl-scroll"><table><thead><tr><th>Fecha</th><th>Lote</th><th class="num">Facturas</th><th class="num">Se debía</th>
+      <th class="num">Transferido</th><th class="num">Descuento</th><th>Referencia</th><th>Comprobante</th></tr></thead>
+    <tbody>${(r.data||[]).map(p=>`<tr><td>${fecha(p.fecha)}</td><td class="small"><b>${esc(p.lote)}</b><div class="muted">${esc(p.nombre||'')}</div></td>
+      <td class="num">${p.n_facturas}</td><td class="num">${fmt(p.suma_saldos)}</td><td class="num"><b>${fmt(p.transferido)}</b></td>
+      <td class="num" style="color:#15803d">${fmt(p.descuento)}</td><td class="small muted">${esc(p.referencia||'')}</td>
+      <td>${p.comprobante_path?`<button class="btn sm sec" onclick="verPdfFactura('${esc(p.comprobante_path)}')">📎 Ver</button>`:'<span class="muted small">—</span>'}</td></tr>`).join('')
+      || '<tr><td colspan="8" class="muted">Aún no hay pagos registrados.</td></tr>'}</tbody></table></div>
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
 }
 function pagarCuenta(id){
   const c = cxpData.find(x=>x.id===id);
