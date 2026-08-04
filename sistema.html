@@ -1151,22 +1151,78 @@ async function enviarSolicitudRes(){
   logEv('inventario','solicitud de resurtido con '+items.length+' producto(s)');
   cerrarModal();
 }
+/* ===== Cotejo solicitudes vs pedidos (v96) =====
+   Para cada producto pedido por la tienda, dice si ya llegó, si viene en camino o si falta pedirlo. */
+async function cotejarSolicitudes(sols){
+  const codigos = [...new Set(sols.flatMap(s=>(s.items||[]).map(i=>String(i.codigo||'').trim().toUpperCase())).filter(Boolean))];
+  if(!codigos.length) return {};
+  const prods = await traerTodo(()=>sb.from('productos').select('id,codigo,descripcion,stock').order('id'));
+  const byCod = {}; prods.forEach(p=>byCod[String(p.codigo).trim().toUpperCase()] = p);
+  const its = await traerTodo(()=>sb.from('pedido_compra_items')
+    .select('producto_id,cantidad,cantidad_recibida,pedidos_compra!inner(id,folio_externo,estado,fecha,fecha_recibido)').order('id'));
+  const porProd = {};
+  its.forEach(i=>{ if(!i.producto_id || i.pedidos_compra?.estado==='cancelado') return;
+    (porProd[i.producto_id] = porProd[i.producto_id]||[]).push(i); });
+  const out = {};
+  for(const s of sols){
+    const fSol = new Date(s.creado); fSol.setHours(0,0,0,0); fSol.setDate(fSol.getDate()-1); // 1 día de holgura
+    out[s.id] = {};
+    for(const it of (s.items||[])){
+      const c = String(it.codigo||'').trim().toUpperCase();
+      const p = byCod[c];
+      if(!p){ out[s.id][c] = {est:'nuevo', txt:'Producto nuevo — nunca se ha pedido a Indar'}; continue; }
+      const lin = porProd[p.id]||[];
+      const camino = lin.filter(x=>+(x.cantidad_recibida||0) < +x.cantidad);
+      const pzCamino = camino.reduce((a,x)=>a + (+x.cantidad - +(x.cantidad_recibida||0)), 0);
+      const llegoDespues = lin.filter(x=>+(x.cantidad_recibida||0)>0 &&
+        new Date(x.pedidos_compra.fecha_recibido || x.pedidos_compra.fecha) >= fSol);
+      const pzLlego = llegoDespues.reduce((a,x)=>a + +(x.cantidad_recibida||0), 0);
+      const fol = arr => [...new Set(arr.map(x=>x.pedidos_compra.folio_externo))].join(', ');
+      if(pzCamino > 0)      out[s.id][c] = {est:'camino', pz:pzCamino, stock:+p.stock, txt:'En camino '+pzCamino+' pz · pedido '+fol(camino)};
+      else if(pzLlego > 0)  out[s.id][c] = {est:'llego', pz:pzLlego, stock:+p.stock, txt:'Ya llegó '+pzLlego+' pz · pedido '+fol(llegoDespues)+' · stock hoy '+(+p.stock)};
+      else                  out[s.id][c] = {est:'falta', stock:+p.stock, txt:'No se ha pedido desde esta solicitud · stock hoy '+(+p.stock)};
+    }
+  }
+  return out;
+}
+function badgeCot(c){
+  if(!c) return '';
+  const m = {llego:['b-verde','✅ ya llegó'], camino:['b-azul','🚚 en camino'], falta:['b-rojo','❌ falta pedir'], nuevo:['b-ambar','🆕 nunca pedido']}[c.est];
+  return `<span class="badge ${m[0]}" title="${esc(c.txt)}">${m[1]}</span>`;
+}
 async function verSolicitudesRes(){
   const {data, error} = await sb.from('resurtido_solicitudes').select('*').order('creado',{ascending:false}).limit(30);
   if(error){ toast(errMsg(error), true); return; }
+  let cot = {};
+  try{ cot = await cotejarSolicitudes(data||[]); }catch(e){ cot = {}; }
+  window._solCot = cot;
   const pend = (data||[]).filter(s=>s.estado==='pendiente');
   const otras = (data||[]).filter(s=>s.estado!=='pendiente');
-  const card = s => `<div class="card" style="margin-bottom:10px;${s.estado!=='pendiente'?'opacity:.6':''}">
+  const card = s => {
+    const c = cot[s.id]||{};
+    const est = (s.items||[]).map(i=>(c[String(i.codigo||'').trim().toUpperCase()]||{}).est);
+    const nFalta = est.filter(x=>x==='falta'||x==='nuevo').length;
+    const nCam = est.filter(x=>x==='camino').length, nOk = est.filter(x=>x==='llego').length;
+    const resumen = `<div class="small" style="margin:4px 0 6px">
+      ${nOk?`<span class="badge b-verde">✅ ${nOk} ya llegaron</span> `:''}
+      ${nCam?`<span class="badge b-azul">🚚 ${nCam} en camino</span> `:''}
+      ${nFalta?`<span class="badge b-rojo">❌ ${nFalta} faltan por pedir</span>`:''}
+      ${!nFalta&&!nCam&&nOk?'<span class="small muted"> — todo cubierto</span>':''}</div>`;
+    return `<div class="card" style="margin-bottom:10px;${s.estado!=='pendiente'?'opacity:.75':''}${nFalta?';border-left:4px solid #b91c1c':''}">
     <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px">
       <b>${esc(s.nombre||'—')}</b>
       <span class="small muted">${fechaHora(s.creado)} · ${s.estado==='pendiente'?'<span class="badge b-ambar">pendiente</span>':'<span class="badge b-verde">atendida</span>'}</span></div>
+    ${resumen}
     ${s.nota?`<p class="small" style="margin:4px 0">📝 ${esc(s.nota)}</p>`:''}
-    <table style="margin:6px 0">${(s.items||[]).map(i=>`<tr><td><b>${esc(i.codigo)}</b></td><td>${esc(i.desc)}</td><td class="num"><b>${i.cant}</b> pza</td></tr>`).join('')}</table>
+    <table style="margin:6px 0">${(s.items||[]).map(i=>`<tr><td><b>${esc(i.codigo)}</b></td><td>${esc(i.desc)}</td><td class="num"><b>${i.cant}</b> pza</td>
+      <td style="white-space:nowrap">${badgeCot(c[String(i.codigo||'').trim().toUpperCase()])}</td></tr>`).join('')}</table>
     ${s.estado==='pendiente'?`<div class="acciones" style="margin-top:4px">
       <button class="btn sec sm" onclick="excelSolicitudRes(${s.id})">📥 Excel Indar</button>
+      ${nFalta?`<button class="btn sec sm" onclick="excelSolicitudRes(${s.id}, true)">📥 Excel solo lo que falta (${nFalta})</button>`:''}
       <button class="btn sm" onclick="atenderSolicitudRes(${s.id})">✅ Atendida</button></div>`:''}
-  </div>`;
+  </div>`; };
   abrirModal(`<h3>📥 Solicitudes de resurtido</h3>
+    <p class="small muted" style="margin:0 0 8px">Cada producto se coteja solo contra los pedidos a proveedor: <span class="badge b-verde">✅ ya llegó</span> <span class="badge b-azul">🚚 en camino</span> <span class="badge b-rojo">❌ falta pedir</span> <span class="badge b-ambar">🆕 nunca pedido</span>. Pasa el mouse encima para ver el folio del pedido.</p>
     ${pend.length?pend.map(card).join(''):'<p class="muted">No hay solicitudes pendientes.</p>'}
     ${otras.length?`<details style="margin-top:8px"><summary class="small muted">Ver atendidas (${otras.length})</summary>${otras.map(card).join('')}</details>`:''}
     <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
@@ -1178,16 +1234,22 @@ async function atenderSolicitudRes(id){
   toast('Marcada como atendida ✓'); verSolicitudesRes();
   const b=$('btn-sol-res'); if(b) sb.from('resurtido_solicitudes').select('id',{count:'exact',head:true}).eq('estado','pendiente').then(({count})=>{ b.innerHTML = count?'📥 Solicitudes <span class="badge b-ambar">'+count+'</span>':'📥 Solicitudes'; });
 }
-async function excelSolicitudRes(id){
+async function excelSolicitudRes(id, soloFaltan){
   const s = (window._solData||[]).find(x=>x.id===id); if(!s) return;
   if(!window.XLSX){
     try{ await new Promise((res,rej)=>{ const sc=document.createElement('scr'+'ipt'); sc.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'; sc.onload=res; sc.onerror=rej; document.head.appendChild(sc); }); }
     catch(e){ toast('No pude cargar el exportador', true); return; }
   }
-  const ws = XLSX.utils.json_to_sheet((s.items||[]).map(i=>({ Codigos:i.codigo, Cantidad:+i.cant })), { header:['Codigos','Cantidad'] });
+  let items = s.items||[];
+  if(soloFaltan){
+    const c = (window._solCot||{})[id]||{};
+    items = items.filter(i=>{ const e=(c[String(i.codigo||'').trim().toUpperCase()]||{}).est; return e==='falta'||e==='nuevo'; });
+    if(!items.length){ toast('No falta nada de esta solicitud 🎉'); return; }
+  }
+  const ws = XLSX.utils.json_to_sheet(items.map(i=>({ Codigos:i.codigo, Cantidad:+i.cant })), { header:['Codigos','Cantidad'] });
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Hoja1');
-  XLSX.writeFile(wb, 'Solicitud_Resurtido_'+id+'.xlsx');
-  toast('Excel listo 📥 Súbelo en Indar → Pedidos → Carrito');
+  XLSX.writeFile(wb, 'Solicitud_Resurtido_'+id+(soloFaltan?'_FALTANTES':'')+'.xlsx');
+  toast('Excel listo ('+items.length+' producto(s)) 📥 Súbelo en Indar → Pedidos → Carrito');
 }
 /* ===== CUADRE DE STOCK VS SAFDI (Excel) ===== */
 function compararStockSafdi(){
