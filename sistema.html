@@ -3690,6 +3690,88 @@ function pintarBarraPago(){
         <button class="btn" onclick="modalPagoLote()">💸 Registrar pago</button></div>
     </div>`;
 }
+/* ============================================================
+   PEGAR EL RECIBO DE COBRO DE INDAR (v99)
+   Indar NO aplica un % parejo: le pone 4% a unas facturas y 8% a otras.
+   Aquí pegas el recibo tal cual y el sistema toma el importe EXACTO de cada una.
+============================================================ */
+function pegarReciboIndar(){
+  abrirModal(`<h3>📋 Pegar el recibo de cobro de Indar</h3>
+    <p class="small muted" style="margin:0 0 8px">En <b>indar.mx → Pago en línea</b> te sale el "Recibo de Cobro" con el desglose.
+    Selecciona todo el texto (Ctrl+A), cópialo (Ctrl+C) y pégalo aquí. También sirve copiar el texto del PDF.</p>
+    <div class="card" style="padding:9px;background:#f8fafc;margin-bottom:8px">
+      <div class="small muted">Se ve así:</div>
+      <pre class="small" style="margin:4px 0 0;white-space:pre-wrap;font-size:11.5px">2771877  1006.42  4.00%   40.2568  2026-08-08    966.16
+2771878   663.87  8.00%   45.7840  2026-08-08    610.76</pre></div>
+    <textarea id="ri-txt" rows="9" placeholder="Pega aquí el recibo completo..." style="width:100%;font-family:monospace;font-size:12px;padding:9px;border:1px solid var(--linea);border-radius:8px"></textarea>
+    <div class="acciones" style="margin-top:8px"><button class="btn sec" onclick="cerrarModal()">Cancelar</button>
+      <button class="btn" onclick="leerReciboIndar()">Leer recibo →</button></div>`, true);
+  setTimeout(()=>$('ri-txt')?.focus(), 100);
+}
+function parsearRecibo(txt){
+  // factura | saldo | %desc | imp.desc | vencimiento | importe a cobrar
+  // Se procesa renglón por renglón para evitar regex lentos sobre textos largos.
+  const n = s => +String(s).replace(/,/g,'');
+  const re = /^(\d{6,10})\s+([\d,.]+)\s+([\d.]+)%\s+([\d,.]+)\s+(\d{4}-\d{2}-\d{2})\s+([\d,.]+)$/;
+  const out = [];
+  for(let linea of String(txt).split(/[\r\n]+/)){
+    const l = linea.trim().replace(/\s+/g,' ');
+    const m = re.exec(l);
+    if(!m) continue;
+    const saldo = n(m[2]), cobra = n(m[6]);
+    if(!saldo || !cobra || cobra > saldo + 0.01) continue;   // renglón raro: se ignora
+    out.push({folio:m[1], saldo, pct:+m[3], vence:m[5], cobra});
+  }
+  return out;
+}
+async function leerReciboIndar(){
+  const txt = ($('ri-txt')?.value||'');
+  const filas = parsearRecibo(txt);
+  if(!filas.length){
+    toast('No reconocí ningún renglón. Revisa que hayas pegado la tabla completa del recibo.', true); return;
+  }
+  const cxp = (await sb.from('cuentas_pagar').select('id,concepto,saldo,estado,proveedores(nombre)')).data||[];
+  const rows = filas.map(f=>{
+    const c = cxp.find(x=>String(x.concepto).includes(f.folio));
+    return {...f, id:c?c.id:null, sist:c?+c.saldo:null, estado:c?c.estado:null,
+      cuadra: c ? Math.abs(+c.saldo - f.saldo) < 0.02 : false};
+  });
+  const buenas = rows.filter(r=>r.id && r.cuadra && r.estado!=='pagada');
+  const total = rows.reduce((s,r)=>s+r.cobra,0);
+  const suma  = rows.reduce((s,r)=>s+r.saldo,0);
+  // total declarado en el recibo, si viene
+  const mT = txt.match(/TOTAL A[^\d]{0,30}([\d,.]+)/i);
+  const totalDecl = mT ? +mT[1].replace(/,/g,'') : null;
+  const okTotal = totalDecl===null || Math.abs(totalDecl-total) < 0.02;
+  window._riRows = rows;
+  const badge = r => !r.id ? '<span class="badge b-rojo">no está en el sistema</span>'
+    : r.estado==='pagada' ? '<span class="badge b-gris">ya estaba pagada</span>'
+    : !r.cuadra ? `<span class="badge b-ambar">saldo distinto: sistema ${fmt(r.sist)}</span>`
+    : '<span class="badge b-verde">✓</span>';
+  abrirModal(`<h3>📋 Recibo leído: ${filas.length} factura(s)</h3>
+    <div class="tbl-scroll" style="max-height:280px"><table>
+      <thead><tr><th>Factura</th><th class="num">Saldo</th><th class="num">% desc</th><th class="num">Descuento</th><th class="num">A pagar</th><th></th></tr></thead>
+      <tbody>${rows.map(r=>`<tr><td><b>${esc(r.folio)}</b></td><td class="num">${fmt(r.saldo)}</td>
+        <td class="num"><span class="badge ${r.pct>=8?'b-verde':'b-gris'}">${r.pct.toFixed(0)}%</span></td>
+        <td class="num" style="color:#15803d">${fmt(r.saldo-r.cobra)}</td><td class="num"><b>${fmt(r.cobra)}</b></td><td>${badge(r)}</td></tr>`).join('')}
+      <tr style="border-top:2px solid var(--linea);background:#f8fafc"><td><b>TOTAL</b></td><td class="num"><b>${fmt(suma)}</b></td><td></td>
+        <td class="num" style="color:#15803d"><b>${fmt(suma-total)}</b></td><td class="num"><b style="font-size:16px">${fmt(total)}</b></td><td></td></tr></tbody></table></div>
+    ${totalDecl!==null?`<p class="small" style="margin:8px 0 0;color:${okTotal?'#15803d':'#b91c1c'}">
+      ${okTotal?'✅':'⚠️'} El recibo dice <b>TOTAL A PAGAR ${fmt(totalDecl)}</b> y la suma de los renglones da <b>${fmt(total)}</b>${okTotal?' — cuadra.':' — NO cuadra, revisa que hayas pegado todos los renglones.'}</p>`:''}
+    ${rows.length!==buenas.length?`<p class="small" style="margin:6px 0 0;color:#b91c1c">⚠️ Solo ${buenas.length} de ${rows.length} se pueden aplicar (las demás tienen la marca roja/ámbar arriba).</p>`:''}
+    <p class="small muted" style="margin:8px 0 0">Se va a registrar el <b>importe exacto de cada factura</b> tal como lo puso Indar — no un porcentaje parejo.</p>
+    <div class="acciones"><button class="btn sec" onclick="pegarReciboIndar()">← Volver a pegar</button>
+      <button class="btn" ${buenas.length?'':'disabled'} onclick="aplicarRecibo()">✅ Aplicar y pagar ${buenas.length} factura(s) · ${fmt(buenas.reduce((s,r)=>s+r.cobra,0))}</button></div>`, true);
+}
+function aplicarRecibo(){
+  const rows = (window._riRows||[]).filter(r=>r.id && r.cuadra && r.estado!=='pagada');
+  if(!rows.length){ toast('No hay facturas aplicables', true); return; }
+  window._pagoSel = {}; window._plExacto = {};
+  rows.forEach(r=>{ window._pagoSel[r.id] = true; window._plExacto[r.id] = r.cobra; });
+  document.querySelectorAll('.cxp-sel').forEach(ch=>{ ch.checked = !!window._pagoSel[+ch.dataset.id]; });
+  pintarBarraPago();
+  modalPagoLote();
+}
 /* ===== Asistente: "voy a pagar todo lo que se vence" — 2 clics (v98) ===== */
 function asistentePago(){
   const hoy = new Date(); hoy.setHours(0,0,0,0);
@@ -3721,7 +3803,12 @@ function asistentePago(){
       </div></div>`;
   }).join('');
   abrirModal(`<h3>💸 Pagar facturas</h3>
-    <p class="small muted" style="margin:0 0 10px">Escoge el grupo que vas a pagar. No tienes que ir una por una: el sistema selecciona todas, reparte el descuento y las salda.</p>
+    <div class="card" style="padding:12px;margin-bottom:12px;background:#f0fdf4;border:1px solid var(--verde)">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+        <div><b>📋 ¿Ya generaste el recibo en Indar?</b>
+          <div class="small muted">Pégalo aquí y queda exacto: Indar pone 4% a unas facturas y 8% a otras.</div></div>
+        <button class="btn" onclick="pegarReciboIndar()">Pegar recibo de Indar</button></div></div>
+    <p class="small muted" style="margin:0 0 10px">O escoge el grupo que vas a pagar y el sistema selecciona todas de golpe:</p>
     ${cards}
     <p class="small muted" style="margin:10px 0 0">¿Necesitas escoger a mano? Cierra esto y palomea las facturas en la tabla de abajo.</p>
     <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
@@ -3743,23 +3830,33 @@ function modalPagoLote(){
   const cs = (cxpData||[]).filter(c=>sel.includes(c.id));
   if(!cs.length){ toast('No hay facturas seleccionadas', true); return; }
   const suma = cs.reduce((s,c)=>s+ +c.saldo, 0);
+  const ex = window._plExacto;                     // importes exactos del recibo de Indar
+  const conRecibo = ex && cs.every(c=>ex[c.id]!==undefined);
   const pct = window._pagoPct===undefined ? 4.5 : window._pagoPct;
-  const transf = Math.round((suma - suma*pct/100)*100)/100;
+  const transf = conRecibo ? Math.round(cs.reduce((s,c)=>s+ex[c.id],0)*100)/100
+                           : Math.round((suma - suma*pct/100)*100)/100;
   abrirModal(`<h3>💸 Pagar ${cs.length} factura(s)</h3>
-    <div class="tbl-scroll" style="max-height:230px"><table><thead><tr><th>Concepto</th><th>Vence</th><th class="num">Saldo</th></tr></thead>
+    ${conRecibo?`<div class="card" style="padding:10px;margin-bottom:10px;background:#f0fdf4;border:1px solid var(--verde)">
+      <b>📋 Con el recibo de Indar</b><div class="small">Se va a usar el importe exacto de cada factura (Indar aplicó porcentajes distintos). No se reparte nada a ojo.</div></div>`:''}
+    <div class="tbl-scroll" style="max-height:230px"><table><thead><tr><th>Concepto</th><th>Vence</th><th class="num">Saldo</th>${conRecibo?'<th class="num">A pagar</th><th class="num">Desc.</th>':''}</tr></thead>
       <tbody>${cs.sort((a,b)=>a.fecha_vencimiento<b.fecha_vencimiento?-1:1).map(c=>
-        `<tr><td class="small">${esc(c.concepto)}</td><td class="small">${fecha(c.fecha_vencimiento)}</td><td class="num">${fmt(c.saldo)}</td></tr>`).join('')}
-      <tr style="border-top:2px solid var(--linea)"><td colspan="2"><b>Suma de saldos</b></td><td class="num"><b>${fmt(suma)}</b></td></tr></tbody></table></div>
+        `<tr><td class="small">${esc(c.concepto)}</td><td class="small">${fecha(c.fecha_vencimiento)}</td><td class="num">${fmt(c.saldo)}</td>
+        ${conRecibo?`<td class="num"><b>${fmt(ex[c.id])}</b></td><td class="num small" style="color:#15803d">${fmt(+c.saldo-ex[c.id])} (${((+c.saldo-ex[c.id])/+c.saldo*100).toFixed(0)}%)</td>`:''}</tr>`).join('')}
+      <tr style="border-top:2px solid var(--linea)"><td colspan="2"><b>Suma de saldos</b></td><td class="num"><b>${fmt(suma)}</b></td>
+        ${conRecibo?`<td class="num"><b>${fmt(transf)}</b></td><td class="num" style="color:#15803d"><b>${fmt(suma-transf)}</b></td>`:''}</tr></tbody></table></div>
     <div class="frow" style="margin-top:12px">
       <div class="field"><label>¿Cuánto vas a transferir realmente?</label>
-        <input id="pl-monto" type="number" step="0.01" value="${transf}" oninput="calcPagoLote(${suma})" style="font-size:19px"></div>
+        <input id="pl-monto" type="number" step="0.01" value="${transf}" ${conRecibo?'readonly style="font-size:19px;background:#f0fdf4"':'oninput="calcPagoLote('+suma+')" style="font-size:19px"'}></div>
       <div class="field"><label>Método</label><select id="pl-metodo"><option value="transferencia">Transferencia</option>
         <option value="efectivo">Efectivo</option><option value="cheque">Cheque</option><option value="ak_pago">AK Pago</option></select></div>
     </div>
-    <div style="display:flex;gap:8px;margin:-4px 0 10px;flex-wrap:wrap">
-      <span class="small muted">Atajos:</span>
-      ${[0,3,4,4.5,5].map(p=>`<button class="btn sec sm" onclick="$('pl-monto').value=(${suma}*(1-${p}/100)).toFixed(2);calcPagoLote(${suma})">${p?p+'%':'sin descuento'}</button>`).join('')}
+    ${conRecibo?'<p class="small muted" style="margin:-4px 0 10px">El monto viene del recibo, por eso no se puede editar. Si quieres cambiarlo, cierra y vuelve a pegar el recibo.</p>'
+    :`<div style="display:flex;gap:8px;margin:-4px 0 10px;flex-wrap:wrap;align-items:center">
+      <button class="btn sm" onclick="pegarReciboIndar()">📋 Tengo el recibo de Indar</button>
+      <span class="small muted">o pon el % a ojo:</span>
+      ${[0,3,4,4.5,5].map(p=>`<button class="btn sec sm" onclick="$('pl-monto').value=(${suma}*(1-${p}/100)).toFixed(2);calcPagoLote(${suma})">${p?p+'%':'sin desc.'}</button>`).join('')}
     </div>
+    <p class="small muted" style="margin:-4px 0 10px">⚠️ Indar aplica <b>porcentajes distintos por factura</b> (4% a unas, 8% a otras). Si pegas el recibo queda exacto.</p>`}
     <div id="pl-calc" class="card" style="padding:11px;margin-bottom:10px;background:#f8fafc"></div>
     <div class="field"><label>📎 Comprobante de la transferencia (recomendado)</label>
       <input type="file" id="pl-file" accept="image/*,application/pdf" capture="environment" onchange="prevComprobante(this)">
@@ -3816,12 +3913,13 @@ async function confirmarPagoLote(){
       }
     } else compPath = path;
   }
+  const ex = window._plExacto;
+  const conRecibo = ex && cs.every(c=>ex[c.id]!==undefined);
   let ok = 0, fallos = [];
   for(const c of cs){
-    // reparto proporcional del descuento
-    const prop = suma>0 ? +c.saldo/suma : 0;
-    const dsc = Math.round(descTot*prop*100)/100;
-    const monto = Math.round((+c.saldo - dsc)*100)/100;
+    // con recibo: importe exacto de Indar. Sin recibo: reparto proporcional.
+    const monto = conRecibo ? ex[c.id] : Math.round((+c.saldo - descTot*(suma>0?+c.saldo/suma:0))*100)/100;
+    const dsc = Math.round((+c.saldo - monto)*100)/100;
     const ref = [refBase, 'lote '+lote, dsc>0?('desc '+fmt(dsc)):''].filter(Boolean).join(' · ');
     const {error} = await sb.rpc('registrar_pago', {p_cuenta_id:c.id, p_monto:monto, p_metodo:metodo, p_referencia:ref});
     if(error){ fallos.push(c.concepto+': '+errMsg(error)); continue; }
@@ -3837,9 +3935,10 @@ async function confirmarPagoLote(){
     await sb.from('pagos_lote').insert({lote, proveedor_id: cs[0].proveedor_id||null, n_facturas: ok,
       suma_saldos: Math.round(suma*100)/100, transferido: total, descuento: descTot,
       metodo, referencia: refBase, comprobante_path: compPath,
+      nota: conRecibo ? 'Importes exactos del recibo de cobro de Indar (% distinto por factura)' : null,
       nombre: (typeof perfil!=='undefined'&&perfil?perfil.nombre:'')});
   }catch(e){}
-  window._pagoSel = {};
+  window._pagoSel = {}; window._plExacto = null;
   cerrarModal();
   logEv('finanzas', 'pago en lote '+lote+': '+ok+' factura(s), '+fmt(total)+' transferido, '+fmt(descTot)+' de descuento'+(compPath?' (con comprobante)':''));
   if(fallos.length) alert('Se registraron '+ok+' pago(s).\n\nNo se pudieron registrar:\n'+fallos.join('\n'));
