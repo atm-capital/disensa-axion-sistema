@@ -1238,6 +1238,88 @@ async function atenderSolicitudRes(id){
   toast('Marcada como atendida ✓'); verSolicitudesRes();
   const b=$('btn-sol-res'); if(b) sb.from('resurtido_solicitudes').select('id',{count:'exact',head:true}).eq('estado','pendiente').then(({count})=>{ b.innerHTML = count?'📥 Solicitudes <span class="badge b-ambar">'+count+'</span>':'📥 Solicitudes'; });
 }
+/* ============================================================
+   REVISAR PRECIOS SUGERIDOS (v100)
+   El sistema ya NO cambia tus precios de venta solo. Aquí ves qué sugiere Indar
+   y TÚ decides cuáles aplicar. Un proveedor con promo no debe bajarte el precio
+   del anaquel: te debe dar más margen ese lote.
+============================================================ */
+async function revisarPreciosSugeridos(){
+  toast('Comparando contra la lista de Indar...');
+  const prods = await traerTodo(()=>sb.from('productos').select('id,codigo,descripcion,costo,precio,stock').eq('activo',true).order('descripcion'));
+  const li = await traerTodo(()=>sb.from('lista_indar').select('codigo,precio_lista,promo_pct,precio_sugerido').order('codigo'));
+  const L = new Map(li.map(x=>[x.codigo, x]));
+  const filas = [];
+  for(const p of prods){
+    const l = L.get(p.codigo);
+    if(!l || !l.precio_sugerido) continue;
+    const sug = redondearPrecio(l.precio_sugerido);
+    if(Math.abs(sug - +p.precio) < 0.5) continue;
+    const mAct = +p.costo>0 ? (+p.precio/1.16 - +p.costo)/+p.costo*100 : 0;
+    const mSug = +p.costo>0 ? (sug/1.16 - +p.costo)/+p.costo*100 : 0;
+    filas.push({id:p.id, cod:p.codigo, desc:p.descripcion, costo:+p.costo, precio:+p.precio, stock:+p.stock,
+      sug, dif: Math.round((sug - +p.precio)*100)/100, mAct, mSug});
+  }
+  filas.sort((a,b)=>Math.abs(b.dif)-Math.abs(a.dif));
+  window._psFilas = filas;
+  const suben = filas.filter(f=>f.dif>0), bajan = filas.filter(f=>f.dif<0);
+  const grandes = filas.filter(f=>Math.abs(f.dif) >= 2);
+  if(!filas.length){ abrirModal(`<h3>💲 Revisar precios</h3><p class="muted">Todos tus precios coinciden con lo que sugiere Indar. Nada que revisar 🎉</p>
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`); return; }
+  abrirModal(`<h3>💲 Precios que Indar sugiere distinto</h3>
+    <p class="small muted" style="margin:0 0 8px">Tus precios <b>ya no cambian solos</b>. Esto es solo una sugerencia: palomea los que quieras aplicar.
+    Ojo — si compraste con promoción, tu costo bajó pero <b>no tienes que bajar el precio de venta</b>: ese lote simplemente te deja más.</p>
+    <div class="kpis" style="margin-bottom:10px">
+      <div class="kpi"><div class="l">Diferentes</div><div class="v">${filas.length}</div><div class="s">de ${prods.length} productos</div></div>
+      <div class="kpi" style="border-top-color:var(--verde)"><div class="l">Indar sugiere más caro</div><div class="v">${suben.length}</div><div class="s">podrías ganar más</div></div>
+      <div class="kpi" style="border-top-color:var(--ambar)"><div class="l">Indar sugiere más barato</div><div class="v">${bajan.length}</div><div class="s">casi todos por $1 de redondeo</div></div>
+      <div class="kpi"><div class="l">Diferencia de $2 o más</div><div class="v">${grandes.length}</div><div class="s">los que de verdad importan</div></div>
+    </div>
+    <div class="toolbar" style="margin-bottom:8px">
+      <button class="btn sec sm" onclick="psSel('suben')">Palomear los que suben (${suben.length})</button>
+      <button class="btn sec sm" onclick="psSel('grandes')">Solo diferencias de $2+ (${grandes.length})</button>
+      <button class="btn sec sm" onclick="psSel('conStock')">Solo los que tengo en tienda</button>
+      <button class="btn sec sm" onclick="psSel('none')">Quitar todo</button>
+      <span class="small muted" id="ps-cuenta" style="margin-left:auto"></span>
+    </div>
+    <div class="tbl-scroll" style="max-height:340px"><table>
+      <thead><tr><th style="width:26px"></th><th>Producto</th><th class="num">Costo</th><th class="num">Tu precio</th><th class="num">Indar</th><th class="num">Dif.</th><th class="num">Margen</th><th class="num">Stock</th></tr></thead>
+      <tbody>${filas.map((f,i)=>`<tr>
+        <td><input type="checkbox" class="ps-sel" data-i="${i}" onclick="psCuenta()"></td>
+        <td><b>${esc(f.cod)}</b><div class="small muted">${esc(f.desc.slice(0,42))}</div></td>
+        <td class="num small">${fmt(f.costo)}</td><td class="num"><b>${fmt(f.precio)}</b></td><td class="num">${fmt(f.sug)}</td>
+        <td class="num"><span class="badge ${f.dif>0?'b-verde':'b-ambar'}">${f.dif>0?'+':''}${fmt(f.dif)}</span></td>
+        <td class="num small">${f.mAct.toFixed(0)}% → <b>${f.mSug.toFixed(0)}%</b></td>
+        <td class="num small">${f.stock}</td></tr>`).join('')}</tbody></table></div>
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar sin cambiar nada</button>
+      <button class="btn" onclick="aplicarPreciosSug()">Aplicar los palomeados</button></div>`, true);
+  psCuenta();
+}
+function psSel(modo){
+  const f = window._psFilas||[];
+  document.querySelectorAll('.ps-sel').forEach(ch=>{ const x = f[+ch.dataset.i];
+    ch.checked = modo==='suben' ? x.dif>0 : modo==='grandes' ? Math.abs(x.dif)>=2 : modo==='conStock' ? x.stock>0 : false; });
+  psCuenta();
+}
+function psCuenta(){
+  const n = document.querySelectorAll('.ps-sel:checked').length;
+  const el = $('ps-cuenta'); if(el) el.textContent = n ? n+' palomeado(s)' : 'ninguno palomeado';
+}
+async function aplicarPreciosSug(){
+  const f = window._psFilas||[];
+  const sel = [...document.querySelectorAll('.ps-sel:checked')].map(ch=>f[+ch.dataset.i]);
+  if(!sel.length){ toast('No palomeaste ninguno', true); return; }
+  if(!confirm('Vas a cambiar el precio de venta de '+sel.length+' producto(s).\n\nSe van a marcar para reimprimir etiqueta. ¿Continuo?')) return;
+  let ok=0;
+  for(const x of sel){
+    const {error} = await sb.from('productos').update({precio:x.sug, etiqueta_at:null}).eq('id', x.id);
+    if(!error) ok++;
+  }
+  cerrarModal();
+  logEv('inventario','precios actualizados a mano: '+ok+' producto(s)');
+  toast('✅ '+ok+' precio(s) actualizados · imprime las etiquetas nuevas en 🏷️ Etiquetas');
+  if(typeof vInventario==='function') vInventario();
+}
 async function excelSolicitudRes(id, soloFaltan){
   const s = (window._solData||[]).find(x=>x.id===id); if(!s) return;
   if(!window.XLSX){
@@ -2171,6 +2253,7 @@ async function vInventario(){
     <button class="btn sec" onclick="verResurtido()">🛒 Resurtido</button>
     <button class="btn sec" id="btn-sol-res" onclick="verSolicitudesRes()">📥 Solicitudes</button>
     <button class="btn sec" id="btn-eti-nuevas" onclick="elegirEtiquetas()">🏷️ Etiquetas</button>
+    <button class="btn sec" id="btn-precios-sug" onclick="revisarPreciosSugeridos()">💲 Revisar precios</button>
     <button class="btn sec" onclick="compararStockSafdi()">⚖️ Stock SAFDI</button>
     <button class="btn sec" onclick="exportarInv()">Exportar CSV</button>`;
     sb.from('resurtido_solicitudes').select('id',{count:'exact',head:true}).eq('estado','pendiente')
@@ -3563,6 +3646,12 @@ async function vFinanzas(){
   const total = pend.reduce((s,c)=>s+ +c.saldo,0);
   const vencido = pend.filter(c=>aDate(c.fecha_vencimiento)<hoy).reduce((s,c)=>s+ +c.saldo,0);
   const pagadoMes = pagos.data.reduce((s,p)=>s+ +p.monto,0);
+  // descuento por pronto pago: de la columna si existe, o leído de la referencia
+  const ahorroMes = Math.round(pagos.data.reduce((s,p)=>{
+    if(+p.descuento > 0) return s + +p.descuento;
+    const m = String(p.referencia||'').match(/desc \$?([\d,.]+)/);
+    return s + (m ? +m[1].replace(/,/g,'') : 0);
+  }, 0)*100)/100;
   const gastoMes = gastos.data.filter(g=>(g.tipo||'gasto')==='gasto').reduce((s,g)=>s+ +g.monto,0);
   const gTot = {gasto:0, inversion:0, retiro:0};
   const gCat = {};
@@ -3581,6 +3670,9 @@ async function vFinanzas(){
         <div class="s">${factProx ? `${factPend.length} factura(s) · próxima vence ${fecha(factProx.fecha_vencimiento)} (${factDias<0?'⚠️ '+Math.abs(factDias)+'d vencida':'en '+factDias+'d'})` : 'sin facturas pendientes'}</div></div>
       <div class="kpi" style="cursor:pointer" title="Ver cuentas" onclick="$('fin-cxp').scrollIntoView({behavior:'smooth'})"><div class="l">Vencido</div><div class="v" style="color:${vencido>0?'var(--rojo)':'inherit'}">${fmt(vencido)}</div></div>
       <div class="kpi"><div class="l">Pagado este mes</div><div class="v">${fmt(pagadoMes)}</div></div>
+      <div class="kpi" style="border-top-color:var(--verde);cursor:pointer" title="Ver los pagos" onclick="historialPagos()"><div class="l">💰 Ahorrado por pronto pago</div>
+        <div class="v" style="color:#15803d">${fmt(ahorroMes)}</div>
+        <div class="s">${ahorroMes>0?'no está restado del costo de los productos':'paga antes del vencimiento y aquí aparece'}</div></div>
       <div class="kpi" style="cursor:pointer" title="Ver gastos" onclick="$('fin-gastos').scrollIntoView({behavior:'smooth'})"><div class="l">Gastos ${esc(gNom)}</div><div class="v">${fmt(gTot.gasto)}</div><div class="s">${gTot.inversion?'+ '+fmt(gTot.inversion)+' de inversión':'sin inversiones'}</div></div>
       <div class="kpi" style="cursor:pointer;border-top-color:${faltaMeta>0?'var(--ambar)':'var(--verde)'}" title="Ir a Pedidos" onclick="irA('pedidos')">
         <div class="l">Compra Holcim del mes</div>
@@ -4792,9 +4884,9 @@ async function subirListaPrecios(){
       for(const p of (mios||[])){
         const r = mapa.get(p.codigo);
         if(r && r.precio_lista > 0){
+          // v100: SOLO se actualiza el COSTO. El precio de venta es decisión tuya y no se toca solo.
           const costo = Math.round(r.precio_lista * (1 - (r.promo_pct||0)) * 100)/100;
-          const nPre = r.precio_sugerido ? redondearPrecio(r.precio_sugerido) : undefined;
-          await sb.from('productos').update({costo, precio: nPre, ...(nPre!==undefined && +nPre !== +p.precio ? {etiqueta_at: null} : {})}).eq('id', p.id);
+          await sb.from('productos').update({costo}).eq('id', p.id);
           actualizados++;
         }
       }
@@ -4861,9 +4953,12 @@ async function importarUnPedido(ped){
     (re||[]).forEach(p=>mapa.set(p.codigo, p.id));
   }
   if($('imp-precios') && $('imp-precios').checked){
+    // v100: el COSTO sí se actualiza (es lo que realmente pagaste).
+    // El PRECIO DE VENTA no se toca: queda como propuesta para que la revises en
+    // Inventario → 🏷️ Cambios de precio sugeridos.
     for(const c of codigos){
       const i = ped.items.find(x=>x.c===c);
-      if(mapa.has(c) && i.s) await sb.from('productos').update({precio:redondearPrecio(i.s), costo:i.l||undefined, etiqueta_at:null}).eq('id', mapa.get(c));
+      if(mapa.has(c) && i.l) await sb.from('productos').update({costo:i.l}).eq('id', mapa.get(c));
     }
   }
   const sub = Math.round(ped.items.reduce((s,i)=>s + i.q*(i.l||0),0)*100)/100;
@@ -4908,11 +5003,11 @@ async function ejecutarImport(){
       const {data:re} = await sb.from('productos').select('id,codigo').in('codigo', codigos);
       (re||[]).forEach(p=>mapa.set(p.codigo, p.id));
     }
-    // 2. actualizar precios de existentes al sugerido (una vez por código)
+    // 2. v100: actualizar SOLO el costo de los existentes. El precio de venta no se toca.
     if($('imp-precios').checked){
       for(const c of codigos){
         const i = impData.items.find(x=>x.c===c);
-        if(mapa.has(c) && i.s) await sb.from('productos').update({precio:redondearPrecio(i.s), costo:i.l||undefined}).eq('id', mapa.get(c));
+        if(mapa.has(c) && i.l) await sb.from('productos').update({costo:i.l}).eq('id', mapa.get(c));
       }
     }
     // 3. pedido + partidas
