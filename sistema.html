@@ -1003,6 +1003,14 @@ async function nuevaVenta(){
   ]);
   if(c.error){ toast(errMsg(c.error),true); return; }
   prodCache = p.data; cliCache = c.data;
+  // v101: piezas reservadas por apartados activos, para no vender lo que ya es de alguien
+  window._apRes = {}; window._apQuien = {};
+  try{
+    const ai = await sb.from('apartado_items').select('producto_id,cantidad,apartados!inner(id,folio,cliente_nombre,estado)').eq('apartados.estado','activo');
+    (ai.data||[]).forEach(x=>{ if(!x.producto_id) return;
+      window._apRes[x.producto_id] = (window._apRes[x.producto_id]||0) + +x.cantidad;
+      (window._apQuien[x.producto_id] = window._apQuien[x.producto_id]||[]).push({folio:x.apartados.folio, cliente:x.apartados.cliente_nombre, cant:+x.cantidad}); });
+  }catch(e){}
   abrirModal(`<h3>Nueva venta</h3>
     <div class="pos">
       <div>
@@ -1429,17 +1437,42 @@ function buscarProd(){
   const q = ($('nv-buscar').value||'').toLowerCase().trim();
   const nq = nbarra(q);
   const res = prodCache.filter(p => !q || p.codigo.toLowerCase().includes(q) || p.descripcion.toLowerCase().includes(q) || (p.codigo_barras && nq && nbarra(p.codigo_barras).includes(nq))).slice(0,40);
-  $('nv-res').innerHTML = res.map(p=>`
-    <div class="it" onclick="agregarProd(${p.id})">
-      <span><b>${esc(p.codigo)}</b> ${esc(p.descripcion)}</span>
-      <span style="white-space:nowrap">${fmt(p.precio)} · <span class="muted">${+p.stock} ${esc(p.unidad||'pza')}</span></span>
-    </div>`).join('') || '<div class="it muted">Sin resultados</div>';
+  $('nv-res').innerHTML = res.map(p=>{
+    const ap = +(window._apRes && window._apRes[p.id] || 0);
+    const disp = +p.stock - ap;
+    const sin = +p.stock <= 0;
+    return `
+    <div class="it" onclick="agregarProd(${p.id})" style="${sin?'opacity:.5;background:#fef2f2':(disp<=0?'background:#fffbeb':'')}">
+      <span><b>${esc(p.codigo)}</b> ${esc(p.descripcion)}
+        ${sin?'<span class="badge b-rojo">🚫 sin existencia</span>':''}
+        ${ap>0?`<span class="badge b-ambar" title="${esc((window._apQuien[p.id]||[]).map(x=>'#'+x.folio+' '+x.cliente).join(', '))}">🔒 ${ap} apartada(s)</span>`:''}</span>
+      <span style="white-space:nowrap">${fmt(p.precio)} · <span class="muted">${ap>0?`<b>${disp}</b> libre(s) de ${+p.stock}`:(+p.stock+' '+esc(p.unidad||'pza'))}</span></span>
+    </div>`;}).join('') || '<div class="it muted">Sin resultados</div>';
 }
 function agregarProd(id){
   const p = prodCache.find(x=>x.id===id);
-  if(+p.stock <= 0){ toast('Sin stock de ese producto', true); return; }
+  // ===== v101: no vender lo que no hay, ni lo que ya está apartado =====
+  if(+p.stock <= 0){
+    alert('🚫 NO HAY EXISTENCIA\n\n'+p.codigo+' · '+p.descripcion+'\n\nEl sistema marca 0 piezas. No se puede vender.\n\nSi físicamente sí hay, avísale a Andrés para corregir el inventario — algo no se registró bien.');
+    return;
+  }
+  const apart = +(window._apRes && window._apRes[id] || 0);
+  const disp = +p.stock - apart;
+  const enCarrito = (carrito.find(x=>x.producto_id===id)||{}).cantidad || 0;
+  if(apart > 0 && enCarrito + 1 > disp){
+    const q = (window._apQuien && window._apQuien[id] || []);
+    const quien = q.map(x=>'#'+x.folio+' · '+x.cliente+' ('+x.cant+' pz)').join('\n   ');
+    const ok = confirm('⚠️ ESTE ARTÍCULO ESTÁ APARTADO\n\n'+p.codigo+' · '+p.descripcion+
+      '\n\nEn tienda hay '+(+p.stock)+' pieza(s), pero '+apart+' ya son de:\n   '+quien+
+      '\n\n¿El cliente que tienes enfrente ES quien lo apartó?\n\n'+
+      '• SÍ  → Cancela aquí y ve a Apartados → Entregar. Ese botón cobra el resto y cierra el apartado solo.\n'+
+      '• NO → no se lo puedes vender, ya tiene dueño.\n\n'+
+      'Acepta SOLO si Andrés te autorizó vender la pieza apartada.');
+    if(!ok) return;
+  }
+  if(enCarrito + 1 > +p.stock){ toast('No hay más stock', true); return; }
   const ya = carrito.find(x=>x.producto_id===id);
-  if(ya){ if(ya.cantidad + 1 > +p.stock){ toast('No hay más stock', true); return; } ya.cantidad++; }
+  if(ya){ ya.cantidad++; }
   else { const pm = pctMaestro(); carrito.push({producto_id:id, codigo:p.codigo, desc:p.descripcion, cantidad:1, base:+p.precio, precio_unit: Math.round(+p.precio*(100-pm))/100, max:+p.stock}); }
   pintarCarrito();
 }
