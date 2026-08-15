@@ -1016,6 +1016,7 @@ async function nuevaVenta(){
       <div>
         <div class="field"><label>Buscar producto (código o descripción)</label>
           <input id="nv-buscar" placeholder="Escanea con la pistola o escribe: broca, martillo..." oninput="buscarProd()" onkeydown="if(event.key==='Enter'){event.preventDefault();escanear(this);}"></div>
+        <div style="margin:-6px 0 8px"><button class="btn sec sm" onclick="renglonLibre()">✍️ Algo que no está en el catálogo</button></div>
         <div class="prod-res" id="nv-res"></div>
       </div>
       <div>
@@ -1438,18 +1439,33 @@ function buscarProd(){
   const nq = nbarra(q);
   const res = prodCache.filter(p => !q || p.codigo.toLowerCase().includes(q) || p.descripcion.toLowerCase().includes(q) || (p.codigo_barras && nq && nbarra(p.codigo_barras).includes(nq))).slice(0,40);
   $('nv-res').innerHTML = res.map(p=>{
+    const gr = esGranel(p);
     const ap = +(window._apRes && window._apRes[p.id] || 0);
-    const disp = +p.stock - ap;
-    const sin = +p.stock <= 0;
+    const total = gr ? dispGranel(p) : +p.stock;
+    const disp = total - ap;
+    const sin = total <= 0;
     return `
     <div class="it" onclick="agregarProd(${p.id})" style="${sin?'opacity:.5;background:#fef2f2':(disp<=0?'background:#fffbeb':'')}">
       <span><b>${esc(p.codigo)}</b> ${esc(p.descripcion)}
+        ${gr?`<span class="badge b-azul">📏 por ${esc(p.unidad_venta||'unidad')}</span>`:''}
         ${sin?'<span class="badge b-rojo">🚫 sin existencia</span>':''}
         ${ap>0?`<span class="badge b-ambar" title="${esc((window._apQuien[p.id]||[]).map(x=>'#'+x.folio+' '+x.cliente).join(', '))}">🔒 ${ap} apartada(s)</span>`:''}</span>
-      <span style="white-space:nowrap">${fmt(p.precio)} · <span class="muted">${ap>0?`<b>${disp}</b> libre(s) de ${+p.stock}`:(+p.stock+' '+esc(p.unidad||'pza'))}</span></span>
+      <span style="white-space:nowrap;text-align:right">${gr?fmt(precioUnidad(p))+'/'+esc(p.unidad_venta||'u'):fmt(p.precio)}
+        <div class="small muted">${gr?textoGranel(p):(ap>0?`<b>${disp}</b> libre(s) de ${+p.stock}`:(+p.stock+' '+esc(p.unidad||'pza')))}</div></span>
     </div>`;}).join('') || '<div class="it muted">Sin resultados</div>';
 }
+function esGranel(p){ return !!p.granel && +p.contenido > 0; }
+function dispGranel(p){ return esGranel(p) ? (+p.stock * +p.contenido + +(p.abierto||0)) : +p.stock; }
+function precioUnidad(p){ return esGranel(p) ? (+p.precio_unidad || Math.ceil(+p.precio / +p.contenido)) : +p.precio; }
+function textoGranel(p){
+  if(!esGranel(p)) return (+p.stock)+' '+(p.unidad||'pza');
+  const uc = p.unidad_compra||'pieza', uv = p.unidad_venta||'unidad';
+  const ab = +(p.abierto||0);
+  return `${+p.stock} ${uc}${+p.stock===1?'':'s'}${ab>0?` + ${ab} ${uv}`:''} = <b>${dispGranel(p)} ${uv}</b>`;
+}
 function agregarProd(id){
+  const _pg = prodCache.find(x=>x.id===id);
+  if(esGranel(_pg)) return pedirCantidadGranel(id);
   const p = prodCache.find(x=>x.id===id);
   // ===== v101: no vender lo que no hay, ni lo que ya está apartado =====
   if(+p.stock <= 0){
@@ -1476,6 +1492,118 @@ function agregarProd(id){
   else { const pm = pctMaestro(); carrito.push({producto_id:id, codigo:p.codigo, desc:p.descripcion, cantidad:1, base:+p.precio, precio_unit: Math.round(+p.precio*(100-pm))/100, max:+p.stock}); }
   pintarCarrito();
 }
+// ===== v102: vender por metro o kilo =====
+function pedirCantidadGranel(id){
+  const p = prodCache.find(x=>x.id===id);
+  const uv = p.unidad_venta||'unidad', uc = p.unidad_compra||'pieza';
+  const disp = dispGranel(p), pu = precioUnidad(p);
+  if(disp <= 0){
+    alert('🚫 NO HAY EXISTENCIA\n\n'+p.codigo+' · '+p.descripcion+'\n\nNo queda '+uv+' disponible.');
+    return;
+  }
+  const yaEn = (carrito.find(x=>x.producto_id===id)||{}).cantidad || 0;
+  abrirModal(`<h3>📏 ${esc(p.descripcion)}</h3>
+    <div class="card" style="padding:11px;margin-bottom:10px;background:#f8fafc">
+      <div class="small muted">Hay en tienda</div>
+      <div style="font-size:16px">${textoGranel(p)}</div>
+      <div class="small muted" style="margin-top:5px">1 ${esc(uc)} trae <b>${+p.contenido} ${esc(uv)}</b></div>
+    </div>
+    <div class="frow">
+      <div class="field"><label>¿Cuántos ${esc(uv)}s?</label>
+        <input id="gr-cant" type="number" step="0.01" min="0" value="1" style="font-size:22px;padding:12px"
+          oninput="calcGranel(${id})" onkeydown="if(event.key==='Enter'){event.preventDefault();addGranel(${id});}"></div>
+      <div class="field"><label>Precio por ${esc(uv)}</label>
+        <input id="gr-precio" type="number" step="0.01" min="${pu}" value="${pu}" style="font-size:22px;padding:12px" oninput="calcGranel(${id})">
+        <p class="small muted" style="margin:4px 0 0">Sugerido <b>${fmt(pu)}</b>. Puedes <b>subirlo</b>, no bajarlo.</p></div>
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin:-4px 0 10px">
+      <span class="small muted" style="align-self:center">Rápido:</span>
+      ${[1,2,3,5,10,20,50].filter(n=>n<=disp).map(n=>`<button class="btn sec sm" onclick="$('gr-cant').value=${n};calcGranel(${id})">${n}</button>`).join('')}
+      ${disp<=200?`<button class="btn sec sm" onclick="$('gr-cant').value=${disp};calcGranel(${id})">todo (${disp})</button>`:''}
+    </div>
+    <div id="gr-calc" class="card" style="padding:12px;background:#f0fdf4;border:1px solid var(--verde)"></div>
+    ${yaEn>0?`<p class="small muted" style="margin:8px 0 0">Ya llevas ${yaEn} ${esc(uv)} en el ticket; esto lo reemplaza.</p>`:''}
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cancelar</button>
+      <button class="btn" onclick="addGranel(${id})">Agregar al ticket</button></div>`);
+  setTimeout(()=>{ const e=$('gr-cant'); if(e){ e.focus(); e.select(); } calcGranel(id); }, 100);
+}
+function calcGranel(id){
+  const p = prodCache.find(x=>x.id===id);
+  const uv = p.unidad_venta||'unidad', uc = p.unidad_compra||'pieza';
+  const disp = dispGranel(p), pu = precioUnidad(p);
+  const n = +($('gr-cant')?.value||0);
+  let pr = +($('gr-precio')?.value||pu);
+  const el = $('gr-calc'); if(!el) return;
+  if(n <= 0){ el.innerHTML = '<span class="muted">Pon cuántos '+esc(uv)+'s.</span>'; return; }
+  if(n > disp){
+    el.innerHTML = `<b style="color:#b91c1c">⚠️ Solo hay ${disp} ${esc(uv)}</b><div class="small muted">No puedes vender ${n}.</div>`;
+    return;
+  }
+  const bajo = pr < pu - 0.001;
+  const ab = +(p.abierto||0);
+  const abrir = n <= ab ? 0 : Math.ceil((n - ab) / +p.contenido);
+  el.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
+      <div><div class="l">${n} ${esc(uv)} × ${fmt(pr)}</div>
+        <div class="small muted">${abrir>0?`se abre ${abrir} ${esc(uc)}${abrir>1?'s':''} · quedan ${Math.round((dispGranel(p)-n)*100)/100} ${esc(uv)}`:`del ${esc(uc)} abierto · quedan ${Math.round((dispGranel(p)-n)*100)/100} ${esc(uv)}`}</div></div>
+      <div style="font-size:25px"><b>${fmt(Math.round(n*pr*100)/100)}</b></div>
+    </div>
+    ${bajo?`<div class="small" style="color:#b91c1c;margin-top:6px"><b>⚠️ El precio no puede ser menor a ${fmt(pu)}.</b> Se va a usar ${fmt(pu)}.</div>`:''}
+    ${pr>pu?`<div class="small" style="color:#15803d;margin-top:6px">Precio arriba del sugerido — al cobrar queda fijo en ${fmt(pr)} para las próximas ventas.</div>`:''}`;
+}
+async function addGranel(id){
+  const p = prodCache.find(x=>x.id===id);
+  const uv = p.unidad_venta||'unidad';
+  const disp = dispGranel(p), pu = precioUnidad(p);
+  const n = Math.round((+($('gr-cant').value||0))*100)/100;
+  let pr = Math.round((+($('gr-precio').value||pu))*100)/100;
+  if(n <= 0){ toast('Pon la cantidad', true); return; }
+  if(n > disp){ toast('Solo hay '+disp+' '+uv, true); return; }
+  if(pr < pu) pr = pu;
+  if(pr > pu){
+    const r = await sb.from('productos').update({precio_unidad: pr}).eq('id', id);
+    if(!r.error){ p.precio_unidad = pr; logEv('inventario','precio por '+uv+' de '+p.codigo+' subió a '+fmt(pr)); }
+  }
+  const i = carrito.findIndex(x=>x.producto_id===id);
+  const fila = {producto_id:id, codigo:p.codigo, desc:p.descripcion+' ('+n+' '+uv+')', cantidad:n,
+                base:pr, precio_unit:pr, max:disp, granel:true, unidad:uv};
+  if(i>=0) carrito[i] = fila; else carrito.push(fila);
+  cerrarModal(); pintarCarrito();
+  toast(n+' '+uv+' agregado(s) · '+fmt(Math.round(n*pr*100)/100));
+}
+// ===== v102: renglón libre =====
+function renglonLibre(){
+  abrirModal(`<h3>✍️ Artículo fuera de catálogo</h3>
+    <p class="small muted" style="margin:0 0 10px">Úsalo solo para lo que <b>no está</b> en el sistema (un servicio, un corte especial, un producto que aún no damos de alta).
+    <b>No descuenta inventario</b>, así que si es algo que sí manejamos, mejor búscalo en el catálogo.</p>
+    <div class="field"><label>¿Qué es?</label>
+      <input id="rl-desc" placeholder="Ej. Corte de llave, flete, 3 m de cable calibre 12" style="font-size:16px" onkeydown="if(event.key==='Enter'){event.preventDefault();$('rl-precio').focus();}"></div>
+    <div class="frow">
+      <div class="field"><label>Cantidad</label><input id="rl-cant" type="number" step="0.01" min="0" value="1" style="font-size:20px" oninput="calcLibre()"></div>
+      <div class="field"><label>Precio de cada uno</label><input id="rl-precio" type="number" step="0.01" min="0" style="font-size:20px" oninput="calcLibre()"></div>
+    </div>
+    <div id="rl-calc" class="card" style="padding:11px;background:#f8fafc"></div>
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cancelar</button>
+      <button class="btn" onclick="addLibre()">Agregar al ticket</button></div>`);
+  setTimeout(()=>$('rl-desc')?.focus(), 100);
+}
+function calcLibre(){
+  const n = +($('rl-cant')?.value||0), pr = +($('rl-precio')?.value||0);
+  const el = $('rl-calc'); if(!el) return;
+  el.innerHTML = (n>0&&pr>0) ? `<div style="display:flex;justify-content:space-between"><span>${n} × ${fmt(pr)}</span><b style="font-size:19px">${fmt(Math.round(n*pr*100)/100)}</b></div>`
+    : '<span class="muted small">Pon cantidad y precio.</span>';
+}
+function addLibre(){
+  const d = ($('rl-desc').value||'').trim();
+  const n = Math.round((+($('rl-cant').value||0))*100)/100;
+  const pr = Math.round((+($('rl-precio').value||0))*100)/100;
+  if(!d){ toast('Escribe qué es', true); return; }
+  if(n<=0 || pr<=0){ toast('Falta cantidad o precio', true); return; }
+  carrito.push({producto_id:null, codigo:'LIBRE', desc:d, cantidad:n, base:pr, precio_unit:pr, max:99999, libre:true});
+  cerrarModal(); pintarCarrito();
+  logEv('venta','renglón libre: '+d+' ('+n+' × '+fmt(pr)+')');
+  toast('Agregado: '+d);
+}
 function cambiarCant(i, v){
   const n = Math.max(0, Math.min(+v||0, carrito[i].max));
   if(n===0) carrito.splice(i,1); else carrito[i].cantidad = n;
@@ -1493,10 +1621,13 @@ function aplicarMaestro(){
 }
 function pintarCarrito(){
   $('nv-carrito').innerHTML = carrito.map((c,i)=>`
-    <tr><td style="max-width:180px"><b>${esc(c.codigo)}</b><br><span class="small muted">${esc(c.desc.slice(0,40))}</span></td>
-    <td><input value="${c.cantidad}" onchange="cambiarCant(${i}, this.value)"></td>
-    <td><input value="${c.precio_unit}" onchange="cambiarPrecio(${i}, this.value)"></td>
-    <td class="num">${fmt(c.cantidad*c.precio_unit)}</td>
+    <tr><td style="max-width:180px"><b>${esc(c.codigo)}</b>${c.granel?' <span class="badge b-azul">📏</span>':''}${c.libre?' <span class="badge b-gris">✍️</span>':''}<br><span class="small muted">${esc(c.desc.slice(0,40))}</span></td>
+    ${c.granel
+      ? `<td><input value="${c.cantidad}" readonly style="background:#eef2ff;cursor:pointer" title="Clic para cambiar los ${esc(c.unidad||'')}s" onclick="pedirCantidadGranel(${c.producto_id})"></td>
+         <td><input value="${c.precio_unit}" readonly style="background:#eef2ff" title="El precio por ${esc(c.unidad||'unidad')} es fijo"></td>`
+      : `<td><input value="${c.cantidad}" onchange="cambiarCant(${i}, this.value)"></td>
+         <td><input value="${c.precio_unit}" onchange="cambiarPrecio(${i}, this.value)"></td>`}
+    <td class="num">${fmt(Math.round(c.cantidad*c.precio_unit*100)/100)}</td>
     <td><span class="x" onclick="quitarProd(${i})">✕</span></td></tr>`).join('')
     || '<tr><td class="muted" style="padding:14px 6px">El carrito está vacío — busca y da clic en un producto.</td></tr>';
   const sub = carrito.reduce((s,c)=>s+c.cantidad*c.precio_unit,0);
@@ -1546,7 +1677,8 @@ function numALetras(n){
 async function guardarVenta(){
   if(!carrito.length){ toast('Agrega al menos un producto', true); return; }
   $('nv-guardar').disabled = true;
-  const items = carrito.map(c=>({producto_id:c.producto_id, cantidad:c.cantidad, precio_unit:c.precio_unit}));
+  const items = carrito.map(c=>({producto_id:c.producto_id||null, cantidad:c.cantidad,
+    precio_unit:c.precio_unit, descripcion: c.producto_id ? null : c.desc}));
   const {data, error} = await sb.rpc('registrar_venta', {
     p_items: items,
     p_cliente_id: $('nv-cliente').value ? +$('nv-cliente').value : null,
@@ -2373,7 +2505,9 @@ function pintarInv(){
       ${esFinanzas()?`<td class="num">${fmt(p.costo)}</td>`:''}
       <td class="num"><b>${fmt(p.precio)}</b></td>
       ${esFinanzas()?`<td class="num"><span class="badge ${bm}">${pct.toFixed(0)}%</span> <span class="small muted">${fmt(marg)}</span></td>`:''}
-      <td class="num"><span class="badge ${bajo?'b-rojo':'b-verde'}">${+p.stock}</span> <span class="small muted">${esc(p.unidad||'pza')}</span></td>
+      <td class="num">${esGranel(p)
+        ? `<span class="badge b-azul" title="${+p.stock} ${esc(p.unidad_compra||'pieza')} + ${+(p.abierto||0)} suelto">📏 ${dispGranel(p)} ${esc(p.unidad_venta||'u')}</span>`
+        : `<span class="badge ${bajo?'b-rojo':'b-verde'}">${+p.stock}</span> <span class="small muted">${esc(p.unidad||'pza')}</span>`}</td>
       <td style="white-space:nowrap">${!(p.codigo_barras||'').trim()?`<button class="btn sec sm" title="Registrar código de barras con la pistola" onclick="event.stopPropagation();capturarCB(${p.id})">📎 Código</button> `:''}${esAdmin()?`<button class="btn sec sm" onclick="event.stopPropagation();editarProducto(${p.id})">Editar</button>`:''}</td></tr>`;
   }).join('') || '<tr><td colspan="8" class="muted">Sin resultados.</td></tr>';
   const valorC = rows.reduce((s,p)=>s+ +p.costo * +p.stock,0);
@@ -2443,7 +2577,33 @@ function editarProducto(id){
       <div class="field"><label>Precio de venta (con IVA)</label><input id="pr-precio" type="number" step="0.01" value="${p.precio}" oninput="calcMargen()"></div>
       <div class="field"><label>Stock actual</label><input id="pr-stock" type="number" step="1" value="${+p.stock}"></div>
       <div class="field"><label>Stock mínimo (alerta)</label><input id="pr-min" type="number" step="1" value="${+p.stock_min}"></div>
-      <div class="field"><label>Unidad</label><input id="pr-unidad" list="pr-unidades" value="${esc(p.unidad||'pza')}"><datalist id="pr-unidades"><option>pza</option><option>bolsa</option><option>caja</option><option>kilo</option><option>saco</option><option>bulto</option><option>metro</option><option>rollo</option><option>litro</option><option>cubeta</option><option>par</option><option>juego</option></datalist></div>
+      <div class="field"><label>Unidad</label><input id="pr-unidad" list="pr-unidades" value="${esc(p.unidad||'pza')}"><datalist id="pr-unidades"><option>pza</option><option>bolsa</option><option>caja</option><option>kilo</option><option>saco</option><option>bulto</option><option>metro</option><option>rollo</option><option>litro</option><option>cubeta</option><option>par</option><option>juego</option></datalist></div></div>
+    <!-- v102: venta a granel -->
+    <div class="card" style="padding:12px;background:#f8fafc;margin:4px 0 12px">
+      <label style="display:flex;gap:8px;align-items:center;cursor:pointer">
+        <input type="checkbox" id="pr-granel" ${p.granel?'checked':''} onchange="togGranel()">
+        <b>📏 Se vende por medida</b> <span class="small muted">— soga por metro, cemento por kilo, cable por metro…</span></label>
+      <div id="pr-granel-box" style="display:${p.granel?'block':'none'};margin-top:10px">
+        <div class="frow">
+          <div class="field"><label>Lo compro por</label>
+            <input id="pr-ucompra" list="pr-uc" value="${esc(p.unidad_compra||'rollo')}" placeholder="rollo, bulto, tambo">
+            <datalist id="pr-uc"><option>rollo</option><option>bulto</option><option>saco</option><option>tambo</option><option>cubeta</option><option>caja</option></datalist></div>
+          <div class="field"><label>Lo vendo por</label>
+            <input id="pr-uventa" list="pr-uv" value="${esc(p.unidad_venta||'metro')}" placeholder="metro, kilo, litro" oninput="calcGranelCfg()">
+            <datalist id="pr-uv"><option>metro</option><option>kilo</option><option>litro</option><option>pieza</option></datalist></div>
+          <div class="field"><label>Cada uno trae</label>
+            <input id="pr-contenido" type="number" step="0.01" min="0.01" value="${+p.contenido||1}" oninput="calcGranelCfg()"></div>
+        </div>
+        <div class="frow">
+          <div class="field"><label>Piezas completas sin abrir</label><input id="pr-stockg" type="number" step="1" value="${+p.stock}" oninput="calcGranelCfg()"></div>
+          <div class="field"><label>Suelto del que está abierto</label><input id="pr-abierto" type="number" step="0.01" value="${+(p.abierto||0)}" oninput="calcGranelCfg()"></div>
+          <div class="field"><label>Precio por unidad de venta</label><input id="pr-preciou" type="number" step="0.01" value="${+(p.precio_unidad||0)}" oninput="calcGranelCfg()"></div>
+        </div>
+        <div id="pr-granel-calc" class="small" style="padding:9px;background:#fff;border:1px solid var(--linea);border-radius:7px"></div>
+        <p class="small muted" style="margin:6px 0 0">El <b>Stock actual</b> de arriba se ignora para estos productos: aquí se lleva por piezas completas + suelto.</p>
+      </div>
+    </div>
+    <div class="frow">
       <div class="field"><label>Código de barras (escanéalo aquí con la pistola)</label><input id="pr-barras" value="${esc(p.codigo_barras||'')}" placeholder="— sin código —"></div>
     </div>
     <p id="pr-margen" class="small" style="margin:2px 0 10px"></p>
@@ -2532,7 +2692,33 @@ async function exportarPedidoIndar(){
   XLSX.writeFile(wb, 'Pedido_Indar_' + new Date().toISOString().slice(0,10) + '.xlsx');
   toast('Excel listo 📥 En Indar: Pedidos → Carrito → cargar plantilla');
 }
+// ===== v102: configurar producto a granel =====
+function togGranel(){
+  const on = $('pr-granel')?.checked;
+  const box = $('pr-granel-box'); if(box) box.style.display = on ? 'block' : 'none';
+  if(on) calcGranelCfg();
+}
+function calcGranelCfg(){
+  const el = $('pr-granel-calc'); if(!el) return;
+  const uc = ($('pr-ucompra')?.value||'pieza').trim(), uv = ($('pr-uventa')?.value||'unidad').trim();
+  const cont = +($('pr-contenido')?.value||0);
+  const st = +($('pr-stockg')?.value||0), ab = +($('pr-abierto')?.value||0);
+  const costo = +($('pr-costo')?.value||0), precio = +($('pr-precio')?.value||0);
+  let pu = +($('pr-preciou')?.value||0);
+  if(cont <= 0){ el.innerHTML = '<span style="color:#b91c1c">Pon cuántos '+esc(uv)+'s trae cada '+esc(uc)+'.</span>'; return; }
+  const sug = precio>0 ? Math.ceil(precio/cont - 0.001) : 0;
+  const costoU = costo>0 ? Math.round(costo/cont*100)/100 : 0;
+  const disp = st*cont + ab;
+  const marg = (pu>0 && costoU>0) ? ((pu/1.16 - costoU)/costoU*100) : null;
+  el.innerHTML = `
+    1 ${esc(uc)} = <b>${cont} ${esc(uv)}</b> · disponible: <b>${st} ${esc(uc)}${st===1?'':'s'}${ab>0?` + ${ab} ${esc(uv)}`:''} = ${Math.round(disp*100)/100} ${esc(uv)}</b><br>
+    Costo por ${esc(uv)}: <b>${fmt(costoU)}</b> · Precio sugerido: <b>${fmt(sug)}</b>
+    ${pu>0?` · Tu precio: <b>${fmt(pu)}</b>${marg!==null?` <span class="badge ${marg>=30?'b-verde':(marg>=15?'b-ambar':'b-rojo')}">${marg.toFixed(0)}% margen</span>`:''}`:''}
+    ${(!pu||pu<sug)&&sug>0?`<br><button class="btn sm sec" style="margin-top:6px" onclick="$('pr-preciou').value=${sug};calcGranelCfg()">Usar el sugerido de ${fmt(sug)}</button>`:''}
+    ${pu>0&&sug>0&&pu<sug?'<br><span style="color:#b91c1c">⚠️ Tu precio está por debajo del sugerido.</span>':''}`;
+}
 async function guardarProducto(id){
+  const gr = !!$('pr-granel')?.checked;
   const obj = {
     descripcion: $('pr-desc').value.trim(), categoria: $('pr-cat').value.trim() || 'General',
     costo: +$('pr-costo').value||0, precio: redondearPrecio($('pr-precio').value),
@@ -2542,6 +2728,21 @@ async function guardarProducto(id){
     codigo_barras: $('pr-barras').value.trim(),
     activo: $('pr-activo').checked
   };
+// v102: campos de granel
+  if(gr){
+    const cont = +($('pr-contenido').value||0);
+    if(cont <= 0){ toast('Pon cuántas unidades trae cada pieza', true); return; }
+    obj.granel = true;
+    obj.unidad_compra = ($('pr-ucompra').value||'rollo').trim();
+    obj.unidad_venta  = ($('pr-uventa').value||'metro').trim();
+    obj.contenido = cont;
+    obj.stock   = +($('pr-stockg').value||0);
+    obj.abierto = +($('pr-abierto').value||0);
+    obj.precio_unidad = +($('pr-preciou').value||0) || Math.ceil(obj.precio/cont - 0.001);
+    obj.unidad = obj.unidad_compra;
+  } else if(id && (invData.find(p=>p.id===id)||{}).granel){
+    obj.granel = false;
+  }
   if(!obj.descripcion){ toast('Falta la descripción', true); return; }
   if(!id){
     obj.codigo = $('pr-codigo').value.trim();
@@ -2549,6 +2750,11 @@ async function guardarProducto(id){
   }
   async function intenta(o){ return id ? (await sb.from('productos').update(o).eq('id', id)).error : (await sb.from('productos').insert(o)).error; }
   let error = await intenta(obj);
+  if(error && /granel|contenido|abierto|precio_unidad|unidad_compra|unidad_venta/i.test(error.message||'')){
+    toast('Para vender por medida corre 31_granel.sql en Supabase', true);
+    const o2 = {...obj}; ['granel','contenido','abierto','precio_unidad','unidad_compra','unidad_venta'].forEach(k=>delete o2[k]);
+    error = await intenta(o2);
+  }
   if(error && /unidad|codigo_barras/i.test(error.message||'')){ const o2 = {...obj}; delete o2.unidad; delete o2.codigo_barras; error = await intenta(o2); }
   if(error){ toast(errMsg(error), true); return; }
   cerrarModal(); toast('Producto guardado'); vInventario();
