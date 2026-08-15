@@ -1547,8 +1547,8 @@ function grModo(id, m){
         <input id="gr-cant" type="number" step="0.01" min="0" value="1" style="font-size:22px;padding:12px"
           oninput="calcGranel(${id})" onkeydown="if(event.key==='Enter'){event.preventDefault();addGranel(${id});}"></div>
       <div class="field"><label>Precio por ${esc(uv)}</label>
-        <input id="gr-precio" type="number" step="0.01" min="${pu}" value="${pu}" style="font-size:22px;padding:12px" oninput="calcGranel(${id})">
-        <p class="small muted" style="margin:4px 0 0">Sugerido <b>${fmt(pu)}</b>. Puedes <b>subirlo</b>, no bajarlo.</p></div>
+        <input id="gr-precio" type="number" step="0.01" min="${esAdmin()?0:pu}" value="${pu}" style="font-size:22px;padding:12px" oninput="calcGranel(${id})">
+        <p class="small muted" style="margin:4px 0 0">Sugerido <b>${fmt(pu)}</b>. ${esAdmin()?'Como admin puedes subirlo o bajarlo — queda fijo.':'Puedes <b>subirlo</b>, no bajarlo.'}</p></div>
     </div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin:-4px 0 10px">
       <span class="small muted" style="align-self:center">Rápido:</span>
@@ -1585,7 +1585,7 @@ function calcGranel(id){
     el.innerHTML = `<b style="color:#b91c1c">⚠️ Solo hay ${disp} ${esc(uv)}</b><div class="small muted">No puedes vender ${n}.</div>`;
     return;
   }
-  const bajo = pr < pu - 0.001;
+  const bajo = pr < pu - 0.001 && !esAdmin();
   const ab = +(p.abierto||0);
   const abrir = n <= ab ? 0 : Math.ceil((n - ab) / +p.contenido);
   el.innerHTML = `
@@ -1620,10 +1620,12 @@ async function addGranel(id){
   let pr = Math.round((+($('gr-precio').value||pu))*100)/100;
   if(n <= 0){ toast('Pon la cantidad', true); return; }
   if(n > disp){ toast('Solo hay '+disp+' '+uv, true); return; }
-  if(pr < pu) pr = pu;
-  if(pr > pu){
-    const r = await sb.from('productos').update({precio_unidad: pr}).eq('id', id);
-    if(!r.error){ p.precio_unidad = pr; logEv('inventario','precio por '+uv+' de '+p.codigo+' subió a '+fmt(pr)); }
+  if(pr !== pu){
+    if(pr < pu && !esAdmin()){ pr = pu; }
+    else {
+      const r = await sb.from('productos').update({precio_unidad: pr}).eq('id', id);
+      if(!r.error){ p.precio_unidad = pr; logEv('inventario','precio por '+uv+' de '+p.codigo+' cambió a '+fmt(pr)); }
+    }
   }
   const i = carrito.findIndex(x=>x.producto_id===id && x.modo!=='pieza');
   const fila = {producto_id:id, codigo:p.codigo, desc:p.descripcion+' ('+n+' '+uv+')', cantidad:n,
