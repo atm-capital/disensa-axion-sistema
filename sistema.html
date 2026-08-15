@@ -839,7 +839,8 @@ let carrito = [], prodCache = [], cliCache = [];
 async function vVentas(){
   if(puedeVender()){
     $('vtools').innerHTML = `<button class="btn" onclick="nuevaVenta()">+ Nueva venta</button>
-      <button class="btn sec" onclick="cuadreSafdiModal()">⚖️ Cuadre SAFDI</button>`;
+      <button class="btn sec" onclick="cuadreSafdiModal()">⚖️ Cuadre SAFDI</button>
+      <button class="btn sec" onclick="pedirCompra()">🛠️ Necesito algo</button>`;
   }
   // Periodo: hoy / semana / mes / mes pasado / todo / rango a mano
   const hoyD = new Date(); hoyD.setHours(0,0,0,0);
@@ -3913,7 +3914,10 @@ async function vFinanzas(){
     <button class="btn sec" onclick="nuevaCuenta()">+ Cuenta por pagar</button>
     <button class="btn sec" onclick="nuevoGasto()">+ Gasto</button>
     <button class="btn sec" onclick="historialPagos()">📜 Pagos hechos</button>
-    <button class="btn sec" onclick="cuadrarIndar()">⚖️ Cuadrar con Indar</button>`;
+    <button class="btn sec" onclick="cuadrarIndar()">⚖️ Cuadrar con Indar</button>
+    <button class="btn sec" id="btn-compras-sol" onclick="adminCompras()">🛠️ Compras pedidas</button>`;
+  if(esAdmin()) sb.from('gasto_solicitudes').select('id',{count:'exact',head:true}).eq('estado','pendiente')
+    .then(({count})=>{ const b=$('btn-compras-sol'); if(b&&count) b.innerHTML='🛠️ Compras pedidas <span class="badge b-ambar">'+count+'</span>'; });
   const hoy = new Date(); hoy.setHours(0,0,0,0);
   const mes = new Date(hoy.getFullYear(), hoy.getMonth(), 1).toISOString().slice(0,10);
   // periodo para la sección de gastos/inversiones
@@ -4161,8 +4165,101 @@ function aplicarRecibo(){
   modalPagoLote();
 }
 /* ===== Asistente: "voy a pagar todo lo que se vence" — 2 clics (v98) ===== */
+// ===== v105: la tienda pide compras (bascula, cutter...) y Andres aprueba =====
+function pedirCompra(){
+  abrirModal(`<h3>🛠️ Pedir una compra para la tienda</h3>
+    <p class="small muted" style="margin:0 0 10px">Pide lo que haga falta para trabajar (una báscula, un cutter, focos...). Andrés lo ve en Finanzas y lo aprueba.</p>
+    <div class="field"><label>¿Qué necesitan?</label><input id="pc-con" placeholder="Ej. Báscula para pesar el cemento" style="font-size:16px"></div>
+    <div class="field"><label>¿Para qué? — ayuda a que se apruebe rápido</label><input id="pc-mot" placeholder="Ej. Para vender el cemento por kilo sin calcular a ojo"></div>
+    <div class="field"><label>¿Más o menos cuánto cuesta?</label><input id="pc-monto" type="number" step="0.01" placeholder="Ej. 350" style="font-size:18px"></div>
+    <div class="acciones"><button class="btn sec" onclick="verMisCompras()">📋 Ver solicitudes</button>
+      <button class="btn sec" onclick="cerrarModal()">Cancelar</button>
+      <button class="btn" onclick="guardarPedirCompra()">Enviar</button></div>`);
+  setTimeout(()=>$('pc-con')?.focus(), 100);
+}
+async function guardarPedirCompra(){
+  const con = ($('pc-con').value||'').trim();
+  if(!con){ toast('Escribe qué necesitan', true); return; }
+  const {error} = await sb.from('gasto_solicitudes').insert({concepto:con, motivo:($('pc-mot').value||'').trim(),
+    monto:+($('pc-monto').value||0), nombre:(typeof perfil!=='undefined'&&perfil?perfil.nombre:''), usuario_id: sesion.user.id});
+  if(error){ toast(errMsg(error), true); return; }
+  cerrarModal(); toast('Solicitud enviada 📨 Andrés la verá en Finanzas');
+  logEv('finanzas','solicitud de compra: '+con);
+}
+async function verMisCompras(){
+  const {data, error} = await sb.from('gasto_solicitudes').select('*').order('creado',{ascending:false}).limit(40);
+  if(error){ toast(errMsg(error), true); return; }
+  const B = {pendiente:'<span class="badge b-ambar">⏳ pendiente</span>', aprobada:'<span class="badge b-verde">✅ aprobada — cómprenlo</span>',
+    rechazada:'<span class="badge b-rojo">❌ no por ahora</span>', comprada:'<span class="badge b-gris">🛍️ ya comprado</span>'};
+  abrirModal(`<h3>📋 Solicitudes de compra</h3>
+    ${(data||[]).map(s=>`<div class="card" style="padding:10px;margin-bottom:8px">
+      <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><b>${esc(s.concepto)}</b>${B[s.estado]||''}</div>
+      <div class="small muted">${esc(s.nombre||'')} · ${fechaHora(s.creado)}${+s.monto?` · aprox ${fmt(s.monto)}`:''}</div>
+      ${s.motivo?`<div class="small">${esc(s.motivo)}</div>`:''}
+      ${s.respuesta?`<div class="small" style="margin-top:4px">💬 <b>Respuesta:</b> ${esc(s.respuesta)}</div>`:''}
+    </div>`).join('') || '<p class="muted">No hay solicitudes todavía.</p>'}
+    <div class="acciones"><button class="btn" onclick="pedirCompra()">➕ Pedir algo</button><button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
+}
+async function adminCompras(){
+  const {data, error} = await sb.from('gasto_solicitudes').select('*').order('creado',{ascending:false}).limit(60);
+  if(error){ toast(errMsg(error), true); return; }
+  const pend = (data||[]).filter(s=>s.estado==='pendiente');
+  const aprob = (data||[]).filter(s=>s.estado==='aprobada');
+  const resto = (data||[]).filter(s=>!['pendiente','aprobada'].includes(s.estado));
+  const card = s => `<div class="card" style="padding:11px;margin-bottom:8px;${s.estado==='pendiente'?'border-left:4px solid var(--ambar)':''}">
+    <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><b>${esc(s.concepto)}</b><b>${+s.monto?fmt(s.monto):'$?'}</b></div>
+    <div class="small muted">${esc(s.nombre||'')} · ${fechaHora(s.creado)}</div>
+    ${s.motivo?`<div class="small" style="margin:3px 0">${esc(s.motivo)}</div>`:''}
+    ${s.respuesta?`<div class="small">💬 ${esc(s.respuesta)}</div>`:''}
+    <div class="acciones" style="margin-top:6px">
+      ${s.estado==='pendiente'?`<button class="btn sm" onclick="resolverCompra(${s.id},'aprobada')">✅ Aprobar</button>
+        <button class="btn sec sm" onclick="resolverCompra(${s.id},'rechazada')">❌ Rechazar</button>`:''}
+      ${s.estado==='aprobada'?`<button class="btn sm" onclick="compraHecha(${s.id})">🛍️ Ya se compró — registrar gasto</button>`:''}
+    </div></div>`;
+  abrirModal(`<h3>🛠️ Compras que pide la tienda</h3>
+    ${pend.length?'<p class="small muted" style="margin:0 0 6px"><b>Pendientes de tu visto bueno:</b></p>'+pend.map(card).join(''):'<p class="muted">Nada pendiente de aprobar.</p>'}
+    ${aprob.length?'<p class="small muted" style="margin:8px 0 6px"><b>Aprobadas, falta comprarlas o registrarlas:</b></p>'+aprob.map(card).join(''):''}
+    ${resto.length?`<details style="margin-top:8px"><summary class="small muted">Historial (${resto.length})</summary>${resto.map(card).join('')}</details>`:''}
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
+  window._gsData = data||[];
+}
+async function resolverCompra(id, estado){
+  const nota = prompt(estado==='aprobada' ? 'Nota para la tienda (opcional):\n\nEj. "Cómprenla en el mercado, máximo $400"' : '¿Por qué no? (la tienda lo va a ver)');
+  if(estado==='rechazada' && nota===null) return;
+  const {error} = await sb.from('gasto_solicitudes').update({estado, respuesta:(nota||'').trim(), resuelto_en:new Date().toISOString()}).eq('id',id);
+  if(error){ toast(errMsg(error), true); return; }
+  toast(estado==='aprobada'?'Aprobada ✅ — la tienda lo verá':'Rechazada');
+  adminCompras();
+}
+function compraHecha(id){
+  const s = (window._gsData||[]).find(x=>x.id===id); if(!s) return;
+  abrirModal(`<h3>🛍️ Registrar la compra</h3>
+    <p style="margin:0 0 10px"><b>${esc(s.concepto)}</b></p>
+    <div class="frow">
+      <div class="field"><label>¿Cuánto costó al final?</label><input id="ch-monto" type="number" step="0.01" value="${+s.monto||''}" style="font-size:18px"></div>
+      <div class="field"><label>¿De dónde salió?</label><select id="ch-metodo"><option value="efectivo">💵 Efectivo de caja</option><option value="transferencia">🏦 Transferencia</option><option value="tarjeta">💳 Tarjeta</option></select></div>
+    </div>
+    <div class="field"><label>Tipo</label><select id="ch-tipo"><option value="gasto">💸 Gasto</option><option value="inversion">🏗️ Inversión (queda como equipo)</option></select></div>
+    <div class="acciones"><button class="btn sec" onclick="adminCompras()">← Volver</button>
+      <button class="btn" onclick="guardarCompraHecha(${id})">Registrar</button></div>`);
+}
+async function guardarCompraHecha(id){
+  const s = (window._gsData||[]).find(x=>x.id===id); if(!s) return;
+  const monto = +($('ch-monto').value||0);
+  if(monto<=0){ toast('Pon cuánto costó', true); return; }
+  const fila = {concepto: s.concepto+' (pedido por '+(s.nombre||'tienda')+')', categoria:'Equipo tienda', monto,
+    metodo: $('ch-metodo').value, tipo: $('ch-tipo').value, usuario_id: sesion.user.id};
+  let {error} = await sb.from('gastos').insert(fila);
+  if(error && /tipo|metodo/i.test(error.message||'')){ const o={...fila}; delete o.tipo; delete o.metodo; ({error} = await sb.from('gastos').insert(o)); }
+  if(error){ toast(errMsg(error), true); return; }
+  await sb.from('gasto_solicitudes').update({estado:'comprada', resuelto_en:new Date().toISOString()}).eq('id',id);
+  toast('Compra registrada en gastos ✓');
+  logEv('finanzas','compra solicitada registrada: '+s.concepto+' '+fmt(monto));
+  adminCompras();
+}
 // ===== v104: cuadrar cuentas contra el estado de cuenta de Indar =====
 function cuadrarIndar(){
+
   abrirModal(`<h3>⚖️ Cuadrar con Indar</h3>
     <p class="small muted" style="margin:0 0 8px">En <b>indar.mx → Mi Cuenta → Estado de Cuenta → Facturas Pendientes</b>:
     selecciona toda la página (<b>Ctrl+A</b>), cópiala (<b>Ctrl+C</b>) y pégala aquí. El sistema compara factura por factura.</p>
