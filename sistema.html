@@ -4252,6 +4252,11 @@ async function guardarCompraHecha(id){
   let {error} = await sb.from('gastos').insert(fila);
   if(error && /tipo|metodo/i.test(error.message||'')){ const o={...fila}; delete o.tipo; delete o.metodo; ({error} = await sb.from('gastos').insert(o)); }
   if(error){ toast(errMsg(error), true); return; }
+  // v106: si salió del efectivo de caja, se descuenta del corte del día automáticamente
+  if(fila.metodo==='efectivo'){
+    try{ await sb.from('caja_movs').insert({tipo:'gasto', monto, concepto:'Compra: '+s.concepto,
+      usuario_id: sesion.user.id, nombre:(typeof perfil!=='undefined'&&perfil?perfil.nombre:'')}); }catch(e){}
+  }
   await sb.from('gasto_solicitudes').update({estado:'comprada', resuelto_en:new Date().toISOString()}).eq('id',id);
   toast('Compra registrada en gastos ✓');
   logEv('finanzas','compra solicitada registrada: '+s.concepto+' '+fmt(monto));
@@ -4626,6 +4631,12 @@ async function guardarGasto(){
   let {error} = await sb.from('gastos').insert(fila);
   if(error && /tipo/.test(errMsg(error))){ delete fila.tipo; ({error} = await sb.from('gastos').insert(fila)); }
   if(error){ toast(errMsg(error), true); return; }
+  // v106: gasto/retiro en efectivo también descuenta del corte de caja del día
+  if((fila.metodo||'')==='efectivo'){
+    const cm = (fila.tipo==='retiro') ? 'retiro' : 'gasto';
+    try{ await sb.from('caja_movs').insert({tipo:cm, monto:fila.monto, concepto:fila.concepto+' (desde Finanzas)',
+      fecha: fila.fecha||undefined, usuario_id:sesion.user.id, nombre:(typeof perfil!=='undefined'&&perfil?perfil.nombre:'')}); }catch(e){}
+  }
   cerrarModal(); toast('Registrado ✓'); vFinanzas();
 }
 
