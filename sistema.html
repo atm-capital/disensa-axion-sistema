@@ -1012,6 +1012,7 @@ async function nuevaVenta(){
       window._apRes[x.producto_id] = (window._apRes[x.producto_id]||0) + +x.cantidad;
       (window._apQuien[x.producto_id] = window._apQuien[x.producto_id]||[]).push({folio:x.apartados.folio, cliente:x.apartados.cliente_nombre, cant:+x.cantidad}); });
   }catch(e){}
+  window._ventaUI = function(){
   abrirModal(`<h3>Nueva venta</h3>
     <div class="pos">
       <div>
@@ -1039,7 +1040,10 @@ async function nuevaVenta(){
     </div>`, true);
   buscarProd(); pintarCarrito();
   $('nv-buscar').focus();
+  };
+  window._ventaUI();
 }
+function volverVenta(){ if(window._ventaUI){ window._ventaUI(); } else { cerrarModal(); } }
 function nbarra(s){ return String(s||'').trim().replace(/^0+/,''); }
 function redondearPrecio(p){ p = +p||0; return p>0 ? Math.ceil(p - 0.001) : 0; }
 function escanear(inp){
@@ -1514,7 +1518,7 @@ function pedirCantidadGranel(id){
       <button class="btn sec" id="gm-suelto" onclick="grModo(${id},'suelto')">⚖️ Suelto por ${esc(uv)} · ${fmt(pu)}</button>
     </div>
     <div id="gr-zona"></div>
-    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cancelar</button>
+    <div class="acciones"><button class="btn sec" onclick="volverVenta()">Cancelar</button>
       <button class="btn" onclick="addGranel(${id})">Agregar al ticket</button></div>`);
   setTimeout(()=>grModo(id, window._grModo), 80);
 }
@@ -1608,7 +1612,7 @@ async function addGranel(id){
       cantidad: n * +p.contenido, base:prU, precio_unit:prU, max:disp, granel:true, unidad:uv, modo:'pieza'};
     const i = carrito.findIndex(x=>x.producto_id===id && x.modo==='pieza');
     if(i>=0) carrito[i] = fila; else carrito.push(fila);
-    cerrarModal(); pintarCarrito();
+    volverVenta();
     toast(n+' '+uc+'(s) completo(s) · '+fmt(n*+p.precio));
     return;
   }
@@ -1625,7 +1629,7 @@ async function addGranel(id){
   const fila = {producto_id:id, codigo:p.codigo, desc:p.descripcion+' ('+n+' '+uv+')', cantidad:n,
                 base:pr, precio_unit:pr, max:disp, granel:true, unidad:uv, modo:'suelto'};
   if(i>=0) carrito[i] = fila; else carrito.push(fila);
-  cerrarModal(); pintarCarrito();
+  volverVenta();
   toast(n+' '+uv+' agregado(s) · '+fmt(Math.round(n*pr*100)/100));
 }
 // ===== v102: renglón libre =====
@@ -1640,7 +1644,7 @@ function renglonLibre(){
       <div class="field"><label>Precio de cada uno</label><input id="rl-precio" type="number" step="0.01" min="0" style="font-size:20px" oninput="calcLibre()"></div>
     </div>
     <div id="rl-calc" class="card" style="padding:11px;background:#f8fafc"></div>
-    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cancelar</button>
+    <div class="acciones"><button class="btn sec" onclick="volverVenta()">Cancelar</button>
       <button class="btn" onclick="addLibre()">Agregar al ticket</button></div>`);
   setTimeout(()=>$('rl-desc')?.focus(), 100);
 }
@@ -1657,7 +1661,7 @@ function addLibre(){
   if(!d){ toast('Escribe qué es', true); return; }
   if(n<=0 || pr<=0){ toast('Falta cantidad o precio', true); return; }
   carrito.push({producto_id:null, codigo:'LIBRE', desc:d, cantidad:n, base:pr, precio_unit:pr, max:99999, libre:true});
-  cerrarModal(); pintarCarrito();
+  volverVenta();
   logEv('venta','renglón libre: '+d+' ('+n+' × '+fmt(pr)+')');
   toast('Agregado: '+d);
 }
