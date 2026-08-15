@@ -3912,7 +3912,8 @@ async function vFinanzas(){
   if(esAdmin()) $('vtools').innerHTML = `<button class="btn" onclick="asistentePago()">💸 Pagar facturas</button>
     <button class="btn sec" onclick="nuevaCuenta()">+ Cuenta por pagar</button>
     <button class="btn sec" onclick="nuevoGasto()">+ Gasto</button>
-    <button class="btn sec" onclick="historialPagos()">📜 Pagos hechos</button>`;
+    <button class="btn sec" onclick="historialPagos()">📜 Pagos hechos</button>
+    <button class="btn sec" onclick="cuadrarIndar()">⚖️ Cuadrar con Indar</button>`;
   const hoy = new Date(); hoy.setHours(0,0,0,0);
   const mes = new Date(hoy.getFullYear(), hoy.getMonth(), 1).toISOString().slice(0,10);
   // periodo para la sección de gastos/inversiones
@@ -4160,6 +4161,91 @@ function aplicarRecibo(){
   modalPagoLote();
 }
 /* ===== Asistente: "voy a pagar todo lo que se vence" — 2 clics (v98) ===== */
+// ===== v104: cuadrar cuentas contra el estado de cuenta de Indar =====
+function cuadrarIndar(){
+  abrirModal(`<h3>⚖️ Cuadrar con Indar</h3>
+    <p class="small muted" style="margin:0 0 8px">En <b>indar.mx → Mi Cuenta → Estado de Cuenta → Facturas Pendientes</b>:
+    selecciona toda la página (<b>Ctrl+A</b>), cópiala (<b>Ctrl+C</b>) y pégala aquí. El sistema compara factura por factura.</p>
+    <textarea id="ci-txt" rows="9" placeholder="Pega aquí el estado de cuenta completo..." style="width:100%;font-family:monospace;font-size:12px;padding:9px;border:1px solid var(--linea);border-radius:8px"></textarea>
+    <div class="acciones" style="margin-top:8px"><button class="btn sec" onclick="cerrarModal()">Cancelar</button>
+      <button class="btn" onclick="leerEdoIndar()">Cuadrar →</button></div>`, true);
+  setTimeout(()=>$('ci-txt')?.focus(), 100);
+}
+function parseEdoIndar(txt){
+  const re = /(\d{7})\s+([\d.]+)%\s+(\d{4}-\d{2}-\d{2})\s+(\d{4}-\d{2}-\d{2})\s+(-?\d+)\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})/;
+  const n = s => +String(s).replace(/,/g,'');
+  const m = new Map();
+  for(const linea of String(txt).split(/[\r\n]+/)){
+    const l = linea.trim().replace(/\s+/g,' ');
+    const x = re.exec(l);
+    if(x) m.set(x[1], {folio:x[1], pct:+x[2], fecha:x[3], vence:x[4], importe:n(x[6]), saldo:n(x[7])});
+  }
+  return [...m.values()];
+}
+async function leerEdoIndar(){
+  const filas = parseEdoIndar($('ci-txt')?.value||'');
+  if(!filas.length){ toast('No reconocí facturas. Copia toda la página de Facturas Pendientes.', true); return; }
+  const cx = (await sb.from('cuentas_pagar').select('id,concepto,saldo,estado')).data||[];
+  const faltan=[], difs=[], sobran=[], ok=[];
+  let sP=0, sS=0;
+  for(const f of filas){
+    sP += f.saldo;
+    const c = cx.find(x=>String(x.concepto).includes(f.folio));
+    if(!c){ faltan.push(f); continue; }
+    sS += +c.saldo;
+    if(Math.abs(+c.saldo - f.saldo) > 0.02) difs.push({...f, sistema:+c.saldo, id:c.id});
+    else ok.push(f.folio);
+  }
+  const folP = new Set(filas.map(x=>x.folio));
+  cx.forEach(c=>{
+    const mm = String(c.concepto).match(/^Factura (\d{7})/);
+    if(mm && +c.saldo>0 && !folP.has(mm[1])) sobran.push({id:c.id, folio:mm[1], saldo:+c.saldo, concepto:c.concepto});
+  });
+  window._cuadreIndar = {faltan, sobran};
+  const todoBien = !faltan.length && !difs.length && !sobran.length;
+  abrirModal(`<h3>⚖️ Resultado del cuadre</h3>
+    <div class="kpis" style="margin-bottom:10px">
+      <div class="kpi"><div class="l">Indar cobra</div><div class="v">${fmt(sP)}</div><div class="s">${filas.length} factura(s)</div></div>
+      <div class="kpi"><div class="l">Sistema debe (esas mismas)</div><div class="v">${fmt(sS)}</div><div class="s">${ok.length} cuadran exacto</div></div>
+      <div class="kpi" style="border-top-color:${todoBien?'var(--verde)':'var(--rojo)'}"><div class="l">Diferencia</div>
+        <div class="v" style="color:${Math.abs(sP-sS)<0.02?'#15803d':'#b91c1c'}">${fmt(Math.round((sP-sS)*100)/100)}</div></div>
+    </div>
+    ${todoBien?'<div class="card" style="background:#f0fdf4;border:1px solid var(--verde)"><b>✅ Todo cuadra.</b> Cada factura del portal está en el sistema con el mismo saldo, y no hay cuentas de más.</div>':''}
+    ${faltan.length?`<div class="card" style="border-left:4px solid #b91c1c;margin-bottom:8px"><b>❌ ${faltan.length} factura(s) que Indar cobra y NO están en el sistema:</b>
+      <table style="margin:6px 0">${faltan.map(f=>`<tr><td><b>${f.folio}</b></td><td class="small">${fecha(f.vence)}</td><td class="num">${fmt(f.saldo)}</td></tr>`).join('')}</table>
+      <button class="btn sm" onclick="aplicarCuadreIndar('faltan')">➕ Crear estas cuentas por pagar</button></div>`:''}
+    ${difs.length?`<div class="card" style="border-left:4px solid var(--ambar);margin-bottom:8px"><b>⚠️ ${difs.length} con saldo distinto:</b>
+      <table style="margin:6px 0">${difs.map(d=>`<tr><td><b>${d.folio}</b></td><td class="num">Indar ${fmt(d.saldo)}</td><td class="num">sistema ${fmt(d.sistema)}</td></tr>`).join('')}</table>
+      <p class="small muted" style="margin:0">Estas revísalas a mano: puede ser un pago o nota de crédito que uno de los dos no ha aplicado.</p></div>`:''}
+    ${sobran.length?`<div class="card" style="border-left:4px solid var(--azul);margin-bottom:8px"><b>ℹ️ ${sobran.length} abiertas en el sistema que Indar YA NO cobra:</b>
+      <table style="margin:6px 0">${sobran.map(s=>`<tr><td class="small">${esc(s.concepto)}</td><td class="num">${fmt(s.saldo)}</td></tr>`).join('')}</table>
+      <button class="btn sm sec" onclick="aplicarCuadreIndar('sobran')">✔ Marcarlas pagadas/canceladas</button></div>`:''}
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
+  logEv('finanzas','cuadre Indar: '+filas.length+' facturas, '+faltan.length+' faltan, '+difs.length+' difieren, '+sobran.length+' sobran');
+}
+async function aplicarCuadreIndar(tipo){
+  const q = window._cuadreIndar||{};
+  if(tipo==='faltan'){
+    const prov = (await sb.from('proveedores').select('id').ilike('nombre','%indar%').limit(1)).data;
+    const pid = prov && prov[0] ? prov[0].id : null;
+    let ok=0;
+    for(const f of (q.faltan||[])){
+      const r = await sb.from('cuentas_pagar').insert({proveedor_id:pid, concepto:'Factura '+f.folio,
+        referencia:'creada por cuadre Indar', fecha_emision:f.fecha, fecha_vencimiento:f.vence,
+        monto:f.saldo, saldo:f.saldo, estado:'pendiente'});
+      if(!r.error) ok++;
+    }
+    toast(ok+' cuenta(s) creadas ✓');
+  } else if(tipo==='sobran'){
+    let ok=0;
+    for(const s of (q.sobran||[])){
+      const r = await sb.from('cuentas_pagar').update({saldo:0, estado:'pagada'}).eq('id', s.id);
+      if(!r.error) ok++;
+    }
+    toast(ok+' cuenta(s) cerradas ✓');
+  }
+  cerrarModal(); vFinanzas();
+}
 function asistentePago(){
   const hoy = new Date(); hoy.setHours(0,0,0,0);
   const pend = (cxpData||[]).filter(c=>c.estado!=='pagada' && +c.saldo>0 && c.fecha_vencimiento);
