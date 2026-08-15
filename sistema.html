@@ -1501,14 +1501,43 @@ function pedirCantidadGranel(id){
     alert('🚫 NO HAY EXISTENCIA\n\n'+p.codigo+' · '+p.descripcion+'\n\nNo queda '+uv+' disponible.');
     return;
   }
-  const yaEn = (carrito.find(x=>x.producto_id===id)||{}).cantidad || 0;
+  window._grModo = +p.stock > 0 ? 'pieza' : 'suelto';
   abrirModal(`<h3>📏 ${esc(p.descripcion)}</h3>
     <div class="card" style="padding:11px;margin-bottom:10px;background:#f8fafc">
       <div class="small muted">Hay en tienda</div>
       <div style="font-size:16px">${textoGranel(p)}</div>
       <div class="small muted" style="margin-top:5px">1 ${esc(uc)} trae <b>${+p.contenido} ${esc(uv)}</b></div>
     </div>
-    <div class="frow">
+    <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+      <button class="btn" id="gm-pieza" onclick="grModo(${id},'pieza')" ${+p.stock<=0?'disabled':''}>🧱 ${esc(uc)} completo · ${fmt(p.precio)}</button>
+      <button class="btn sec" id="gm-suelto" onclick="grModo(${id},'suelto')">⚖️ Suelto por ${esc(uv)} · ${fmt(pu)}</button>
+    </div>
+    <div id="gr-zona"></div>
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cancelar</button>
+      <button class="btn" onclick="addGranel(${id})">Agregar al ticket</button></div>`);
+  setTimeout(()=>grModo(id, window._grModo), 80);
+}
+function grModo(id, m){
+  window._grModo = m;
+  const p = prodCache.find(x=>x.id===id);
+  const uv = p.unidad_venta||'unidad', uc = p.unidad_compra||'pieza';
+  const disp = dispGranel(p), pu = precioUnidad(p);
+  const bA=$('gm-pieza'), bB=$('gm-suelto');
+  if(bA) bA.className = 'btn'+(m==='pieza'?'':' sec');
+  if(bB) bB.className = 'btn'+(m==='suelto'?'':' sec');
+  const z = $('gr-zona'); if(!z) return;
+  if(m === 'pieza'){
+    z.innerHTML = `<div class="frow">
+      <div class="field"><label>¿Cuántos ${esc(uc)}s completos?</label>
+        <input id="gr-cant" type="number" step="1" min="1" max="${+p.stock}" value="1" style="font-size:22px;padding:12px"
+          oninput="calcGranel(${id})" onkeydown="if(event.key==='Enter'){event.preventDefault();addGranel(${id});}"></div>
+      <div class="field"><label>Precio por ${esc(uc)} completo</label>
+        <input id="gr-precio" value="${+p.precio}" readonly style="font-size:22px;padding:12px;background:#eef2ff">
+        <p class="small muted" style="margin:4px 0 0">Precio normal del ${esc(uc)} cerrado.</p></div>
+    </div>
+    <div id="gr-calc" class="card" style="padding:12px;background:#f0fdf4;border:1px solid var(--verde)"></div>`;
+  } else {
+    z.innerHTML = `<div class="frow">
       <div class="field"><label>¿Cuántos ${esc(uv)}s?</label>
         <input id="gr-cant" type="number" step="0.01" min="0" value="1" style="font-size:22px;padding:12px"
           oninput="calcGranel(${id})" onkeydown="if(event.key==='Enter'){event.preventDefault();addGranel(${id});}"></div>
@@ -1518,22 +1547,34 @@ function pedirCantidadGranel(id){
     </div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin:-4px 0 10px">
       <span class="small muted" style="align-self:center">Rápido:</span>
-      ${[1,2,3,5,10,20,50].filter(n=>n<=disp).map(n=>`<button class="btn sec sm" onclick="$('gr-cant').value=${n};calcGranel(${id})">${n}</button>`).join('')}
-      ${disp<=200?`<button class="btn sec sm" onclick="$('gr-cant').value=${disp};calcGranel(${id})">todo (${disp})</button>`:''}
+      ${[0.5,1,2,3,5,10,20].filter(n=>n<=disp).map(n=>`<button class="btn sec sm" onclick="$('gr-cant').value=${n};calcGranel(${id})">${n}</button>`).join('')}
     </div>
-    <div id="gr-calc" class="card" style="padding:12px;background:#f0fdf4;border:1px solid var(--verde)"></div>
-    ${yaEn>0?`<p class="small muted" style="margin:8px 0 0">Ya llevas ${yaEn} ${esc(uv)} en el ticket; esto lo reemplaza.</p>`:''}
-    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cancelar</button>
-      <button class="btn" onclick="addGranel(${id})">Agregar al ticket</button></div>`);
-  setTimeout(()=>{ const e=$('gr-cant'); if(e){ e.focus(); e.select(); } calcGranel(id); }, 100);
+    <div id="gr-calc" class="card" style="padding:12px;background:#f0fdf4;border:1px solid var(--verde)"></div>`;
+  }
+  const e=$('gr-cant'); if(e){ e.focus(); e.select(); }
+  calcGranel(id);
 }
 function calcGranel(id){
   const p = prodCache.find(x=>x.id===id);
+  const m = window._grModo || 'suelto';
   const uv = p.unidad_venta||'unidad', uc = p.unidad_compra||'pieza';
   const disp = dispGranel(p), pu = precioUnidad(p);
   const n = +($('gr-cant')?.value||0);
-  let pr = +($('gr-precio')?.value||pu);
   const el = $('gr-calc'); if(!el) return;
+  if(m === 'pieza'){
+    if(n < 1){ el.innerHTML = '<span class="muted">Pon cuántos '+esc(uc)+'s.</span>'; return; }
+    if(n > +p.stock){
+      el.innerHTML = `<b style="color:#b91c1c">⚠️ Solo hay ${+p.stock} ${esc(uc)}(s) cerrados</b>`;
+      return;
+    }
+    el.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
+      <div><div class="l">${n} ${esc(uc)}(s) completos = ${n*+p.contenido} ${esc(uv)}</div>
+        <div class="small muted">quedan ${+p.stock-n} ${esc(uc)}(s) cerrados${+(p.abierto||0)>0?` + ${+p.abierto} ${esc(uv)} sueltos`:''}</div></div>
+      <div style="font-size:25px"><b>${fmt(n*+p.precio)}</b></div>
+    </div>`;
+    return;
+  }
+  let pr = +($('gr-precio')?.value||pu);
   if(n <= 0){ el.innerHTML = '<span class="muted">Pon cuántos '+esc(uv)+'s.</span>'; return; }
   if(n > disp){
     el.innerHTML = `<b style="color:#b91c1c">⚠️ Solo hay ${disp} ${esc(uv)}</b><div class="small muted">No puedes vender ${n}.</div>`;
@@ -1553,8 +1594,23 @@ function calcGranel(id){
 }
 async function addGranel(id){
   const p = prodCache.find(x=>x.id===id);
-  const uv = p.unidad_venta||'unidad';
+  const m = window._grModo || 'suelto';
+  const uv = p.unidad_venta||'unidad', uc = p.unidad_compra||'pieza';
   const disp = dispGranel(p), pu = precioUnidad(p);
+  if(m === 'pieza'){
+    const n = Math.floor(+($('gr-cant').value||0));
+    if(n < 1){ toast('Pon cuántos '+uc+'s', true); return; }
+    if(n > +p.stock){ toast('Solo hay '+(+p.stock)+' '+uc+'(s) cerrados', true); return; }
+    const prU = Math.round(+p.precio / +p.contenido * 10000)/10000;
+    const fila = {producto_id:id, codigo:p.codigo,
+      desc:p.descripcion+' ('+n+' '+uc+(n>1?'s':'')+' completo'+(n>1?'s':'')+')',
+      cantidad: n * +p.contenido, base:prU, precio_unit:prU, max:disp, granel:true, unidad:uv, modo:'pieza'};
+    const i = carrito.findIndex(x=>x.producto_id===id && x.modo==='pieza');
+    if(i>=0) carrito[i] = fila; else carrito.push(fila);
+    cerrarModal(); pintarCarrito();
+    toast(n+' '+uc+'(s) completo(s) · '+fmt(n*+p.precio));
+    return;
+  }
   const n = Math.round((+($('gr-cant').value||0))*100)/100;
   let pr = Math.round((+($('gr-precio').value||pu))*100)/100;
   if(n <= 0){ toast('Pon la cantidad', true); return; }
@@ -1564,9 +1620,9 @@ async function addGranel(id){
     const r = await sb.from('productos').update({precio_unidad: pr}).eq('id', id);
     if(!r.error){ p.precio_unidad = pr; logEv('inventario','precio por '+uv+' de '+p.codigo+' subió a '+fmt(pr)); }
   }
-  const i = carrito.findIndex(x=>x.producto_id===id);
+  const i = carrito.findIndex(x=>x.producto_id===id && x.modo!=='pieza');
   const fila = {producto_id:id, codigo:p.codigo, desc:p.descripcion+' ('+n+' '+uv+')', cantidad:n,
-                base:pr, precio_unit:pr, max:disp, granel:true, unidad:uv};
+                base:pr, precio_unit:pr, max:disp, granel:true, unidad:uv, modo:'suelto'};
   if(i>=0) carrito[i] = fila; else carrito.push(fila);
   cerrarModal(); pintarCarrito();
   toast(n+' '+uv+' agregado(s) · '+fmt(Math.round(n*pr*100)/100));
