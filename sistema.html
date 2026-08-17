@@ -3934,7 +3934,8 @@ async function vFinanzas(){
     <button class="btn sec" onclick="nuevoGasto()">+ Gasto</button>
     <button class="btn sec" onclick="historialPagos()">📜 Pagos hechos</button>
     <button class="btn sec" onclick="cuadrarIndar()">⚖️ Cuadrar con Indar</button>
-    <button class="btn sec" id="btn-compras-sol" onclick="adminCompras()">🛠️ Compras pedidas</button>`;
+    <button class="btn sec" id="btn-compras-sol" onclick="adminCompras()">🛠️ Compras pedidas</button>
+    <button class="btn sec" onclick="cuadrarHolcim()">🏗️ Cuadrar con Holcim</button>`;
   if(esAdmin()) sb.from('gasto_solicitudes').select('id',{count:'exact',head:true}).eq('estado','pendiente')
     .then(({count})=>{ const b=$('btn-compras-sol'); if(b&&count) b.innerHTML='🛠️ Compras pedidas <span class="badge b-ambar">'+count+'</span>'; });
   const hoy = new Date(); hoy.setHours(0,0,0,0);
@@ -4280,6 +4281,76 @@ async function guardarCompraHecha(id){
   toast('Compra registrada en gastos ✓');
   logEv('finanzas','compra solicitada registrada: '+s.concepto+' '+fmt(monto));
   adminCompras();
+}
+// ===== v110: cuadrar contra el estado de cuenta de HOLCIM (mensualidades del anticipo) =====
+function cuadrarHolcim(){
+  abrirModal(`<h3>🏗️ Cuadrar con Holcim</h3>
+    <p class="small muted" style="margin:0 0 8px">En <b>holcimsoluciones.com → Mi gestión → Estado de cuenta</b>:
+    selecciona toda la página (<b>Ctrl+A</b>), cópiala (<b>Ctrl+C</b>) y pégala aquí. Se compara contra tus mensualidades del anticipo.</p>
+    <textarea id="chh-txt" rows="9" placeholder="Pega aquí el estado de cuenta de Holcim..." style="width:100%;font-family:monospace;font-size:12px;padding:9px;border:1px solid var(--linea);border-radius:8px"></textarea>
+    <div class="acciones" style="margin-top:8px"><button class="btn sec" onclick="cerrarModal()">Cancelar</button>
+      <button class="btn" onclick="leerEdoHolcim()">Cuadrar →</button></div>`, true);
+  setTimeout(()=>$('chh-txt')?.focus(), 100);
+}
+function parseEdoHolcim(txt){
+  const out = [];
+  for(const linea of String(txt).split(/[\r\n]+/)){
+    const l = linea.replace(/\t/g,' ').trim().replace(/\s+/g,' ');
+    const mf = l.match(/^(\d{2}\/\d{2}\/\d{4})\s+(.*)$/);
+    if(!mf) continue;
+    const dinero = (mf[2].match(/-?\$\s?[\d,]+\.\d{2}|-?[\d,]+\.\d{2}/g)||[]).map(x=>+x.replace(/[$,\s]/g,''));
+    if(dinero.length < 2) continue;
+    const tipo = (mf[2].match(/^[A-ZÁÉÍÓÚÑÜa-záéíóúñü. ]+/)||[''])[0].trim() || 'Movimiento';
+    out.push({fecha: mf[1], tipo, importe: dinero[dinero.length-2], saldo: dinero[dinero.length-1]});
+  }
+  return out;
+}
+async function leerEdoHolcim(){
+  const movs = parseEdoHolcim($('chh-txt')?.value||'');
+  if(!movs.length){ toast('No reconocí movimientos. Copia toda la página del Estado de cuenta de Holcim.', true); return; }
+  const saldoPortal = movs[movs.length-1].saldo;
+  const cx = (await sb.from('cuentas_pagar').select('id,concepto,saldo,estado,fecha_vencimiento')
+    .ilike('concepto','%holcim%').neq('estado','pagada').gt('saldo',0).order('fecha_vencimiento')).data||[];
+  const sist = Math.round(cx.reduce((s,c)=>s+ +c.saldo,0)*100)/100;
+  const dif = Math.round((saldoPortal - sist)*100)/100;
+  let porMarcar = [];
+  if(dif < -0.5){
+    let resta = -dif;
+    for(const c of cx){ if(resta >= +c.saldo - 0.5){ porMarcar.push(c); resta -= +c.saldo; } else break; }
+    if(Math.abs(resta) > 1) porMarcar = [];
+  }
+  window._cuadreHolcim = {porMarcar};
+  const ok = Math.abs(dif) < 1;
+  abrirModal(`<h3>🏗️ Resultado · Holcim</h3>
+    <div class="kpis" style="margin-bottom:10px">
+      <div class="kpi"><div class="l">Holcim dice que debes</div><div class="v">${fmt(saldoPortal)}</div><div class="s">último saldo del estado de cuenta</div></div>
+      <div class="kpi"><div class="l">El sistema dice</div><div class="v">${fmt(sist)}</div><div class="s">${cx.length} mensualidad(es) abiertas</div></div>
+      <div class="kpi" style="border-top-color:${ok?'var(--verde)':'var(--rojo)'}"><div class="l">Diferencia</div>
+        <div class="v" style="color:${ok?'#15803d':'#b91c1c'}">${fmt(dif)}</div></div>
+    </div>
+    ${ok?'<div class="card" style="background:#f0fdf4;border:1px solid var(--verde)"><b>✅ Cuadra.</b> La deuda con Holcim es la misma en los dos lados.</div>':''}
+    ${porMarcar.length?`<div class="card" style="border-left:4px solid var(--verde);margin-bottom:8px">
+      <b>💡 Holcim ya registra pagos por ${fmt(-dif)}</b> — coincide exacto con ${porMarcar.length} mensualidad(es):
+      <table style="margin:6px 0">${porMarcar.map(c=>`<tr><td class="small">${esc(c.concepto)}</td><td class="num">${fmt(c.saldo)}</td></tr>`).join('')}</table>
+      <button class="btn sm" onclick="aplicarCuadreHolcim()">✔ Marcarlas pagadas</button></div>`:''}
+    ${!ok && !porMarcar.length ? `<div class="card" style="border-left:4px solid var(--ambar);margin-bottom:8px">
+      ${dif>0?'<b>⚠️ Holcim te cobra MÁS de lo registrado.</b> Puede ser una compra de cemento nueva o intereses — revisa los movimientos de abajo y registra lo que falte.':'<b>⚠️ Holcim debe MENOS pero no coincide con mensualidades completas.</b> Puede ser un pago parcial — revísalo a mano.'}</div>`:''}
+    <div class="card"><h3 style="margin:0 0 6px">Movimientos del estado de cuenta</h3>
+      <div class="tbl-scroll" style="max-height:220px"><table>
+      <thead><tr><th>Fecha</th><th>Tipo</th><th class="num">Importe</th><th class="num">Saldo</th></tr></thead>
+      <tbody>${movs.map(m=>`<tr><td class="small">${esc(m.fecha)}</td><td class="small">${esc(m.tipo)}</td>
+        <td class="num" style="color:${m.importe<0?'#15803d':'inherit'}">${fmt(m.importe)}</td><td class="num">${fmt(m.saldo)}</td></tr>`).join('')}</tbody></table></div></div>
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
+  logEv('finanzas','cuadre Holcim: portal '+fmt(saldoPortal)+' vs sistema '+fmt(sist));
+}
+async function aplicarCuadreHolcim(){
+  const q = window._cuadreHolcim||{}; let ok=0;
+  for(const c of (q.porMarcar||[])){
+    const r = await sb.from('cuentas_pagar').update({saldo:0, estado:'pagada'}).eq('id', c.id);
+    if(!r.error) ok++;
+  }
+  toast(ok+' mensualidad(es) marcadas como pagadas ✓');
+  cerrarModal(); vFinanzas();
 }
 // ===== v104: cuadrar cuentas contra el estado de cuenta de Indar =====
 function cuadrarIndar(){
