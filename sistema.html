@@ -3695,7 +3695,7 @@ async function vCaja(){
       <tbody>${movs.map(m=>`<tr><td class="small">${(m.creado||'').slice(11,16)}</td>
         <td><span class="badge ${m.tipo==='entrada'?'b-verde':'b-ambar'}">${m.tipo}</span></td>
         <td>${esc(m.concepto)||'—'}</td><td class="small">${esc(m.nombre)||''}</td>
-        <td class="num"><b>${m.tipo==='entrada'?'+':'−'}${fmt(m.monto)}</b></td></tr>`).join('')}</tbody></table></div></div>`:''}
+        <td class="num"><b>${m.tipo==='entrada'?'+':'−'}${fmt(m.monto)}</b>${m.comprobante_path?` <button class="btn sm sec" title="Ver ticket" onclick="verPdfFactura('${esc(m.comprobante_path)}')">📎</button>`:''}</td></tr>`).join('')}</tbody></table></div></div>`:''}
     <div class="card"><h3>Cortes anteriores</h3><div class="tbl-scroll"><table>
       <thead><tr><th>Fecha</th><th>Quién</th><th class="num">Esperado</th><th class="num">Contado</th><th>Diferencia</th><th class="num">Depositado</th></tr></thead>
       <tbody>${his.map(c=>`<tr style="cursor:pointer" onclick="window._cajaFecha='${c.fecha}'; vCaja()"><td>${fecha(c.fecha)}</td><td class="small">${esc(c.nombre)||''}</td>
@@ -3721,13 +3721,26 @@ function movCaja(){
     <label>Tipo</label><select id="mc-tipo"><option value="retiro">💸 Retiro (a bóveda / depósito)</option><option value="gasto">🧾 Gasto pagado de la caja</option><option value="entrada">➕ Entrada de efectivo</option></select>
     <label>Monto</label><input type="number" id="mc-monto" step="0.01" min="0.01" placeholder="0.00">
     <label>Concepto</label><input id="mc-con" placeholder="Ej: depósito al banco, gasolina, cambio de $500">
+    <label>📎 Ticket o comprobante (foto o PDF — súbanlo siempre en depósitos)</label>
+    <input type="file" id="mc-file" accept="image/*,application/pdf" capture="environment">
     <div class="acciones"><button class="btn" onclick="guardarMovCaja()">Guardar</button><button class="btn sec" onclick="cerrarModal()">Cancelar</button></div>`);
   setTimeout(()=>$('mc-monto').focus(), 100);
 }
 async function guardarMovCaja(){
   const monto = +$('mc-monto').value||0;
   if(monto<=0){ toast('Escribe el monto', true); return; }
-  const {error} = await sb.from('caja_movs').insert({tipo:$('mc-tipo').value, monto, concepto:$('mc-con').value.trim(), nombre:perfil.nombre||perfil.correo, usuario_id:perfil.id, fecha: window._cajaFecha||hoyMX()});
+  let path = null;
+  const f = $('mc-file') && $('mc-file').files && $('mc-file').files[0];
+  if(f){
+    const ext = (f.name.split('.').pop()||'jpg').toLowerCase();
+    path = 'depositos/'+(window._cajaFecha||hoyMX())+'-'+Date.now()+'.'+ext;
+    const up = await sb.storage.from('facturas').upload(path, f, {upsert:true});
+    if(up.error){ toast('No se pudo subir el ticket: '+errMsg(up.error), true); path = null; }
+  }
+  const fila = {tipo:$('mc-tipo').value, monto, concepto:$('mc-con').value.trim(), nombre:perfil.nombre||perfil.correo, usuario_id:perfil.id, fecha: window._cajaFecha||hoyMX()};
+  if(path) fila.comprobante_path = path;
+  let {error} = await sb.from('caja_movs').insert(fila);
+  if(error && /comprobante/i.test(error.message||'')){ delete fila.comprobante_path; ({error} = await sb.from('caja_movs').insert(fila)); }
   if(error){ toast(errMsg(error), true); return; }
   logEv('caja_mov', $('mc-tipo').value+' '+monto);
   cerrarModal(); toast('Movimiento registrado ✓'); vCaja();
