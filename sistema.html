@@ -3696,6 +3696,12 @@ async function vCaja(){
         <td><span class="badge ${m.tipo==='entrada'?'b-verde':'b-ambar'}">${m.tipo}</span></td>
         <td>${esc(m.concepto)||'—'}</td><td class="small">${esc(m.nombre)||''}</td>
         <td class="num"><b>${m.tipo==='entrada'?'+':'−'}${fmt(m.monto)}</b>${m.comprobante_path?` <button class="btn sm sec" title="Ver ticket" onclick="verPdfFactura('${esc(m.comprobante_path)}')">📎</button>`:''}</td></tr>`).join('')}</tbody></table></div></div>`:''}
+    <div class="card"><h3>🏦 Depósitos a la cuenta</h3>
+      <p class="small muted" style="margin:0 0 8px">Dinero de la caja grande depositado al banco. <b>No</b> toca el corte del cajón — es puro registro con su ticket.</p>
+      <button class="btn sm" onclick="registrarDeposito()">➕ Registrar depósito</button>
+      <div id="dep-lista" style="margin-top:8px"><span class="small muted">Cargando…</span></div>
+      <span style="display:none">${setTimeout(()=>{ if(typeof pintarDepositos==='function') pintarDepositos(); },200)&&''}</span>
+    </div>
     <div class="card"><h3>Cortes anteriores</h3><div class="tbl-scroll"><table>
       <thead><tr><th>Fecha</th><th>Quién</th><th class="num">Esperado</th><th class="num">Contado</th><th>Diferencia</th><th class="num">Depositado</th></tr></thead>
       <tbody>${his.map(c=>`<tr style="cursor:pointer" onclick="window._cajaFecha='${c.fecha}'; vCaja()"><td>${fecha(c.fecha)}</td><td class="small">${esc(c.nombre)||''}</td>
@@ -3715,6 +3721,53 @@ async function acumHistorico(){
   const ret = (m.data||[]).filter(x=>x.tipo!=='entrada').reduce((s,x)=>s+ +x.monto,0);
   const ent = (m.data||[]).filter(x=>x.tipo==='entrada').reduce((s,x)=>s+ +x.monto,0);
   el.innerHTML = `📌 <b>Referencia:</b> desde que abrió la tienda se han cobrado <b>${fmt(ef)}</b> en efectivo${ret?` y se han registrado ${fmt(ret)} en retiros/gastos`:''}${ent?` y ${fmt(ent)} de entradas`:''}. Si nunca has hecho corte, en el cajón debería haber aprox. <b>${fmt(ef - ret + ent)}</b> más el dinero con el que arrancaron y menos los gastos que no se registraron aquí.`;
+}
+// ===== v111: depósitos a la cuenta (registro con ticket, no toca el corte) =====
+async function pintarDepositos(){
+  const el = $('dep-lista'); if(!el) return;
+  const r = await sb.from('depositos_cuenta').select('*').order('fecha',{ascending:false}).order('id',{ascending:false}).limit(40);
+  if(r.error){ el.innerHTML = '<p class="small muted">Para activar esta sección corre 34_depositos.sql en Supabase.</p>'; return; }
+  const d = r.data||[];
+  const tot = d.reduce((s,x)=>s+ +x.monto,0);
+  const mes = hoyMX().slice(0,7);
+  const totMes = d.filter(x=>String(x.fecha).startsWith(mes)).reduce((s,x)=>s+ +x.monto,0);
+  el.innerHTML = `<p class="small" style="margin:0 0 6px">Este mes: <b>${fmt(totMes)}</b> · total histórico: <b>${fmt(tot)}</b> en ${d.length} depósito(s)</p>
+    <div class="tbl-scroll"><table><thead><tr><th>Fecha</th><th class="num">Monto</th><th>Banco / referencia</th><th>Quién</th><th></th></tr></thead>
+    <tbody>${d.map(x=>`<tr><td>${fecha(x.fecha)}</td><td class="num"><b>${fmt(x.monto)}</b></td>
+      <td class="small">${esc(x.referencia||'')}</td><td class="small">${esc(x.nombre||'')}</td>
+      <td>${x.comprobante_path?`<button class="btn sm sec" onclick="verPdfFactura('${esc(x.comprobante_path)}')">📎 Ticket</button>`:'<span class="small muted">'+(x.nota?esc(x.nota):'sin ticket')+'</span>'}</td></tr>`).join('')
+      || '<tr><td colspan="5" class="muted">Aún no hay depósitos registrados.</td></tr>'}</tbody></table></div>`;
+}
+function registrarDeposito(){
+  abrirModal(`<h3>🏦 Registrar depósito a la cuenta</h3>
+    <p class="small muted" style="margin:0 0 10px">El dinero de la caja grande que se llevó al banco. <b>No</b> afecta el corte del cajón del día.</p>
+    <div class="frow">
+      <div class="field"><label>Monto depositado</label><input id="dp-monto" type="number" step="0.01" min="0.01" style="font-size:20px" placeholder="0.00"></div>
+      <div class="field"><label>Fecha del depósito</label><input id="dp-fecha" type="date" value="${hoyMX()}"></div>
+    </div>
+    <div class="field"><label>Banco y referencia</label><input id="dp-ref" placeholder="Ej. BBVA suc 1025 · movimiento 593"></div>
+    <div class="field"><label>📎 Foto del ticket (obligatoria)</label>
+      <input type="file" id="dp-file" accept="image/*,application/pdf" capture="environment"></div>
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cancelar</button>
+      <button class="btn" onclick="guardarDeposito()">Guardar depósito</button></div>`);
+  setTimeout(()=>$('dp-monto')?.focus(), 100);
+}
+async function guardarDeposito(){
+  const monto = +($('dp-monto').value||0);
+  if(monto<=0){ toast('Pon el monto depositado', true); return; }
+  const f = $('dp-file').files && $('dp-file').files[0];
+  if(!f){ toast('Falta la foto del ticket — es obligatoria', true); return; }
+  const ext = (f.name.split('.').pop()||'jpg').toLowerCase();
+  const path = 'depositos/'+($('dp-fecha').value||hoyMX())+'-'+Date.now()+'.'+ext;
+  const up = await sb.storage.from('facturas').upload(path, f, {upsert:true});
+  if(up.error){ toast('No se pudo subir el ticket: '+errMsg(up.error), true); return; }
+  const {error} = await sb.from('depositos_cuenta').insert({monto, fecha: $('dp-fecha').value||hoyMX(),
+    referencia: ($('dp-ref').value||'').trim(), comprobante_path: path,
+    nombre:(typeof perfil!=='undefined'&&perfil?perfil.nombre:''), usuario_id: sesion.user.id});
+  if(error){ toast(errMsg(error), true); return; }
+  cerrarModal(); toast('Depósito registrado con su ticket ✓');
+  logEv('caja','depósito a cuenta: '+fmt(monto));
+  vCaja();
 }
 function movCaja(){
   abrirModal(`<h3>Retiro, gasto o entrada de efectivo</h3>
