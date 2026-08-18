@@ -4239,6 +4239,38 @@ function aplicarRecibo(){
 }
 /* ===== Asistente: "voy a pagar todo lo que se vence" — 2 clics (v98) ===== */
 // ===== v105: la tienda pide compras (bascula, cutter...) y Andres aprueba =====
+// ===== v112: la tienda registra la compra aprobada con su ticket =====
+function tiendaCompraHecha(id){
+  const s = (window._msData||[]).find(x=>x.id===id); if(!s) return;
+  abrirModal(`<h3>🛍️ Registrar la compra</h3>
+    <p style="margin:0 0 10px"><b>${esc(s.concepto)}</b></p>
+    <div class="frow">
+      <div class="field"><label>¿Cuánto costó?</label><input id="tc-monto" type="number" step="0.01" value="${+s.monto||''}" style="font-size:18px"></div>
+      <div class="field"><label>¿De dónde salió el dinero?</label><select id="tc-metodo"><option value="efectivo">💵 Efectivo de caja</option><option value="transferencia">🏦 Transferencia</option><option value="tarjeta">💳 Tarjeta</option></select></div>
+    </div>
+    <div class="field"><label>📎 Foto del ticket (obligatoria)</label>
+      <input type="file" id="tc-file" accept="image/*,application/pdf" capture="environment"></div>
+    <p class="small muted" style="margin:6px 0 0">Si salió del efectivo de caja, se descuenta solo del corte del día.</p>
+    <div class="acciones"><button class="btn sec" onclick="verMisCompras()">← Volver</button>
+      <button class="btn" onclick="guardarTiendaCompra(${id})">Registrar compra</button></div>`);
+  setTimeout(()=>$('tc-monto')?.focus(), 100);
+}
+async function guardarTiendaCompra(id){
+  const monto = +($('tc-monto').value||0);
+  if(monto<=0){ toast('Pon cuánto costó', true); return; }
+  const f = $('tc-file').files && $('tc-file').files[0];
+  if(!f){ toast('Falta la foto del ticket — es obligatoria', true); return; }
+  const ext = (f.name.split('.').pop()||'jpg').toLowerCase();
+  const path = 'gastos/'+hoyMX()+'-'+Date.now()+'.'+ext;
+  const up = await sb.storage.from('facturas').upload(path, f, {upsert:true});
+  if(up.error){ toast('No se pudo subir el ticket: '+errMsg(up.error), true); return; }
+  const {error} = await sb.rpc('marcar_compra_hecha', {p_id:id, p_monto:monto, p_metodo:$('tc-metodo').value,
+    p_tipo:'gasto', p_path:path, p_nombre:(typeof perfil!=='undefined'&&perfil?perfil.nombre:'')});
+  if(error){ toast(errMsg(error), true); return; }
+  toast('Compra registrada con su ticket ✓');
+  logEv('finanzas','compra de tienda registrada: '+fmt(monto));
+  verMisCompras();
+}
 function pedirCompra(){
   abrirModal(`<h3>🛠️ Pedir una compra para la tienda</h3>
     <p class="small muted" style="margin:0 0 10px">Pide lo que haga falta para trabajar (una báscula, un cutter, focos...). Andrés lo ve en Finanzas y lo aprueba.</p>
@@ -4262,7 +4294,8 @@ async function guardarPedirCompra(){
 async function verMisCompras(){
   const {data, error} = await sb.from('gasto_solicitudes').select('*').order('creado',{ascending:false}).limit(40);
   if(error){ toast(errMsg(error), true); return; }
-  const B = {pendiente:'<span class="badge b-ambar">⏳ pendiente</span>', aprobada:'<span class="badge b-verde">✅ aprobada — cómprenlo</span>',
+  window._msData = data||[];
+  const B = {pendiente:'<span class="badge b-ambar">⏳ pendiente</span>', aprobada:'<span class="badge b-verde">✅ aprobada — cómprenlo y suban el ticket</span>',
     rechazada:'<span class="badge b-rojo">❌ no por ahora</span>', comprada:'<span class="badge b-gris">🛍️ ya comprado</span>'};
   abrirModal(`<h3>📋 Solicitudes de compra</h3>
     ${(data||[]).map(s=>`<div class="card" style="padding:10px;margin-bottom:8px">
@@ -4270,6 +4303,8 @@ async function verMisCompras(){
       <div class="small muted">${esc(s.nombre||'')} · ${fechaHora(s.creado)}${+s.monto?` · aprox ${fmt(s.monto)}`:''}</div>
       ${s.motivo?`<div class="small">${esc(s.motivo)}</div>`:''}
       ${s.respuesta?`<div class="small" style="margin-top:4px">💬 <b>Respuesta:</b> ${esc(s.respuesta)}</div>`:''}
+      ${s.estado==='aprobada'?`<div class="acciones" style="margin-top:6px"><button class="btn sm" onclick="tiendaCompraHecha(${s.id})">🛍️ Ya lo compramos — subir ticket</button></div>`:''}
+      ${s.estado==='comprada'&&s.comprobante_path?`<div style="margin-top:6px"><button class="btn sm sec" onclick="verPdfFactura('${esc(s.comprobante_path)}')">📎 Ver ticket</button></div>`:''}
     </div>`).join('') || '<p class="muted">No hay solicitudes todavía.</p>'}
     <div class="acciones"><button class="btn" onclick="pedirCompra()">➕ Pedir algo</button><button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
 }
@@ -4280,10 +4315,11 @@ async function adminCompras(){
   const aprob = (data||[]).filter(s=>s.estado==='aprobada');
   const resto = (data||[]).filter(s=>!['pendiente','aprobada'].includes(s.estado));
   const card = s => `<div class="card" style="padding:11px;margin-bottom:8px;${s.estado==='pendiente'?'border-left:4px solid var(--ambar)':''}">
-    <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><b>${esc(s.concepto)}</b><b>${+s.monto?fmt(s.monto):'$?'}</b></div>
+    <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><b>${esc(s.concepto)}</b><b>${+s.monto_final?fmt(s.monto_final):(+s.monto?fmt(s.monto):'$?')}</b></div>
     <div class="small muted">${esc(s.nombre||'')} · ${fechaHora(s.creado)}</div>
     ${s.motivo?`<div class="small" style="margin:3px 0">${esc(s.motivo)}</div>`:''}
     ${s.respuesta?`<div class="small">💬 ${esc(s.respuesta)}</div>`:''}
+    ${s.comprobante_path?`<div style="margin-top:4px"><button class="btn sm sec" onclick="verPdfFactura('${esc(s.comprobante_path)}')">📎 Ver ticket</button></div>`:''}
     <div class="acciones" style="margin-top:6px">
       ${s.estado==='pendiente'?`<button class="btn sm" onclick="resolverCompra(${s.id},'aprobada')">✅ Aprobar</button>
         <button class="btn sec sm" onclick="resolverCompra(${s.id},'rechazada')">❌ Rechazar</button>`:''}
@@ -4313,6 +4349,8 @@ function compraHecha(id){
       <div class="field"><label>¿De dónde salió?</label><select id="ch-metodo"><option value="efectivo">💵 Efectivo de caja</option><option value="transferencia">🏦 Transferencia</option><option value="tarjeta">💳 Tarjeta</option></select></div>
     </div>
     <div class="field"><label>Tipo</label><select id="ch-tipo"><option value="gasto">💸 Gasto</option><option value="inversion">🏗️ Inversión (queda como equipo)</option></select></div>
+    <div class="field"><label>📎 Foto del ticket (si la tienes)</label>
+      <input type="file" id="ch-file" accept="image/*,application/pdf"></div>
     <div class="acciones"><button class="btn sec" onclick="adminCompras()">← Volver</button>
       <button class="btn" onclick="guardarCompraHecha(${id})">Registrar</button></div>`);
 }
@@ -4320,8 +4358,16 @@ async function guardarCompraHecha(id){
   const s = (window._gsData||[]).find(x=>x.id===id); if(!s) return;
   const monto = +($('ch-monto').value||0);
   if(monto<=0){ toast('Pon cuánto costó', true); return; }
+  let chPath = null;
+  const chF = $('ch-file') && $('ch-file').files && $('ch-file').files[0];
+  if(chF){
+    const ext = (chF.name.split('.').pop()||'jpg').toLowerCase();
+    chPath = 'gastos/'+hoyMX()+'-'+Date.now()+'.'+ext;
+    const up = await sb.storage.from('facturas').upload(chPath, chF, {upsert:true});
+    if(up.error){ toast('No se pudo subir el ticket: '+errMsg(up.error), true); return; }
+  }
   const fila = {concepto: s.concepto+' (pedido por '+(s.nombre||'tienda')+')', categoria:'Equipo tienda', monto,
-    metodo: $('ch-metodo').value, tipo: $('ch-tipo').value, usuario_id: sesion.user.id};
+    metodo: $('ch-metodo').value, tipo: $('ch-tipo').value, usuario_id: sesion.user.id, comprobante_path: chPath};
   let {error} = await sb.from('gastos').insert(fila);
   if(error && /tipo|metodo/i.test(error.message||'')){ const o={...fila}; delete o.tipo; delete o.metodo; ({error} = await sb.from('gastos').insert(o)); }
   if(error){ toast(errMsg(error), true); return; }
@@ -4330,7 +4376,7 @@ async function guardarCompraHecha(id){
     try{ await sb.from('caja_movs').insert({tipo:'gasto', monto, concepto:'Compra: '+s.concepto,
       usuario_id: sesion.user.id, nombre:(typeof perfil!=='undefined'&&perfil?perfil.nombre:'')}); }catch(e){}
   }
-  await sb.from('gasto_solicitudes').update({estado:'comprada', resuelto_en:new Date().toISOString()}).eq('id',id);
+  await sb.from('gasto_solicitudes').update({estado:'comprada', monto_final:monto, comprobante_path:chPath, resuelto_en:new Date().toISOString()}).eq('id',id);
   toast('Compra registrada en gastos ✓');
   logEv('finanzas','compra solicitada registrada: '+s.concepto+' '+fmt(monto));
   adminCompras();
