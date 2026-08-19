@@ -5240,7 +5240,7 @@ async function leerFacturas(archivos){
     for(const d of fxDocs) d.pdf = fxPdfs[d.uuid] || fxPdfs[d.nombre.replace(/\.xml$/i,'').toUpperCase()] || null;
     if(!fxDocs.length) throw new Error('Ningún XML válido de '+files.length+' archivo(s).'+(errores.length?' Con error: '+errores.join(', '):''));
     st('Buscando pedidos abiertos...');
-    const {data:peds, error} = await sb.from('pedidos_compra').select('id,folio_externo,estado,total, pedido_compra_items(producto_id, productos(codigo))').in('estado',['enviado','parcial']);
+    const {data:peds, error} = await sb.from('pedidos_compra').select('id,folio_externo,estado,total, pedido_compra_items(producto_id, productos(codigo))').in('estado',['enviado','parcial','recibido']).order('id',{ascending:false}).limit(80);
     if(error) throw error;
     fxPedidos = (peds||[]).map(p=>({id:p.id, folio:p.folio_externo, total:p.total,
       codes: new Set((p.pedido_compra_items||[]).map(i=>i.productos?.codigo).filter(Boolean))}));
