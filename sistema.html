@@ -4476,14 +4476,16 @@ function parseEdoIndar(txt){
 async function leerEdoIndar(){
   const filas = parseEdoIndar($('ci-txt')?.value||'');
   if(!filas.length){ toast('No reconocí facturas. Copia toda la página de Facturas Pendientes.', true); return; }
-  const cx = (await sb.from('cuentas_pagar').select('id,concepto,saldo,estado')).data||[];
-  const faltan=[], difs=[], sobran=[], ok=[];
+  const cx = (await sb.from('cuentas_pagar').select('id,concepto,saldo,estado,fecha_vencimiento')).data||[];
+  const faltan=[], difs=[], sobran=[], ok=[], fechasMal=[];
   let sP=0, sS=0;
   for(const f of filas){
     sP += f.saldo;
     const c = cx.find(x=>String(x.concepto).includes(f.folio));
     if(!c){ faltan.push(f); continue; }
     sS += +c.saldo;
+    if(+c.saldo>0 && f.vence && c.fecha_vencimiento !== f.vence)
+      fechasMal.push({id:c.id, folio:f.folio, nuestro:c.fecha_vencimiento, indar:f.vence});
     if(Math.abs(+c.saldo - f.saldo) > 0.02) difs.push({...f, sistema:+c.saldo, id:c.id});
     else ok.push(f.folio);
   }
@@ -4492,7 +4494,7 @@ async function leerEdoIndar(){
     const mm = String(c.concepto).match(/^Factura (\d{7})/);
     if(mm && +c.saldo>0 && !folP.has(mm[1])) sobran.push({id:c.id, folio:mm[1], saldo:+c.saldo, concepto:c.concepto});
   });
-  window._cuadreIndar = {faltan, sobran};
+  window._cuadreIndar = {faltan, sobran, fechasMal};
   const todoBien = !faltan.length && !difs.length && !sobran.length;
   abrirModal(`<h3>⚖️ Resultado del cuadre</h3>
     <div class="kpis" style="margin-bottom:10px">
@@ -4511,6 +4513,10 @@ async function leerEdoIndar(){
     ${sobran.length?`<div class="card" style="border-left:4px solid var(--azul);margin-bottom:8px"><b>ℹ️ ${sobran.length} abiertas en el sistema que Indar YA NO cobra:</b>
       <table style="margin:6px 0">${sobran.map(s=>`<tr><td class="small">${esc(s.concepto)}</td><td class="num">${fmt(s.saldo)}</td></tr>`).join('')}</table>
       <button class="btn sm sec" onclick="aplicarCuadreIndar('sobran')">✔ Marcarlas pagadas/canceladas</button></div>`:''}
+    ${fechasMal.length?`<div class="card" style="border-left:4px solid var(--ambar);margin-bottom:8px"><b>📅 ${fechasMal.length} factura(s) con fecha de vencimiento distinta:</b>
+      <table style="margin:6px 0">${fechasMal.map(d=>`<tr><td><b>${d.folio}</b></td><td class="small">sistema ${fecha(d.nuestro)}</td><td class="small">→ <b>Indar ${fecha(d.indar)}</b></td></tr>`).join('')}</table>
+      <p class="small muted" style="margin:0 0 6px">La fecha que vale es la de Indar (ellos deciden cuándo cobran). El sistema la estimaba con fecha de factura + 30 días.</p>
+      <button class="btn sm" onclick="aplicarCuadreIndar('fechas')">📅 Usar las fechas de Indar</button></div>`:''}
     <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
   logEv('finanzas','cuadre Indar: '+filas.length+' facturas, '+faltan.length+' faltan, '+difs.length+' difieren, '+sobran.length+' sobran');
 }
@@ -4534,6 +4540,13 @@ async function aplicarCuadreIndar(tipo){
       if(!r.error) ok++;
     }
     toast(ok+' cuenta(s) cerradas ✓');
+  } else if(tipo==='fechas'){
+    let ok=0;
+    for(const d of (q.fechasMal||[])){
+      const r = await sb.from('cuentas_pagar').update({fecha_vencimiento:d.indar}).eq('id', d.id);
+      if(!r.error) ok++;
+    }
+    toast(ok+' fecha(s) corregidas a las de Indar ✓');
   }
   cerrarModal(); vFinanzas();
 }
