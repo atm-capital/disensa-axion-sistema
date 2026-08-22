@@ -944,7 +944,7 @@ function pintarVentas(){
         ${v.cancelada?' <span class="badge b-rojo">cancelada</span>':''}
         ${!v.cancelada && v.cancel_solicitada?` <span class="badge b-ambar" title="${esc(v.cancel_motivo||'sin motivo')}">⚠️ canc. solicitada</span>`:''}</div>
       <div style="text-align:right;min-width:110px"><b style="font-size:16px">${fmt(v.total)}</b>
-        ${esFinanzas() && !v.cancelada && u!==undefined?`<div><span class="badge ${u>=0?'b-verde':'b-rojo'}" title="Utilidad de esta venta (sin IVA)">${fmt(u)}</span></div>`:''}</div>
+        ${esFinanzas() && !v.cancelada && u!==undefined?`<div><span class="badge ${u>=0?'b-verde':'b-rojo'}" title="Utilidad de esta venta (sin IVA) y % sobre lo vendido">${fmt(u)}${+v.total>0?' · '+Math.round(u/(+v.total/1.16)*100)+'%':''}</span></div>`:''}</div>
       <div style="white-space:nowrap">
         <button class="btn sec sm" onclick="verVenta(${v.id})">Ver</button><button class="btn sec sm" title="Reimprimir ticket" onclick="reimprimirTicket(${v.id})">🖨</button>
         ${!v.cancelada ? (esAdmin()
@@ -970,12 +970,13 @@ async function verVenta(id){
   const {data, error} = await sb.from('venta_items').select('*, productos(codigo,descripcion)').eq('venta_id', id);
   if(error){ toast(errMsg(error),true); return; }
   const utilTot = data.reduce((s,i)=>s+ (+i.precio_unit/1.16 - +(i.costo_unit||0)) * +i.cantidad, 0);
+  const netoVta = data.reduce((s,i)=>s+ +i.importe, 0)/1.16;
   abrirModal(`<h3>Detalle de venta</h3>
     <div class="tbl-scroll"><table><thead><tr><th>Producto</th><th class="num">Cant</th><th class="num">Precio</th><th class="num">Importe</th>${esFinanzas()?'<th class="num">Costo</th><th class="num">Utilidad</th>':''}</tr></thead>
     <tbody>${data.map(i=>`<tr style="cursor:pointer" title="Ver ficha del producto: historial, stock y foto" onclick="cerrarModal();fichaProducto(${i.producto_id})"><td style="color:var(--naranja,#E8790F)">${esc(i.productos?.codigo)} · ${esc(i.productos?.descripcion)}</td>
       <td class="num">${+i.cantidad}</td><td class="num">${fmt(i.precio_unit)}</td><td class="num">${fmt(i.importe)}</td>
       ${esFinanzas()?`<td class="num small muted">${fmt(i.costo_unit||0)}</td><td class="num">${fmt((+i.precio_unit/1.16 - +(i.costo_unit||0)) * +i.cantidad)}</td>`:''}</tr>`).join('')}</tbody>
-    ${esFinanzas()?`<tfoot><tr><th colspan="5" class="num">Utilidad de la venta (sin IVA, antes de descuento)</th><th class="num">${fmt(Math.round(utilTot*100)/100)}</th></tr></tfoot>`:''}</table></div>
+    ${esFinanzas()?`<tfoot><tr><th colspan="5" class="num">Utilidad de la venta (sin IVA, antes de descuento)</th><th class="num">${fmt(Math.round(utilTot*100)/100)}${netoVta>0?' ('+Math.round(utilTot/netoVta*100)+'%)':''}</th></tr></tfoot>`:''}</table></div>
     <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
 }
 async function cancelarVenta(id){
@@ -2612,7 +2613,7 @@ async function fichaProducto(id){
         <p class="small muted" style="margin:0"><b>${esc(p.codigo)}</b> · ${esc(p.categoria)} · por ${esc(p.unidad||'pza')}${p.codigo_barras?` · CB ${esc(p.codigo_barras)}`:''}${p.activo?'':' · <span class="badge b-gris">inactivo</span>'}</p>
         <p style="margin:8px 0 0">Stock: <b>${+p.stock}</b> ${esc(p.unidad||'pza')} · Precio: <b>${fmt(p.precio)}</b> <span class="small muted">= ${fmt(Math.round(+p.precio/1.16*100)/100)} + ${fmt(Math.round((+p.precio - +p.precio/1.16)*100)/100)} de IVA</span></p>
         <p class="small" style="margin:4px 0 0">${totCam>0?`🚚 <b>En camino: ${totCam} ${esc(p.unidad||'pza')}</b> — ${enCam.map(x=>'pedido '+esc(x.pedidos_compra?.folio_externo||'')+(x.parte?' (parte '+esc(x.parte)+')':'')).join(', ')}`:'<span class="muted">🚚 No viene en ningún pedido</span>'}</p>
-        ${esFinanzas()?`<p class="small" style="margin:4px 0 0">Costo: <b>${fmt(p.costo)}</b> (sin IVA) → utilidad por pieza: <b style="color:var(--verde,#15803d)">${fmt(Math.round((+p.precio/1.16 - +p.costo)*100)/100)}</b> <span class="muted">(la parte del IVA se entrega al SAT, no es ganancia)</span></p>`:''}
+        ${esFinanzas()?`<p class="small" style="margin:4px 0 0">Costo: <b>${fmt(p.costo)}</b> (sin IVA) → utilidad por pieza: <b style="color:var(--verde,#15803d)">${fmt(Math.round((+p.precio/1.16 - +p.costo)*100)/100)} (${+p.precio>0?Math.round((+p.precio/1.16 - +p.costo)/(+p.precio/1.16)*100):0}%)</b> <span class="muted">(la parte del IVA se entrega al SAT, no es ganancia)</span></p>`:''}
       </div>
     </div>
     <div class="kpis" style="margin:12px 0">
