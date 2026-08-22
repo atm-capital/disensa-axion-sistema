@@ -703,12 +703,13 @@ async function vResumen(){
   const esMesActual = !esTodo && (aa===hoy.getFullYear() && mm===hoy.getMonth()+1);
   const nombreMes = esTodo ? 'todo el histórico' : mes.toLocaleDateString('es-MX',{month:'long', year:'numeric'});
   const hace14 = new Date(esMesActual?hoy:new Date(finMes-864e5)); hace14.setDate(hace14.getDate()-13);
-  const [ventasMes, prods, cxp, pedCurso, itemsMes] = await Promise.all([
+  const [ventasMes, prods, cxp, pedCurso, itemsMes, pagosMesR] = await Promise.all([
     traerTodo(()=>sb.from('ventas').select('fecha,total,descuento,cancelada').gte('fecha', mes.toISOString()).lt('fecha', finMes.toISOString()).eq('cancelada', false).order('id')).then(d=>({data:d})),
     traerTodo(()=>sb.from('productos').select('costo,precio,stock,stock_min,activo').eq('activo', true).order('id')).then(d=>({data:d})),
     sb.from('cuentas_pagar').select('*, proveedores(nombre)').neq('estado','pagada').order('fecha_vencimiento'),
     sb.from('pedidos_compra').select('folio_externo,fecha,estado,total,proveedores(nombre)').in('estado',['borrador','enviado','parcial']).order('fecha',{ascending:false}),
     esFinanzas() ? traerTodo(()=>sb.from('venta_items').select('cantidad,precio_unit,costo_unit,ventas!inner(fecha,cancelada)').gte('ventas.fecha', mes.toISOString()).lt('ventas.fecha', finMes.toISOString()).eq('ventas.cancelada', false).order('id')).then(d=>({data:d, error:null})) : Promise.resolve({data:null, error:null}),
+    esFinanzas() ? sb.from('pagos_cxp').select('descuento,referencia').gte('fecha', mes.toISOString().slice(0,10)) : Promise.resolve({data:null}),
   ]);
   for(const r of [ventasMes,prods,cxp,pedCurso]) if(r.error) throw r.error;
   let utilMes = null, margenPct = 0;
@@ -718,6 +719,15 @@ async function vResumen(){
     const descTot = ventasMes.data.reduce((s,v)=>s+ +(v.descuento||0), 0)/1.16;
     utilMes = Math.round((netoTot - costoTot - descTot)*100)/100;
     margenPct = costoTot > 0 ? (utilMes/costoTot*100) : 0;
+  }
+  // v116: ahorro por pronto pago del mes (mismo cálculo que Finanzas)
+  let ahorroMesR = 0;
+  if(esFinanzas() && pagosMesR && pagosMesR.data){
+    ahorroMesR = Math.round(pagosMesR.data.reduce((s,p)=>{
+      if(+p.descuento > 0) return s + +p.descuento;
+      const m = String(p.referencia||'').match(/desc \$?([\d,.]+)/);
+      return s + (m ? +m[1].replace(/,/g,'') : 0);
+    }, 0)*100)/100;
   }
   const vHoy = ventasMes.data.filter(v=>new Date(v.fecha)>=hoy);
   const totHoy = vHoy.reduce((s,v)=>s+ +v.total,0);
@@ -779,6 +789,7 @@ async function vResumen(){
       ${(esMesActual||esTodo)?`<div class="kpi" style="cursor:pointer" title="Ir a Ventas" onclick="irA('ventas')"><div class="l">Ventas de hoy</div><div class="v">${fmt(totHoy)}</div><div class="s">${vHoy.length} venta(s)</div></div>`:''}
       <div class="kpi" style="cursor:pointer" title="Ir a Ventas" onclick="irA('ventas')"><div class="l">Ventas de ${esc(nombreMes)}</div><div class="v">${fmt(totMes)}</div><div class="s">${ventasMes.data.length} venta(s) · ${fmt(promDia)} por día</div></div>
       ${utilMes!==null ? `<div class="kpi" style="cursor:pointer" title="Ir a Ventas" onclick="irA('ventas')"><div class="l">Utilidad de ${esc(nombreMes)}</div><div class="v" style="color:${utilMes>=0?'#15803d':'#b91c1c'}">${fmt(utilMes)}</div><div class="s">margen <b>${margenPct.toFixed(0)}%</b> sobre costo · sin IVA</div></div>` : ''}
+      ${utilMes!==null && ahorroMesR>0 ? `<div class="kpi" style="border-top-color:var(--verde)"><div class="l">💰 Utilidad REAL de ${esc(nombreMes)}</div><div class="v" style="color:#15803d">${fmt(Math.round((utilMes+ahorroMesR)*100)/100)}</div><div class="s">ventas ${fmt(utilMes)} + pronto pago ${fmt(ahorroMesR)}</div></div>` : ''}
       <div class="kpi" style="cursor:pointer" title="Ir a Inventario" onclick="irA('inventario')"><div class="l">Valor de inventario (sin IVA)</div><div class="v">${fmt(valInv)}</div><div class="s">con IVA: <b>${fmt(Math.round(valInv*116)/100)}</b> · a costo · ${prods.data.length} productos</div></div>
       <div class="kpi" style="cursor:pointer" title="Ir a Inventario" onclick="irA('inventario')"><div class="l">Stock bajo</div><div class="v">${bajos}</div><div class="s">productos en o bajo mínimo</div></div>
       <div class="kpi" style="cursor:pointer" title="Ir a Finanzas" onclick="irA('finanzas')"><div class="l">Por pagar</div><div class="v">${fmt(porPagar)}</div>
