@@ -3606,16 +3606,17 @@ async function entregarApartado(id){
       <tr><td>− Anticipo (${esc(a.metodo_anticipo)}, ${fecha(a.fecha)})</td><td class="num" style="color:var(--verde,#15803d)">−${fmt(a.anticipo)}</td></tr>
       <tr><th style="border-top:2px solid var(--linea);font-size:17px">Cobrar ahora</th><th class="num" style="border-top:2px solid var(--linea);font-size:19px">${fmt(a.saldo)}</th></tr>
     </tbody></table>
-    <label>¿Cómo paga el saldo?</label>
+    ${+a.saldo>0?`<label>¿Cómo paga el saldo?</label>
     <select id="ape-met"><option value="efectivo">💵 Efectivo</option><option value="tarjeta">💳 Tarjeta</option>
-      <option value="transferencia">🏦 Transferencia</option><option value="ak_pago">📱 AK Pago</option></select>
-    <div class="acciones"><button class="btn" onclick="confirmarEntrega(${id})">Cobrar y entregar</button>
+      <option value="transferencia">🏦 Transferencia</option><option value="ak_pago">📱 AK Pago</option></select>`
+    :`<p style="color:#15803d;margin:6px 0"><b>✅ Ya está liquidado</b> — pagó con <b>${esc(a.metodo_anticipo)}</b> al apartar. Nada que cobrar, solo entregar.</p>`}
+    <div class="acciones"><button class="btn" onclick="confirmarEntrega(${id})">${+a.saldo>0?'Cobrar y entregar':'✅ Entregar'}</button>
       <button class="btn sec" onclick="cerrarModal()">Cancelar</button></div>`, true);
 }
 async function confirmarEntrega(id){
   const a = (await sb.from('apartados').select('*, apartado_items(*)').eq('id',id).single()).data;
   if(!a) return;
-  const met = $('ape-met').value;
+  const met = $('ape-met') ? $('ape-met').value : (a.metodo_anticipo||'efectivo'); // liquidado: usa el método con que dejó el anticipo
   const items = (a.apartado_items||[]).filter(i=>i.producto_id).map(i=>({producto_id:i.producto_id, cantidad:+i.cantidad, precio_unit:+i.precio_unit}));
   if(!items.length){ toast('El apartado no tiene productos del inventario', true); return; }
   const {data:vid, error} = await sb.rpc('registrar_venta', {
