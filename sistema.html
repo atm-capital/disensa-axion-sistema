@@ -4066,7 +4066,8 @@ async function historialSaldos(){
     <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
 }
 async function vFinanzas(){
-  if(esAdmin()) $('vtools').innerHTML = `<button class="btn" onclick="asistentePago()">💸 Pagar facturas</button>
+  if(esAdmin()) $('vtools').innerHTML = `<button class="btn" onclick="pegarReciboIndar()">💸 Registrar pago</button>
+    <button class="btn sec" onclick="asistentePago()">📅 Qué pagar</button>
     <button class="btn sec" onclick="nuevaCuenta()">+ Cuenta por pagar</button>
     <button class="btn sec" onclick="nuevoGasto()">+ Gasto</button>
     <button class="btn sec" onclick="historialPagos()">📜 Pagos hechos</button>
@@ -4245,9 +4246,12 @@ function pintarBarraPago(){
    Aquí pegas el recibo tal cual y el sistema toma el importe EXACTO de cada una.
 ============================================================ */
 function pegarReciboIndar(){
-  abrirModal(`<h3>📋 Pegar el recibo de cobro de Indar</h3>
-    <p class="small muted" style="margin:0 0 8px">En <b>indar.mx → Pago en línea</b> te sale el "Recibo de Cobro" con el desglose.
-    Selecciona todo el texto (Ctrl+A), cópialo (Ctrl+C) y pégalo aquí. También sirve copiar el texto del PDF.</p>
+  abrirModal(`<h3>💸 Registrar pago — recibo de Indar</h3>
+    <div class="field"><label>📄 Sube el PDF del Recibo de Cobro (lo lee solo)</label>
+      <input type="file" accept="application/pdf" onchange="leerPdfRecibo(this)"></div>
+    <p class="small muted" style="margin:0 0 8px">En <b>indar.mx → Pago en línea</b> guarda el "Recibo de Cobro" como PDF (Ctrl+P → Guardar como PDF) y súbelo aquí.
+    El sistema saca las facturas y el descuento exacto de cada una; al final solo subes el comprobante de la transferencia.
+    <br>…o si prefieres, pega el texto abajo como siempre:</p>
     <div class="card" style="padding:9px;background:#f8fafc;margin-bottom:8px">
       <div class="small muted">Se ve así:</div>
       <pre class="small" style="margin:4px 0 0;white-space:pre-wrap;font-size:11.5px">2771877  1006.42  4.00%   40.2568  2026-08-08    966.16
@@ -4256,6 +4260,32 @@ function pegarReciboIndar(){
     <div class="acciones" style="margin-top:8px"><button class="btn sec" onclick="cerrarModal()">Cancelar</button>
       <button class="btn" onclick="leerReciboIndar()">Leer recibo →</button></div>`, true);
   setTimeout(()=>$('ri-txt')?.focus(), 100);
+}
+// ===== v121: leer el Recibo de Cobro directo del PDF (pdf.js de cdnjs) =====
+async function leerPdfRecibo(inp){
+  const f = inp.files && inp.files[0]; if(!f) return;
+  toast('Leyendo el PDF…');
+  try{
+    if(!window.pdfjsLib){
+      await new Promise((res,rej)=>{ const s=document.createElement('scr'+'ipt');
+        s.src='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+        s.onload=res; s.onerror=()=>rej(new Error('sin internet')); document.head.appendChild(s); });
+      pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    }
+    const buf = await f.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({data:buf}).promise;
+    const lineas = [];
+    for(let p=1; p<=pdf.numPages; p++){
+      const tc = await (await pdf.getPage(p)).getTextContent();
+      const porY = {};
+      tc.items.forEach(it=>{ const y = Math.round(it.transform[5]/2)*2; (porY[y]=porY[y]||[]).push(it); });
+      Object.keys(porY).map(Number).sort((a,b)=>b-a).forEach(y=>{
+        lineas.push(porY[y].sort((a,b)=>a.transform[4]-b.transform[4]).map(i=>i.str).join(' '));
+      });
+    }
+    if($('ri-txt')) $('ri-txt').value = lineas.join('\n');
+    leerReciboIndar();
+  }catch(e){ toast('No pude leer el PDF ('+(e.message||e)+') — pega el texto abajo.', true); }
 }
 function parsearRecibo(txt){
   // factura | saldo | %desc | imp.desc | vencimiento | importe a cobrar
