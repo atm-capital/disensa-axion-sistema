@@ -3661,6 +3661,27 @@ async function imprimirApartado(id){
    VISTA: CORTE DE CAJA (v72)
 ============================================================ */
 function hoyMX(){ return new Date(Date.now() - 6*3600e3).toISOString().slice(0,10); }
+// ===== v117: panel ¿dónde está el efectivo? (cajón / caja chica / banco) =====
+async function pintarEfectivo(cajon){
+  const el = $('efectivo-panel'); if(!el) return;
+  const [ct, mv, dp] = await Promise.all([
+    sb.from('cortes_caja').select('deposito'),
+    sb.from('caja_movs').select('tipo,monto'),
+    sb.from('depositos_cuenta').select('monto,fecha')
+  ]);
+  const S = (a,f)=>((a||[]).filter(f).reduce((s,x)=>s+ +x.monto,0));
+  const deCortes = (ct.data||[]).reduce((s,x)=>s+ +(x.deposito||0),0);
+  const alBanco = S(dp.data,()=>true);
+  const chica = Math.round((deCortes + S(mv.data,m=>m.tipo==='retiro') - S(mv.data,m=>m.tipo==='entrada') - alBanco)*100)/100;
+  const mes = hoyMX().slice(0,7);
+  const bancoMes = S(dp.data,d=>String(d.fecha).startsWith(mes));
+  el.innerHTML = `<div class="kpis" style="margin-bottom:6px">
+    <div class="kpi"><div class="l">🗄️ En el cajón (hoy)</div><div class="v">${fmt(cajon)}</div><div class="s">para vender y dar cambio</div></div>
+    <div class="kpi" style="outline:2px solid var(--naranja,#e8862d)"><div class="l">🏠 Caja chica guardada</div><div class="v" style="color:${chica<0?'#b91c1c':'inherit'}">${fmt(chica)}</div><div class="s">de los cortes, aún sin depositar</div></div>
+    <div class="kpi"><div class="l">🏦 Ya en el banco</div><div class="v">${fmt(alBanco)}</div><div class="s">${fmt(bancoMes)} este mes · con ticket</div></div>
+  </div>
+  <p class="small muted" style="margin:0">Así viaja el dinero: <b>ventas → cajón</b> → en el corte se deja el fondo y el resto pasa a la <b>caja chica</b> → de ahí se lleva al <b>banco</b> con su ticket (sección 🏦 abajo). Cuenten la caja chica de vez en cuando: debe traer <b>${fmt(chica)}</b> — si no cuadra, avisen.</p>`;
+}
 async function vCaja(){
   const f = window._cajaFecha || hoyMX();
   const [cfgR, vtR, mvR, ctR, hisR] = await Promise.all([
@@ -3691,6 +3712,10 @@ async function vCaja(){
       <div class="kpi"><div class="l">Otros pagos</div><div class="v">${fmt(totOtros)}</div><div class="s">${Object.keys(otros).map(k=>(ico[k]||'')+' '+fmt(otros[k])).join(' · ')||'—'}</div></div>
       <div class="kpi"><div class="l">Retiros y gastos</div><div class="v">${fmt(retiros)}</div><div class="s">${movs.length} movimiento(s)</div></div>
       <div class="kpi" style="outline:2px solid var(--naranja,#e8862d)"><div class="l">Efectivo que debe haber</div><div class="v">${fmt(esperado)}</div><div class="s">fondo ${fmt(fondoUsar)} + ventas − retiros</div></div>
+    </div>
+    <div class="card"><h3>💵 ¿Dónde está el efectivo?</h3>
+      <div id="efectivo-panel"><span class="small muted">Calculando…</span></div>
+      <span style="display:none">${setTimeout(()=>{ if(typeof pintarEfectivo==='function') pintarEfectivo(window._cajaCalc.esperado); },150)&&''}</span>
     </div>
     <div class="card">
       <h3>${corte?'✅ Corte del '+fecha(f):'Corte de caja · '+fecha(f)}</h3>
