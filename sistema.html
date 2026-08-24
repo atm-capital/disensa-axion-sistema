@@ -3971,14 +3971,15 @@ async function calcularDinero(hoy){
     if(!D.cap){ D.banco = 0; D.otros = 0; D.desde = null; return D; }
     D.banco = +D.cap.banco; D.otros = +D.cap.otros;
     D.desde = D.cap.fecha;
-    const desdeISO = new Date(D.cap.fecha+'T00:00:00').toISOString();
-    // ENTRÓ: ventas no-crédito desde la captura
-    const vts = await traerTodo(()=>sb.from('ventas').select('total,metodo_pago,cancelada').gte('fecha', desdeISO).eq('cancelada',false).order('id'));
+    // v122: se compara contra el MOMENTO exacto de la captura (lo de antes ya viene dentro del saldo capturado)
+    const desdeISO = D.cap.creado || new Date(D.cap.fecha+'T00:00:00').toISOString();
+    // ENTRÓ: ventas no-crédito DESPUÉS de la captura
+    const vts = await traerTodo(()=>sb.from('ventas').select('total,metodo_pago,cancelada').gt('fecha', desdeISO).eq('cancelada',false).order('id'));
     D.entroVentas = (vts||[]).filter(v=>v.metodo_pago!=='credito').reduce((s,v)=>s+ +v.total,0);
-    // SALIÓ: pagos a proveedores + gastos, desde la captura
-    const pg = await sb.from('pagos_cxp').select('monto').gte('fecha', D.cap.fecha);
+    // SALIÓ: pagos a proveedores + gastos registrados DESPUÉS de la captura
+    const pg = await sb.from('pagos_cxp').select('monto').gt('creado', desdeISO);
     D.salioPagos = (pg.data||[]).reduce((s,x)=>s+ +x.monto,0);
-    const gs = await sb.from('gastos').select('monto,tipo').gte('fecha', D.cap.fecha);
+    const gs = await sb.from('gastos').select('monto,tipo').gt('creado', desdeISO);
     D.salioGastos = (gs.data||[]).reduce((s,x)=>s+ +x.monto,0);
     D.calculado = Math.round((D.banco + D.otros + D.efectivoCaja + D.entroVentas - D.salioPagos - D.salioGastos)*100)/100;
     D.capturado = Math.round((D.banco + D.otros + D.efectivoCaja)*100)/100;
@@ -4004,12 +4005,12 @@ function panelDinero(D){
     <div class="kpis" style="margin-top:10px">
       <div class="kpi" style="border-top-color:var(--verde)"><div class="l">Deberíamos tener HOY</div>
         <div class="v" style="font-size:27px;color:#15803d">${fmt(D.calculado)}</div>
-        <div class="s">banco + caja + lo que entró − lo que salió</div></div>
+        <div class="s">lo capturado + lo que entró − lo que salió después de la captura</div></div>
       <div class="kpi"><div class="l">Lo que capturaste el ${fecha(D.desde)}</div><div class="v">${fmt(D.capturado)}</div>
         <div class="s">🏦 banco ${fmt(D.banco)}${D.otros?' · otros '+fmt(D.otros):''} · 💵 caja ${fmt(D.efectivoCaja)}</div></div>
-      <div class="kpi" style="border-top-color:var(--verde)"><div class="l">Entró desde entonces</div><div class="v" style="color:#15803d">+${fmt(D.entroVentas)}</div>
+      <div class="kpi" style="border-top-color:var(--verde)"><div class="l">Entró después de la captura</div><div class="v" style="color:#15803d">+${fmt(D.entroVentas)}</div>
         <div class="s">ventas cobradas (sin crédito)</div></div>
-      <div class="kpi" style="border-top-color:var(--rojo)"><div class="l">Salió desde entonces</div><div class="v" style="color:#b91c1c">−${fmt(D.salioPagos + D.salioGastos)}</div>
+      <div class="kpi" style="border-top-color:var(--rojo)"><div class="l">Salió después de la captura</div><div class="v" style="color:#b91c1c">−${fmt(D.salioPagos + D.salioGastos)}</div>
         <div class="s">pagos ${fmt(D.salioPagos)} · gastos ${fmt(D.salioGastos)}</div></div>
     </div>
     <div class="acciones" style="margin-top:8px">
