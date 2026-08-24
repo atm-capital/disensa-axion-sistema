@@ -4018,6 +4018,18 @@ async function calcularDinero(hoy){
     const cfg = await sb.from('caja_config').select('fondo_fijo').eq('id',1).single();
     D.fondo = +(cfg.data?.fondo_fijo || 0);
     D.efectivoCaja = D.corte ? +(D.corte.deja_fondo || 0) : D.fondo;
+    // v124: caja chica (anclada al último conteo, igual que en Corte de caja)
+    const [ctc, mvc, dpc, ccc] = await Promise.all([
+      sb.from('cortes_caja').select('fecha,deposito'),
+      sb.from('caja_movs').select('tipo,monto,fecha'),
+      sb.from('depositos_cuenta').select('monto,fecha'),
+      sb.from('caja_chica_conteos').select('*').order('id',{ascending:false}).limit(1)
+    ]);
+    const conteoC = ((ccc.data)||[])[0] || null;
+    const desdeC = x => !conteoC || String(x.fecha) > String(conteoC.fecha);
+    const SC = (a,f)=>((a||[]).filter(x=>desdeC(x)&&f(x)).reduce((s,x)=>s+ +x.monto,0));
+    D.cajaChica = Math.round(((conteoC?+conteoC.monto:0) + ((ctc.data)||[]).filter(desdeC).reduce((s,x)=>s+ +(x.deposito||0),0)
+      + SC(mvc.data,m=>m.tipo==='retiro') - SC(mvc.data,m=>m.tipo==='entrada') - SC(dpc.data,()=>true))*100)/100;
     if(!D.cap){ D.banco = 0; D.otros = 0; D.desde = null; return D; }
     D.banco = +D.cap.banco; D.otros = +D.cap.otros;
     D.desde = D.cap.fecha;
@@ -4025,16 +4037,22 @@ async function calcularDinero(hoy){
     const desdeISO = D.cap.creado || new Date(D.cap.fecha+'T00:00:00').toISOString();
     // ENTRÓ: ventas no-crédito DESPUÉS de la captura
     const vts = await traerTodo(()=>sb.from('ventas').select('total,metodo_pago,cancelada').gt('fecha', desdeISO).eq('cancelada',false).order('id'));
-    D.entroVentas = (vts||[]).filter(v=>v.metodo_pago!=='credito').reduce((s,v)=>s+ +v.total,0);
+    const vivasV = (vts||[]).filter(v=>v.metodo_pago!=='credito');
+    D.entroVentas = vivasV.reduce((s,v)=>s+ +v.total,0);
+    const ventasEf = vivasV.filter(v=>v.metodo_pago==='efectivo').reduce((s,v)=>s+ +v.total,0);
     // SALIÓ: pagos a proveedores + gastos registrados DESPUÉS de la captura
     const pg = await sb.from('pagos_cxp').select('monto').gt('creado', desdeISO);
     D.salioPagos = (pg.data||[]).reduce((s,x)=>s+ +x.monto,0);
-    const gs = await sb.from('gastos').select('monto,tipo').gt('creado', desdeISO);
+    const gs = await sb.from('gastos').select('monto,metodo').gt('creado', desdeISO);
     D.salioGastos = (gs.data||[]).reduce((s,x)=>s+ +x.monto,0);
+    const gastosEf = (gs.data||[]).filter(g=>g.metodo==='efectivo').reduce((s,x)=>s+ +x.monto,0);
     // v123: aportaciones de socios después de la captura también son entradas
     const ap = await sb.from('socios_aportaciones').select('monto').gt('creado', desdeISO).neq('via','histórico');
     D.entroAportes = (ap.data||[]).reduce((s,x)=>s+ +x.monto,0);
-    D.calculado = Math.round((D.banco + D.otros + D.efectivoCaja + D.entroVentas + D.entroAportes - D.salioPagos - D.salioGastos)*100)/100;
+    // v124: banco y efectivo por separado; el total es la suma
+    D.bancoHoy = Math.round((D.banco + D.otros + D.entroAportes + (D.entroVentas - ventasEf) - D.salioPagos - (D.salioGastos - gastosEf))*100)/100;
+    D.efectivoHoy = Math.round((D.efectivoCaja + (D.cajaChica||0) + ventasEf - gastosEf)*100)/100;
+    D.calculado = Math.round((D.bancoHoy + D.efectivoHoy)*100)/100;
     D.capturado = Math.round((D.banco + D.otros + D.efectivoCaja)*100)/100;
     D.dias = Math.round((hoy - new Date(D.cap.fecha+'T00:00:00'))/864e5);
   }catch(e){ D.ok = false; }
@@ -4056,15 +4074,16 @@ function panelDinero(D){
       <b style="font-size:17px">💰 ¿Cuánto dinero tenemos?</b>
       <span class="small muted">Último saldo capturado: <b>${fecha(D.desde)}</b>${viejo?` <span class="badge b-ambar">hace ${D.dias} días — conviene actualizarlo</span>`:''}</span></div>
     <div class="kpis" style="margin-top:10px">
-      <div class="kpi" style="border-top-color:var(--verde)"><div class="l">Deberíamos tener HOY</div>
+      <div class="kpi" style="border-top-color:var(--verde)"><div class="l">💰 Deberíamos tener HOY</div>
         <div class="v" style="font-size:27px;color:#15803d">${fmt(D.calculado)}</div>
-        <div class="s">lo capturado + lo que entró − lo que salió después de la captura</div></div>
-      <div class="kpi"><div class="l">Lo que capturaste el ${fecha(D.desde)}</div><div class="v">${fmt(D.capturado)}</div>
-        <div class="s">🏦 banco ${fmt(D.banco)}${D.otros?' · otros '+fmt(D.otros):''} · 💵 caja ${fmt(D.efectivoCaja)}</div></div>
-      <div class="kpi" style="border-top-color:var(--verde)"><div class="l">Entró después de la captura</div><div class="v" style="color:#15803d">+${fmt(D.entroVentas + (D.entroAportes||0))}</div>
-        <div class="s">ventas ${fmt(D.entroVentas)}${D.entroAportes?' · aportaciones '+fmt(D.entroAportes):''}</div></div>
-      <div class="kpi" style="border-top-color:var(--rojo)"><div class="l">Salió después de la captura</div><div class="v" style="color:#b91c1c">−${fmt(D.salioPagos + D.salioGastos)}</div>
-        <div class="s">pagos ${fmt(D.salioPagos)} · gastos ${fmt(D.salioGastos)}</div></div>
+        <div class="s">banco + efectivo en cajas</div></div>
+      <div class="kpi"><div class="l">🏦 En el banco</div><div class="v">${fmt(D.bancoHoy)}</div>
+        <div class="s">capturado el ${fecha(D.desde)} + movimientos</div></div>
+      <div class="kpi"><div class="l">💵 Efectivo en cajas</div><div class="v">${fmt(D.efectivoHoy)}</div>
+        <div class="s">cajón ${fmt(D.efectivoCaja)} · caja chica ${fmt(D.cajaChica||0)}</div></div>
+      <div class="kpi"><div class="l">Desde la captura</div>
+        <div class="v" style="font-size:19px"><span style="color:#15803d">+${fmt(D.entroVentas + (D.entroAportes||0))}</span> · <span style="color:#b91c1c">−${fmt(D.salioPagos + D.salioGastos)}</span></div>
+        <div class="s">entró: ventas${D.entroAportes?' y aportaciones':''} · salió: pagos y gastos</div></div>
     </div>
     <div class="acciones" style="margin-top:8px">
       <button class="btn" onclick="capturarSaldo()">💵 Capturar saldo real de hoy</button>
