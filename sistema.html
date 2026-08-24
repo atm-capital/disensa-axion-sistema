@@ -3510,7 +3510,8 @@ function nuevoApartado(){
     <div id="ap-res" class="small"></div>
     <div id="ap-lista" style="margin:10px 0"></div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-      <div><label>💵 Anticipo que deja</label><input type="number" id="ap-ant" step="0.01" placeholder="0.00" oninput="calcAp()"></div>
+      <div><label>💵 Anticipo que deja</label><input type="number" id="ap-ant" step="0.01" placeholder="0.00" oninput="calcAp()">
+        <button class="btn sm sec" style="margin-top:4px" onclick="$('ap-ant').value=apItems.reduce((s,i)=>s+i.cantidad*i.precio_unit,0).toFixed(2); calcAp()">💯 Dejó liquidado</button></div>
       <div><label>Forma de pago del anticipo</label><select id="ap-met">
         <option value="efectivo">💵 Efectivo</option><option value="tarjeta">💳 Tarjeta</option>
         <option value="transferencia">🏦 Transferencia</option><option value="ak_pago">📱 AK Pago</option></select></div>
@@ -3530,10 +3531,25 @@ async function buscarProdAp(){
   const el = $('ap-res');
   if(q.length<2){ el.innerHTML=''; return; }
   const r = await sb.from('productos').select('id,codigo,descripcion,precio,stock,unidad').or(`codigo.ilike.%${q}%,descripcion.ilike.%${q}%`).eq('activo',true).limit(8);
-  el.innerHTML = (r.data||[]).map(p=>`<div style="padding:7px;border-bottom:1px solid var(--linea);cursor:pointer" onclick='addProdAp(${JSON.stringify(p).replace(/'/g,"&#39;")})'>
+  let html = (r.data||[]).map(p=>`<div style="padding:7px;border-bottom:1px solid var(--linea);cursor:pointer" onclick='addProdAp(${JSON.stringify(p).replace(/'/g,"&#39;")})'>
     <b>${esc(p.codigo)}</b> ${esc(p.descripcion.slice(0,42))} · <b>${fmt(p.precio)}</b>
-    <span class="small ${+p.stock>0?'muted':''}" ${+p.stock<=0?'style="color:#d97706"':''}>${+p.stock>0?'stock '+(+p.stock):'sin stock (se aparta para cuando llegue)'}</span></div>`).join('')
-    || '<p class="small muted" style="padding:6px">Sin resultados</p>';
+    <span class="small ${+p.stock>0?'muted':''}" ${+p.stock<=0?'style="color:#d97706"':''}>${+p.stock>0?'stock '+(+p.stock):'sin stock (se aparta para cuando llegue)'}</span></div>`).join('');
+  // v119: si no está en inventario, buscar en el catálogo Indar y darlo de alta al apartarlo
+  if(!html && q.length>=3){
+    const ci = await sb.rpc('buscar_catalogo_indar', { q });
+    window._apCat = ci.data||[];
+    html = window._apCat.slice(0,8).map((x,i)=>`<div style="padding:7px;border-bottom:1px solid var(--linea);cursor:pointer" onclick="altaYApartar(${i})">
+      <b>${esc(x.codigo)}</b> ${esc((x.descripcion||'').slice(0,42))} <span class="badge b-azul">catálogo Indar · por encargo</span></div>`).join('');
+  }
+  el.innerHTML = html || '<p class="small muted" style="padding:6px">Sin resultados (ni en el catálogo Indar)</p>';
+}
+async function altaYApartar(i){
+  const x = (window._apCat||[])[i]; if(!x) return;
+  const r = await sb.rpc('alta_producto_indar', { p_codigo: x.codigo });
+  if(r.error){ toast(errMsg(r.error), true); return; }
+  const p = r.data;
+  addProdAp({id:p.id, codigo:p.codigo, descripcion:p.descripcion, precio:+p.precio, stock:+p.stock});
+  toast('Dado de alta y apartado por encargo ✓ (precio '+fmt(p.precio)+')');
 }
 function addProdAp(p){
   const ex = apItems.find(x=>x.producto_id===p.id);
@@ -3553,7 +3569,7 @@ function calcAp(){
   const tot = apItems.reduce((s,i)=>s+i.cantidad*i.precio_unit,0);
   const ant = +($('ap-ant')?$('ap-ant').value:0)||0;
   const t = $('ap-tot');
-  if(t) t.innerHTML = `Total: <b>${fmt(tot)}</b> · Anticipo: <b style="color:var(--verde,#15803d)">${fmt(ant)}</b> · Queda a pagar: <b>${fmt(Math.max(0, Math.round((tot-ant)*100)/100))}</b>`;
+  if(t) t.innerHTML = `Total: <b>${fmt(tot)}</b> · Anticipo: <b style="color:var(--verde,#15803d)">${fmt(ant)}</b> · Queda a pagar: <b>${fmt(Math.max(0, Math.round((tot-ant)*100)/100))}</b>${tot>0&&ant>=tot?' <span class="badge b-verde">✅ LIQUIDADO — solo se entrega cuando llegue</span>':''}`;
 }
 async function guardarApartado(){
   const tot = apItems.reduce((s,i)=>s+i.cantidad*i.precio_unit,0);
