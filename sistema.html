@@ -3661,26 +3661,56 @@ async function imprimirApartado(id){
    VISTA: CORTE DE CAJA (v72)
 ============================================================ */
 function hoyMX(){ return new Date(Date.now() - 6*3600e3).toISOString().slice(0,10); }
-// ===== v117: panel ¿dónde está el efectivo? (cajón / caja chica / banco) =====
+// ===== v117-v118: panel ¿dónde está el efectivo? con ancla de conteo físico =====
 async function pintarEfectivo(cajon){
   const el = $('efectivo-panel'); if(!el) return;
-  const [ct, mv, dp] = await Promise.all([
-    sb.from('cortes_caja').select('deposito'),
-    sb.from('caja_movs').select('tipo,monto'),
-    sb.from('depositos_cuenta').select('monto,fecha')
+  const [ct, mv, dp, cc] = await Promise.all([
+    sb.from('cortes_caja').select('fecha,deposito'),
+    sb.from('caja_movs').select('tipo,monto,fecha'),
+    sb.from('depositos_cuenta').select('monto,fecha'),
+    sb.from('caja_chica_conteos').select('*').order('id',{ascending:false}).limit(1)
   ]);
-  const S = (a,f)=>((a||[]).filter(f).reduce((s,x)=>s+ +x.monto,0));
-  const deCortes = (ct.data||[]).reduce((s,x)=>s+ +(x.deposito||0),0);
-  const alBanco = S(dp.data,()=>true);
-  const chica = Math.round((deCortes + S(mv.data,m=>m.tipo==='retiro') - S(mv.data,m=>m.tipo==='entrada') - alBanco)*100)/100;
+  const conteo = (cc.data||[])[0] || null;
+  const desde = x => !conteo || String(x.fecha) > String(conteo.fecha);
+  const S = (a,f)=>((a||[]).filter(x=>desde(x)&&f(x)).reduce((s,x)=>s+ +x.monto,0));
+  const deCortes = (ct.data||[]).filter(desde).reduce((s,x)=>s+ +(x.deposito||0),0);
+  const alBanco = ((dp.data||[])).reduce((s,x)=>s+ +x.monto,0);
+  const bancoDesde = S(dp.data,()=>true);
+  const base = conteo ? +conteo.monto : 0;
+  const chica = Math.round((base + deCortes + S(mv.data,m=>m.tipo==='retiro') - S(mv.data,m=>m.tipo==='entrada') - bancoDesde)*100)/100;
+  window._chicaActual = chica;
   const mes = hoyMX().slice(0,7);
-  const bancoMes = S(dp.data,d=>String(d.fecha).startsWith(mes));
+  const bancoMes = ((dp.data||[]).filter(d=>String(d.fecha).startsWith(mes))).reduce((s,x)=>s+ +x.monto,0);
   el.innerHTML = `<div class="kpis" style="margin-bottom:6px">
     <div class="kpi"><div class="l">🗄️ En el cajón (hoy)</div><div class="v">${fmt(cajon)}</div><div class="s">para vender y dar cambio</div></div>
-    <div class="kpi" style="outline:2px solid var(--naranja,#e8862d)"><div class="l">🏠 Caja chica guardada</div><div class="v" style="color:${chica<0?'#b91c1c':'inherit'}">${fmt(chica)}</div><div class="s">de los cortes, aún sin depositar</div></div>
+    <div class="kpi" style="outline:2px solid var(--naranja,#e8862d)"><div class="l">🏠 Caja chica guardada</div><div class="v" style="color:${chica<0?'#b91c1c':'inherit'}">${fmt(chica)}</div><div class="s">${conteo?'desde el conteo del '+fecha(conteo.fecha):'de los cortes, aún sin depositar'}</div></div>
     <div class="kpi"><div class="l">🏦 Ya en el banco</div><div class="v">${fmt(alBanco)}</div><div class="s">${fmt(bancoMes)} este mes · con ticket</div></div>
   </div>
-  <p class="small muted" style="margin:0">Así viaja el dinero: <b>ventas → cajón</b> → en el corte se deja el fondo y el resto pasa a la <b>caja chica</b> → de ahí se lleva al <b>banco</b> con su ticket (sección 🏦 abajo). Cuenten la caja chica de vez en cuando: debe traer <b>${fmt(chica)}</b> — si no cuadra, avisen.</p>`;
+  <p class="small muted" style="margin:0 0 6px">Así viaja el dinero: <b>ventas → cajón</b> → en el corte se deja el fondo y el resto pasa a la <b>caja chica</b> → de ahí se lleva al <b>banco</b> con su ticket (sección 🏦 abajo). La caja chica debe traer <b>${fmt(chica)}</b>.</p>
+  ${typeof puedeVender==='function'&&puedeVender()?`<button class="btn sm sec" onclick="conteoChica()">⚖️ Conté la caja chica</button>`:''}
+  ${conteo?` <span class="small muted">Último conteo: ${fecha(conteo.fecha)}${conteo.nombre?' por '+esc(conteo.nombre):''}${conteo.esperado!==null&&Math.abs(+conteo.monto-+conteo.esperado)>0.5?' · '+(+conteo.monto>+conteo.esperado?'sobraron ':'faltaron ')+fmt(Math.abs(+conteo.monto-+conteo.esperado)):''}</span>`:''}`;
+}
+function conteoChica(){
+  abrirModal(`<h3>⚖️ Conteo de caja chica</h3>
+    <p class="small muted" style="margin:0 0 10px">Cuenta TODO el efectivo guardado (sin contar el cajón). Según el sistema debe haber <b>${fmt(window._chicaActual||0)}</b>. Hazlo de preferencia después del corte y de registrar depósitos del día.</p>
+    <div class="field"><label>¿Cuánto contaste?</label><input id="cc-monto" type="number" step="0.01" style="font-size:20px" placeholder="0.00"></div>
+    <div class="field"><label>Nota (opcional)</label><input id="cc-nota" placeholder="Ej. contado junto con Marco"></div>
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cancelar</button>
+      <button class="btn" onclick="guardarConteoChica()">Guardar conteo</button></div>`);
+  setTimeout(()=>$('cc-monto')?.focus(),100);
+}
+async function guardarConteoChica(){
+  if($('cc-monto').value===''){ toast('Pon cuánto contaste', true); return; }
+  const monto = +($('cc-monto').value||0);
+  const esperado = window._chicaActual===undefined?null:window._chicaActual;
+  const {error} = await sb.from('caja_chica_conteos').insert({monto, esperado,
+    nota:($('cc-nota').value||'').trim(), nombre:(typeof perfil!=='undefined'&&perfil?perfil.nombre:''), usuario_id: sesion.user.id});
+  if(error){ toast(errMsg(error), true); return; }
+  const dif = esperado===null?0:Math.round((monto-esperado)*100)/100;
+  cerrarModal();
+  toast(Math.abs(dif)<0.5?'Conteo guardado — cuadró exacto ✓':('Conteo guardado. '+(dif>0?'Sobraron ':'Faltaron ')+fmt(Math.abs(dif))));
+  logEv('caja','conteo caja chica: '+fmt(monto)+(esperado!==null?' (esperado '+fmt(esperado)+')':''));
+  vCaja();
 }
 async function vCaja(){
   const f = window._cajaFecha || hoyMX();
