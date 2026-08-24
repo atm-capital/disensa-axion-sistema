@@ -3955,6 +3955,56 @@ let cxpData = [];
    Calculado = ese saldo capturado + lo que entró y salió DESPUÉS, según el sistema.
    La diferencia entre los dos es la señal de que algo no se registró.
 ============================================================ */
+// ===== v123: aportaciones de socios =====
+const APORTE_META = 248132.83; // parte igual por socio del plan medio ($550 mil, acordado jul-2026)
+async function pintarAportaciones(){
+  const el = $('aportes-panel'); if(!el) return;
+  const r = await sb.from('socios_aportaciones').select('*').order('id',{ascending:false});
+  if(r.error){ el.innerHTML = '<p class="small muted">Para activar corre 40_socios_aportaciones.sql en Supabase.</p>'; return; }
+  const filas = r.data||[];
+  const por = {};
+  filas.forEach(a=>{ por[a.socio] = (por[a.socio]||0) + +a.monto; });
+  const socios = Object.entries(por).sort((a,b)=>b[1]-a[1]);
+  const totalAp = socios.reduce((s,[,m])=>s+m,0);
+  el.innerHTML = `<div class="tbl-scroll"><table>
+    <thead><tr><th>Socio</th><th class="num">Aportado</th><th class="num">Parte igual</th><th class="num">Por aportar</th><th></th></tr></thead>
+    <tbody>${socios.map(([s,m])=>{ const falta = Math.max(0, Math.round((APORTE_META-m)*100)/100);
+      return `<tr><td><b>${esc(s)}</b></td><td class="num">${fmt(m)}</td><td class="num small muted">${fmt(APORTE_META)}</td>
+      <td class="num">${falta>0?`<b style="color:#b91c1c">${fmt(falta)}</b>`:'<span class="badge b-verde">✓ completo</span>'}</td><td></td></tr>`;}).join('')}
+    <tr style="border-top:2px solid var(--linea);background:#f8fafc"><td><b>TOTAL</b></td><td class="num"><b>${fmt(totalAp)}</b></td>
+      <td class="num small muted">${fmt(APORTE_META*socios.length)}</td><td class="num"><b>${fmt(Math.max(0,APORTE_META*socios.length-totalAp))}</b></td><td></td></tr></tbody></table></div>
+    ${esAdmin()?`<button class="btn sm" style="margin-top:6px" onclick="nuevaAportacion()">➕ Registrar aportación</button>`:''}
+    <details style="margin-top:6px"><summary class="small muted">Movimientos (${filas.length})</summary>
+      <table style="margin-top:4px">${filas.map(a=>`<tr><td class="small">${fecha(a.fecha)}</td><td><b>${esc(a.socio)}</b></td>
+        <td class="num">${fmt(a.monto)}</td><td class="small muted">${esc(a.via||'')}${a.nota?' · '+esc(a.nota.slice(0,40)):''}</td></tr>`).join('')}</table></details>`;
+}
+function nuevaAportacion(){
+  abrirModal(`<h3>🤝 Registrar aportación de socio</h3>
+    <div class="frow">
+      <div class="field"><label>Socio</label><select id="sa-socio">
+        <option>Hans S.</option><option>Ignacio G.</option><option>Andrés T.</option></select></div>
+      <div class="field"><label>Monto depositado</label><input id="sa-monto" type="number" step="0.01" style="font-size:19px" placeholder="0.00"></div>
+    </div>
+    <div class="frow">
+      <div class="field"><label>Fecha</label><input id="sa-fecha" type="date" value="${hoyMX()}"></div>
+      <div class="field"><label>¿A qué cuenta / cómo?</label><input id="sa-via" placeholder="Ej. SPEI a Azteca Axion"></div>
+    </div>
+    <div class="field"><label>Nota (opcional)</label><input id="sa-nota" placeholder="Ej. 2a aportación del plan"></div>
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cancelar</button>
+      <button class="btn" onclick="guardarAportacion()">Guardar</button></div>`);
+  setTimeout(()=>$('sa-monto')?.focus(),100);
+}
+async function guardarAportacion(){
+  const monto = +($('sa-monto').value||0);
+  if(monto<=0){ toast('Pon el monto', true); return; }
+  const {error} = await sb.from('socios_aportaciones').insert({socio:$('sa-socio').value, monto,
+    fecha:$('sa-fecha').value||hoyMX(), via:($('sa-via').value||'').trim(), nota:($('sa-nota').value||'').trim(),
+    nombre:(typeof perfil!=='undefined'&&perfil?perfil.nombre:''), usuario_id: sesion.user.id});
+  if(error){ toast(errMsg(error), true); return; }
+  cerrarModal(); toast('Aportación registrada ✓');
+  logEv('finanzas','aportación socio: '+$('sa-socio').value+' '+fmt(monto));
+  vFinanzas();
+}
 async function calcularDinero(hoy){
   const D = {ok:false};
   try{
@@ -3981,7 +4031,10 @@ async function calcularDinero(hoy){
     D.salioPagos = (pg.data||[]).reduce((s,x)=>s+ +x.monto,0);
     const gs = await sb.from('gastos').select('monto,tipo').gt('creado', desdeISO);
     D.salioGastos = (gs.data||[]).reduce((s,x)=>s+ +x.monto,0);
-    D.calculado = Math.round((D.banco + D.otros + D.efectivoCaja + D.entroVentas - D.salioPagos - D.salioGastos)*100)/100;
+    // v123: aportaciones de socios después de la captura también son entradas
+    const ap = await sb.from('socios_aportaciones').select('monto').gt('creado', desdeISO).neq('via','histórico');
+    D.entroAportes = (ap.data||[]).reduce((s,x)=>s+ +x.monto,0);
+    D.calculado = Math.round((D.banco + D.otros + D.efectivoCaja + D.entroVentas + D.entroAportes - D.salioPagos - D.salioGastos)*100)/100;
     D.capturado = Math.round((D.banco + D.otros + D.efectivoCaja)*100)/100;
     D.dias = Math.round((hoy - new Date(D.cap.fecha+'T00:00:00'))/864e5);
   }catch(e){ D.ok = false; }
@@ -4008,8 +4061,8 @@ function panelDinero(D){
         <div class="s">lo capturado + lo que entró − lo que salió después de la captura</div></div>
       <div class="kpi"><div class="l">Lo que capturaste el ${fecha(D.desde)}</div><div class="v">${fmt(D.capturado)}</div>
         <div class="s">🏦 banco ${fmt(D.banco)}${D.otros?' · otros '+fmt(D.otros):''} · 💵 caja ${fmt(D.efectivoCaja)}</div></div>
-      <div class="kpi" style="border-top-color:var(--verde)"><div class="l">Entró después de la captura</div><div class="v" style="color:#15803d">+${fmt(D.entroVentas)}</div>
-        <div class="s">ventas cobradas (sin crédito)</div></div>
+      <div class="kpi" style="border-top-color:var(--verde)"><div class="l">Entró después de la captura</div><div class="v" style="color:#15803d">+${fmt(D.entroVentas + (D.entroAportes||0))}</div>
+        <div class="s">ventas ${fmt(D.entroVentas)}${D.entroAportes?' · aportaciones '+fmt(D.entroAportes):''}</div></div>
       <div class="kpi" style="border-top-color:var(--rojo)"><div class="l">Salió después de la captura</div><div class="v" style="color:#b91c1c">−${fmt(D.salioPagos + D.salioGastos)}</div>
         <div class="s">pagos ${fmt(D.salioPagos)} · gastos ${fmt(D.salioGastos)}</div></div>
     </div>
@@ -4123,6 +4176,10 @@ async function vFinanzas(){
   window._pagoSel = window._pagoSel || {};
   const dinero = await calcularDinero(hoy);
   $('v-finanzas').innerHTML = panelDinero(dinero) + `
+    ${esFinanzas()?`<div class="card" style="margin-bottom:14px"><h3>🤝 Aportaciones de socios</h3>
+      <div id="aportes-panel"><span class="small muted">Cargando…</span></div>
+      <span style="display:none">${setTimeout(()=>{ if(typeof pintarAportaciones==='function') pintarAportaciones(); },250)&&''}</span>
+    </div>`:''}
     <div class="kpis">
       <div class="kpi" style="cursor:pointer" title="Ver cuentas" onclick="$('fin-cxp').scrollIntoView({behavior:'smooth'})"><div class="l">Total por pagar</div><div class="v">${fmt(total)}</div><div class="s">${pend.length} cuenta(s)</div></div>
       <div class="kpi" style="cursor:pointer;border-top-color:${factDias!==null&&factDias<=7?'var(--ambar)':'inherit'}" title="Ver facturas" onclick="$('fin-fact').scrollIntoView({behavior:'smooth'})"><div class="l">Facturas por pagar</div><div class="v">${fmt(factTotal)}</div>
