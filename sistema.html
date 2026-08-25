@@ -515,9 +515,33 @@ async function procesarEstatusIndar(){
     const r = await sb.from('partes_indar').upsert(filas, {onConflict:'pedido_id,parte'});
     if(r.error){ toast(errMsg(r.error), true); return; }
     logEv('vista', 'estatus Indar actualizado: '+filas.length+' partes');
-    toast('Estatus de Indar actualizado: '+filas.length+' partes ✓');
-    irA('pedidos');
+    // v125: detectar pedidos que Indar ya no reporta (posibles CANCELADOS) y partidas facturadas incompletas
+    const conDato = new Set(filas.map(function(f){ return f.pedido_id; }));
+    const abiertos = (await sb.from('pedidos_compra').select('id,folio_externo').in('estado',['enviado','parcial'])).data||[];
+    const sinDato = abiertos.filter(function(p){ return !conDato.has(p.id); });
+    const cortas = filas.filter(function(f){ return f.cant_facturada < f.cant_pedida; });
+    const F = {}; abiertos.forEach(function(p){ F[p.id]=p.folio_externo; });
+    if(sinDato.length || cortas.length){
+      abrirModal(`<h3>🔄 Estatus Indar: ${filas.length} parte(s) actualizadas</h3>
+        ${sinDato.length?`<div class="card" style="border-left:4px solid var(--rojo);margin-bottom:8px"><b>⚠️ Indar ya no reporta ${sinDato.length} pedido(s) abiertos</b> — probablemente los CANCELÓ (confírmalo en el portal):
+          ${sinDato.map(p=>`<div style="margin-top:6px">#${esc(p.folio_externo)} <button class="btn sm sec" onclick="marcarPedidoCancelado(${p.id})">✖ Marcar cancelado</button></div>`).join('')}</div>`:''}
+        ${cortas.length?`<div class="card" style="border-left:4px solid var(--ambar);margin-bottom:8px"><b>📉 ${cortas.length} parte(s) facturadas incompletas</b> — si el pedido ya llegó, esas piezas Indar las canceló (no hay backorder: hay que repedirlas):
+          <div class="tbl-scroll" style="max-height:200px"><table style="margin:6px 0">${cortas.map(f=>`<tr><td class="small">parte ${esc(f.parte)}</td><td class="num">pedidas ${f.cant_pedida}</td><td class="num">facturadas ${f.cant_facturada}</td><td class="num" style="color:#b91c1c"><b>faltan ${f.cant_pedida-f.cant_facturada}</b></td></tr>`).join('')}</table></div></div>`:''}
+        <div class="acciones"><button class="btn" onclick="cerrarModal(); irA('pedidos')">Entendido</button></div>`, true);
+    } else {
+      toast('Estatus de Indar actualizado: '+filas.length+' partes ✓ — todo completo');
+      irA('pedidos');
+    }
   }catch(e){ toast('No pude leer el estatus que regresó Indar', true); }
+}
+async function marcarPedidoCancelado(id){
+  const r = await sb.from('pedidos_compra').update({estado:'cancelado'}).eq('id',id).select('folio_externo');
+  if(r.error || !(r.data||[]).length){ toast(errMsg(r.error||{message:'no se pudo'}), true); return; }
+  const folio = r.data[0].folio_externo;
+  const cx = (await sb.from('cuentas_pagar').select('id,saldo').ilike('concepto','%'+folio+'%')).data||[];
+  for(const c of cx){ if(+c.saldo>0) await sb.from('cuentas_pagar').update({saldo:0, estado:'pagada', referencia:'Pedido cancelado por Indar'}).eq('id',c.id); }
+  toast('Pedido #'+folio+' marcado cancelado y su cuenta estimada anulada ✓');
+  logEv('pedido','cancelado por Indar: #'+folio);
 }
 
 /* ===== Traer facturas (XML+PDF) de Indar con el botón ===== */
