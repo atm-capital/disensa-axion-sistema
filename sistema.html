@@ -925,6 +925,7 @@ async function vVentas(){
         <option value="transferencia">🏦 Transferencia</option><option value="ak_pago">📱 AK Pago</option><option value="credito">📄 Crédito</option></select>
       ${vends.length>1?`<select id="vt-vend" onchange="pintarVentas()"><option value="">Todos los vendedores</option>${vends.map(n=>`<option>${esc(n)}</option>`).join('')}</select>`:'<span id="vt-vend" style="display:none"></span>'}
       <label class="small"><input type="checkbox" id="vt-canc" onchange="pintarVentas()"> Ver canceladas</label>
+      <button class="btn sec sm" onclick="exportarVentasExcel()" title="Descarga en Excel las ventas del periodo con los filtros puestos">📥 Excel</button>
     </div>
     <div id="vt-lista"></div>`;
   pintarVentas();
@@ -1000,6 +1001,40 @@ function pintarVentas(){
         <span><span class="muted small">${vs.length} venta(s) · </span><b>${fmt(tot)}</b></span></div>
       ${vs.map(fila).join('')}</div>`;
   }).join('') || '<div class="card muted">No hay ventas en el periodo elegido con esos filtros. Cambia el periodo arriba (📅 Ver) o quita los filtros.</div>';
+}
+// v126: descargar reporte de ventas en Excel (respeta periodo y filtros de la vista)
+async function exportarVentasExcel(){
+  const data = window._vtasData||[], utilPor = window._vtasUtil||{};
+  const q = ($('vt-q').value||'').toLowerCase().trim();
+  const pago = $('vt-pago').value||'';
+  const vendEl = $('vt-vend'); const vend = (vendEl && vendEl.tagName==='SELECT') ? vendEl.value : '';
+  const verCanc = $('vt-canc').checked;
+  const rows = data.filter(function(v){ return (verCanc || !v.cancelada) && (!pago || v.metodo_pago===pago) && (!vend || ((v.perfiles&&v.perfiles.nombre)||'')===vend) && (!q || String(v.folio).includes(q.replace('#','')) || ((v.clientes&&v.clientes.nombre)||'mostrador').toLowerCase().includes(q)); });
+  if(!rows.length){ toast('No hay ventas que exportar con esos filtros', true); return; }
+  if(!window.XLSX){
+    try{ await new Promise(function(res,rej){ const s=document.createElement('scr'+'ipt'); s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'; s.onload=res; s.onerror=function(){rej(new Error('sin internet'))}; document.head.appendChild(s); }); }
+    catch(e){ toast('No pude cargar el generador de Excel (revisa el internet)', true); return; }
+  }
+  const fin = esFinanzas();
+  const hoja1 = rows.map(function(v){ const f=new Date(v.fecha);
+    const o = { Folio:+v.folio, Fecha:f.toLocaleDateString('es-MX'), Hora:f.toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'}), Cliente:(v.clientes&&v.clientes.nombre)||'Mostrador', Vendedor:(v.perfiles&&v.perfiles.nombre)||'', Pago:v.metodo_pago, Total:+v.total, Descuento:+(v.descuento||0), Estado:v.cancelada?'CANCELADA':'ok' };
+    if(fin && utilPor[v.id]!==undefined && !v.cancelada){ o['Utilidad sin IVA']=Math.round(utilPor[v.id]*100)/100; o['Margen pct']= +v.total>0 ? Math.round(utilPor[v.id]/(+v.total/1.16)*100) : 0; }
+    return o; });
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hoja1), 'Ventas');
+  try{
+    const its = await traerTodo(function(){ return sb.from('venta_items').select('venta_id,cantidad,precio_unit,importe,costo_unit,productos(codigo,descripcion)').in('venta_id', rows.map(function(v){return v.id;})).order('venta_id'); });
+    const FOL = {}; rows.forEach(function(v){ FOL[v.id]=v.folio; });
+    const hoja2 = (its||[]).map(function(i){
+      const o = { 'Folio venta':+FOL[i.venta_id], Codigo:(i.productos&&i.productos.codigo)||'', Producto:(i.productos&&i.productos.descripcion)||'', Cantidad:+i.cantidad, 'Precio unit':+i.precio_unit, Importe:+i.importe };
+      if(fin){ o['Costo unit']=+(i.costo_unit||0); o['Utilidad sin IVA']=Math.round(((+i.precio_unit/1.16 - +(i.costo_unit||0)) * +i.cantidad)*100)/100; }
+      return o; });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hoja2), 'Partidas');
+  }catch(e){}
+  const nomA = 'Ventas_Axion_'+(window._vtPer||'mes')+'_'+new Date().toISOString().slice(0,10)+'.xlsx';
+  XLSX.writeFile(wb, nomA);
+  logEv('descarga','Excel de ventas: '+rows.length+' ventas ('+(window._vtPer||'mes')+')');
+  toast('Excel descargado: '+rows.length+' venta(s) con sus partidas ✓');
 }
 async function verVenta(id){
   const {data, error} = await sb.from('venta_items').select('*, productos(codigo,descripcion)').eq('venta_id', id);
