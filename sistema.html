@@ -926,6 +926,7 @@ async function vVentas(){
       ${vends.length>1?`<select id="vt-vend" onchange="pintarVentas()"><option value="">Todos los vendedores</option>${vends.map(n=>`<option>${esc(n)}</option>`).join('')}</select>`:'<span id="vt-vend" style="display:none"></span>'}
       <label class="small"><input type="checkbox" id="vt-canc" onchange="pintarVentas()"> Ver canceladas</label>
       <button class="btn sec sm" onclick="exportarVentasExcel()" title="Descarga en Excel las ventas del periodo con los filtros puestos">📥 Excel</button>
+      <button class="btn sec sm" onclick="exportarExcelDisensa()" title="Reporte del periodo para Disensa: sin costos ni utilidad">📤 Excel Disensa</button>
     </div>
     <div id="vt-lista"></div>`;
   pintarVentas();
@@ -1001,6 +1002,40 @@ function pintarVentas(){
         <span><span class="muted small">${vs.length} venta(s) · </span><b>${fmt(tot)}</b></span></div>
       ${vs.map(fila).join('')}</div>`;
   }).join('') || '<div class="card muted">No hay ventas en el periodo elegido con esos filtros. Cambia el periodo arriba (📅 Ver) o quita los filtros.</div>';
+}
+// v127: reporte mensual para Disensa (sin costos ni utilidad; usa el periodo elegido, ignora filtros)
+async function exportarExcelDisensa(){
+  const data = (window._vtasData||[]).filter(function(v){ return !v.cancelada; });
+  if(!data.length){ toast('No hay ventas en el periodo elegido', true); return; }
+  if(!window.XLSX){
+    try{ await new Promise(function(res,rej){ const s=document.createElement('scr'+'ipt'); s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'; s.onload=res; s.onerror=function(){rej(new Error('sin internet'))}; document.head.appendChild(s); }); }
+    catch(e){ toast('No pude cargar el generador de Excel (revisa el internet)', true); return; }
+  }
+  toast('Armando el reporte para Disensa...');
+  const ids = data.map(function(v){ return v.id; });
+  const its = [];
+  for(let i=0;i<ids.length;i+=200){
+    const r = await sb.from('venta_items').select('venta_id,cantidad,importe,productos(codigo,descripcion,granel,unidad_venta)').in('venta_id', ids.slice(i,i+200));
+    its.push.apply(its, r.data||[]);
+  }
+  const R = function(x){ return Math.round(x*100)/100; };
+  const nIt = {}; its.forEach(function(i){ nIt[i.venta_id]=(nIt[i.venta_id]||0)+ +i.cantidad; });
+  const hoja1 = data.slice().sort(function(a,b){ return new Date(a.fecha)-new Date(b.fecha); }).map(function(v){ const f=new Date(v.fecha);
+    return { Folio:+v.folio, Fecha:f.toLocaleDateString('es-MX'), Hora:f.toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'}), Articulos:R(nIt[v.id]||0), Subtotal:R(+v.total/1.16), IVA:R(+v.total - +v.total/1.16), Total:+v.total, 'Metodo de pago':v.metodo_pago }; });
+  const tot = data.reduce(function(s,v){ return s+ +v.total; },0);
+  hoja1.push({}, {Fecha:'TOTAL', Subtotal:R(tot/1.16), IVA:R(tot-tot/1.16), Total:R(tot), 'Metodo de pago':data.length+' ventas'});
+  const agg = {};
+  its.forEach(function(i){ const p=i.productos||{}; const k=p.codigo||'?'; if(!agg[k]) agg[k]={Codigo:k, Producto:p.descripcion||'', Unidad:(p.granel?(p.unidad_venta||'pza'):'pza'), Cantidad:0, Importe:0}; agg[k].Cantidad+=+i.cantidad; agg[k].Importe+=+i.importe; });
+  const hoja2 = Object.keys(agg).map(function(k){ return agg[k]; }).sort(function(a,b){ return b.Importe-a.Importe; }).map(function(p){ return {Codigo:p.Codigo, Producto:p.Producto, Unidad:p.Unidad, Cantidad:R(p.Cantidad), 'Importe vendido':R(p.Importe)}; });
+  const wb = XLSX.utils.book_new();
+  const ws1 = XLSX.utils.json_to_sheet(hoja1); ws1['!cols']=[{wch:7},{wch:11},{wch:10},{wch:9},{wch:11},{wch:10},{wch:11},{wch:15}];
+  const ws2 = XLSX.utils.json_to_sheet(hoja2); ws2['!cols']=[{wch:12},{wch:55},{wch:7},{wch:9},{wch:14}];
+  XLSX.utils.book_append_sheet(wb, ws1, 'Ventas');
+  XLSX.utils.book_append_sheet(wb, ws2, 'Productos vendidos');
+  const NOMP = {hoy:'hoy', semana:'semana', mes:'mes-actual', mespasado:'mes-pasado', todo:'historico', rango:'rango'};
+  XLSX.writeFile(wb, 'Reporte_Ventas_Axion_Disensa_'+(NOMP[window._vtPer||'mes']||'periodo')+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
+  logEv('descarga','Excel Disensa: '+data.length+' ventas');
+  toast('Reporte para Disensa descargado: '+data.length+' venta(s) ✓ (sin costos ni utilidad)');
 }
 // v126: descargar reporte de ventas en Excel (respeta periodo y filtros de la vista)
 async function exportarVentasExcel(){
