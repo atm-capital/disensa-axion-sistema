@@ -1015,7 +1015,7 @@ async function exportarExcelDisensa(){
   const ids = data.map(function(v){ return v.id; });
   const its = [];
   for(let i=0;i<ids.length;i+=200){
-    const r = await sb.from('venta_items').select('venta_id,cantidad,importe,productos(codigo,descripcion,granel,unidad_venta)').in('venta_id', ids.slice(i,i+200));
+    const r = await sb.from('venta_items').select('venta_id,cantidad,precio_unit,importe,productos(codigo,descripcion,granel,unidad_venta)').in('venta_id', ids.slice(i,i+200));
     its.push.apply(its, r.data||[]);
   }
   const R = function(x){ return Math.round(x*100)/100; };
@@ -1030,7 +1030,12 @@ async function exportarExcelDisensa(){
   const wb = XLSX.utils.book_new();
   const ws1 = XLSX.utils.json_to_sheet(hoja1); ws1['!cols']=[{wch:7},{wch:11},{wch:10},{wch:9},{wch:11},{wch:10},{wch:11},{wch:15}];
   const ws2 = XLSX.utils.json_to_sheet(hoja2); ws2['!cols']=[{wch:12},{wch:55},{wch:7},{wch:9},{wch:14}];
-  XLSX.utils.book_append_sheet(wb, ws1, 'Ventas');
+  const V = {}; data.forEach(function(v){ V[v.id]=v; });
+  const det = its.slice().sort(function(a,b){ return V[a.venta_id].folio - V[b.venta_id].folio; }).map(function(i){ const v=V[i.venta_id]; const p=i.productos||{};
+    return { 'Folio ticket':+v.folio, Fecha:new Date(v.fecha).toLocaleDateString('es-MX'), Codigo:p.codigo||'', Producto:p.descripcion||'', Unidad:(p.granel?(p.unidad_venta||'pza'):'pza'), Cantidad:R(+i.cantidad), 'Precio unit':R(+i.precio_unit), Importe:R(+i.importe) }; });
+  const wsD = XLSX.utils.json_to_sheet(det); wsD['!cols']=[{wch:10},{wch:11},{wch:12},{wch:52},{wch:7},{wch:9},{wch:11},{wch:10}];
+  XLSX.utils.book_append_sheet(wb, ws1, 'Resumen de ventas');
+  XLSX.utils.book_append_sheet(wb, wsD, 'Detalle por ticket');
   XLSX.utils.book_append_sheet(wb, ws2, 'Productos vendidos');
   const NOMP = {hoy:'hoy', semana:'semana', mes:'mes-actual', mespasado:'mes-pasado', todo:'historico', rango:'rango'};
   XLSX.writeFile(wb, 'Reporte_Ventas_Axion_Disensa_'+(NOMP[window._vtPer||'mes']||'periodo')+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
