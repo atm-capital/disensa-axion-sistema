@@ -1325,6 +1325,19 @@ async function verSolicitudesRes(){
   let cot = {};
   try{ cot = await cotejarSolicitudes(data||[]); }catch(e){ cot = {}; }
   window._solCot = cot;
+  // v129: costo estimado por codigo (lista Indar; si no esta, costo del producto)
+  const CST = {};
+  if(esFinanzas()){
+    try{
+      const cods = [...new Set((data||[]).flatMap(function(s){ return (s.items||[]).map(function(i){ return String(i.codigo||'').trim().toUpperCase(); }); }).filter(Boolean))];
+      for(let i=0;i<cods.length;i+=100){
+        const r = await sb.from('lista_indar').select('codigo,precio_mayoreo').in('codigo', cods.slice(i,i+100));
+        (r.data||[]).forEach(function(x){ CST[String(x.codigo).toUpperCase()] = +x.precio_mayoreo; });
+      }
+      const rp = await sb.from('productos').select('codigo,costo').in('codigo', cods);
+      (rp.data||[]).forEach(function(x){ const k=String(x.codigo).toUpperCase(); if(CST[k]===undefined && +x.costo>0) CST[k] = +x.costo; });
+    }catch(e){}
+  }
   const pend = (data||[]).filter(s=>s.estado==='pendiente');
   const otras = (data||[]).filter(s=>s.estado!=='pendiente');
   const card = s => {
@@ -1343,8 +1356,10 @@ async function verSolicitudesRes(){
       <span class="small muted">${fechaHora(s.creado)} · ${s.estado==='pendiente'?'<span class="badge b-ambar">pendiente</span>':'<span class="badge b-verde">atendida</span>'}</span></div>
     ${resumen}
     ${s.nota?`<p class="small" style="margin:4px 0">📝 ${esc(s.nota)}</p>`:''}
-    <table style="margin:6px 0">${(s.items||[]).map(i=>`<tr><td><b>${esc(i.codigo)}</b></td><td>${esc(i.desc)}</td><td class="num"><b>${i.cant}</b> pza</td>
-      <td style="white-space:nowrap">${badgeCot(c[String(i.codigo||'').trim().toUpperCase()])}</td></tr>`).join('')}</table>
+    <table style="margin:6px 0">${(s.items||[]).map(i=>{ const cu = CST[String(i.codigo||'').trim().toUpperCase()]; return `<tr><td><b>${esc(i.codigo)}</b></td><td>${esc(i.desc)}</td><td class="num"><b>${i.cant}</b> pza</td>
+      <td class="num small muted" style="white-space:nowrap">${cu!==undefined?('≈ '+fmt(Math.round(cu*+i.cant*100)/100)):''}</td>
+      <td style="white-space:nowrap">${badgeCot(c[String(i.codigo||'').trim().toUpperCase()])}</td></tr>`; }).join('')}</table>
+    ${(function(){ if(!esFinanzas()) return ''; let t=0, falt=0, sin=0; (s.items||[]).forEach(function(i){ const k=String(i.codigo||'').trim().toUpperCase(); const cu=CST[k]; if(cu===undefined){ sin++; return; } t+=cu*+i.cant; const e2=(c[k]||{}).est; if(e2==='falta'||e2==='nuevo') falt+=cu*+i.cant; }); if(!t) return ''; return '<div class="small" style="margin:2px 0 4px"><b>💰 Surtir todo: ≈ '+fmt(Math.round(t*100)/100)+'</b> (costo Indar, sin IVA)'+(falt&&Math.round(falt)!==Math.round(t)?' · solo lo que falta: ≈ '+fmt(Math.round(falt*100)/100):'')+(sin?' · '+sin+' articulo(s) sin costo conocido':'')+'</div>'; })()}
     ${s.estado==='pendiente'?`<div class="acciones" style="margin-top:4px">
       <button class="btn sec sm" onclick="excelSolicitudRes(${s.id})">📥 Excel Indar</button>
       ${nFalta?`<button class="btn sec sm" onclick="excelSolicitudRes(${s.id}, true)">📥 Excel solo lo que falta (${nFalta})</button>`:''}
