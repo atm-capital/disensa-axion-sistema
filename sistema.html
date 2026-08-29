@@ -4273,6 +4273,7 @@ async function vFinanzas(){
     <button class="btn sec" onclick="asistentePago()">📅 Qué pagar</button>
     <button class="btn sec" onclick="nuevaCuenta()">+ Cuenta por pagar</button>
     <button class="btn sec" onclick="nuevoGasto()">+ Gasto</button>
+      <button class="btn sec" onclick="nuevoGasto('Nómina')">👥 + Nómina</button>
     <button class="btn sec" onclick="historialPagos()">📜 Pagos hechos</button>
     <button class="btn sec" onclick="cuadrarIndar()">⚖️ Cuadrar con Indar</button>
     <button class="btn sec" id="btn-compras-sol" onclick="adminCompras()">🛠️ Compras pedidas</button>
@@ -4318,6 +4319,16 @@ async function vFinanzas(){
   const gCat = {};
   gastos.data.forEach(g=>{ const t = g.tipo||'gasto'; gTot[t] = (gTot[t]||0) + +g.monto;
     if(t==='gasto') gCat[g.categoria||'General'] = (gCat[g.categoria||'General']||0) + +g.monto; });
+  // v132: sumar tambien los gastos hechos desde la CAJA de la tienda (caja_movs)
+  let cajaG = [];
+  try{
+    const rcm = await sb.from('caja_movs').select('*').in('tipo',['gasto','retiro']).gte('fecha', gD).order('fecha',{ascending:false});
+    cajaG = (rcm.data||[]).filter(function(m){ return !/\(desde Finanzas\)/.test(m.concepto||'') && (!gH || m.fecha < gH); });
+  }catch(e){}
+  cajaG.forEach(function(m){ gTot.gasto += +m.monto; gCat['Caja tienda'] = (gCat['Caja tienda']||0) + +m.monto; });
+  const gRows = gastos.data.map(function(g){ return {fecha:g.fecha, tipo:g.tipo||'gasto', concepto:g.concepto, categoria:g.categoria, metodo:g.metodo||'', monto:+g.monto, origen:'admin'}; })
+    .concat(cajaG.map(function(m){ return {fecha:m.fecha, tipo:'gasto', concepto:(m.concepto||'(sin concepto)')+(m.nombre?(' — '+m.nombre):''), categoria:'Caja tienda', metodo:'efectivo (caja)', monto:+m.monto, origen:'caja', comp:m.comprobante_path}; }))
+    .sort(function(a,b){ return String(b.fecha).localeCompare(String(a.fecha)); });
   const factPend = pend.filter(c=>/^factura/i.test(c.concepto||''));
   const factTotal = factPend.reduce((s,c)=>s+ +c.saldo,0);
   const factProx = factPend.slice().sort((a,b)=>a.fecha_vencimiento<b.fecha_vencimiento?-1:1)[0];
@@ -4373,7 +4384,7 @@ async function vFinanzas(){
       <div class="toolbar" style="margin-bottom:10px">
         ${[['mes','Este mes'],['mespasado','Mes pasado'],['anio','Este año'],['todo','Todo']].map(([k,t])=>
           `<button class="btn ${gPer===k?'':'sec'} sm" onclick="window._gPer='${k}'; vFinanzas()">${t}</button>`).join('')}
-        <span class="small muted" style="margin-left:auto">${gastos.data.length} movimiento(s) · ${esc(gNom)}</span>
+        <span class="small muted" style="margin-left:auto">${gRows.length} movimiento(s) · ${esc(gNom)}</span>
       </div>
       <div class="kpis" style="margin-bottom:12px">
         <div class="kpi" style="border-top-color:var(--rojo)"><div class="l">💸 Gastos</div><div class="v">${fmt(gTot.gasto)}</div><div class="s">bajan la utilidad</div></div>
@@ -4384,9 +4395,9 @@ async function vFinanzas(){
       ${Object.keys(gCat).length?`<p class="small" style="margin:0 0 8px"><b>Por categoría:</b> ${Object.entries(gCat).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${esc(k)} <b>${fmt(v)}</b>`).join(' · ')}</p>`:''}
       <div class="tbl-scroll"><table>
       <thead><tr><th>Fecha</th><th>Tipo</th><th>Concepto</th><th>Categoría</th><th>Pagado con</th><th class="num">Monto</th></tr></thead>
-      <tbody>${gastos.data.map(g=>{
+      <tbody>${gRows.map(g=>{
         const tb = {gasto:'<span class="badge b-rojo">💸 gasto</span>', inversion:'<span class="badge b-azul">🏗️ inversión</span>', retiro:'<span class="badge b-gris">👤 retiro</span>'};
-        return `<tr><td>${fecha(g.fecha)}</td><td>${tb[g.tipo||'gasto']||tb.gasto}</td><td>${esc(g.concepto)}</td>
+        return `<tr><td>${fecha(g.fecha)}</td><td>${tb[g.tipo||'gasto']||tb.gasto}${g.origen==='caja'?' <span class="badge b-ambar" title="Lo registró la tienda desde su caja">🏪 caja</span>':''}</td><td>${esc(g.concepto)}${g.comp?(' <a href="#" class="small" onclick="event.preventDefault();verPdfFactura(\''+esc(g.comp)+'\')">🧾 ticket</a>'):''}</td>
         <td><span class="badge b-gris">${esc(g.categoria)}</span></td><td class="small muted">${esc(g.metodo||'')}</td><td class="num"><b>${fmt(g.monto)}</b></td></tr>`;}).join('')
         || '<tr><td colspan="6" class="muted">Sin movimientos en este periodo. Usa <b>+ Gasto</b> arriba para registrar gastos, inversiones o retiros.</td></tr>'}</tbody></table></div></div>`;
 }
@@ -5112,7 +5123,7 @@ async function guardarCuenta(){
   if(error){ toast(errMsg(error), true); return; }
   cerrarModal(); toast('Cuenta registrada'); vFinanzas();
 }
-function nuevoGasto(){
+function nuevoGasto(cat){
   abrirModal(`<h3>Registrar salida de dinero</h3>
     <div class="field"><label>¿Qué tipo de salida es?</label>
       <select id="gs-tipo" onchange="pistaGasto()">
@@ -5137,6 +5148,7 @@ function nuevoGasto(){
     <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cancelar</button>
       <button class="btn" onclick="guardarGasto()">Guardar</button></div>`);
   pistaGasto();
+  if(cat && $('gs-cat')){ $('gs-cat').value = cat; const c9 = $('gs-concepto'); if(c9) c9.placeholder = 'Ej. Sueldo de la semana — Marco'; }
 }
 function pistaGasto(){
   const t = $('gs-tipo')?.value, el = $('gs-pista'); if(!el) return;
