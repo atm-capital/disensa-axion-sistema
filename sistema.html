@@ -1356,12 +1356,13 @@ async function verSolicitudesRes(){
       <span class="small muted">${fechaHora(s.creado)} · ${s.estado==='pendiente'?'<span class="badge b-ambar">pendiente</span>':'<span class="badge b-verde">atendida</span>'}</span></div>
     ${resumen}
     ${s.nota?`<p class="small" style="margin:4px 0">📝 ${esc(s.nota)}</p>`:''}
-    <table style="margin:6px 0">${(s.items||[]).map(i=>{ const cu = CST[String(i.codigo||'').trim().toUpperCase()]; return `<tr><td><b>${esc(i.codigo)}</b></td><td>${esc(i.desc)}</td><td class="num"><b>${i.cant}</b> pza</td>
+    <table style="margin:6px 0">${(s.items||[]).map(i=>{ const k2 = String(i.codigo||'').trim().toUpperCase(); const cu = CST[k2]; const ck = c[k2]||{}; return `<tr><td style="width:22px"><input type="checkbox" class="selres-${s.id}" data-cod="${esc(i.codigo)}" data-cant="${i.cant}" ${(ck.est==='falta'||ck.est==='nuevo')?'checked':''} title="Palomea lo que SI vas a pedir"></td><td><b>${esc(i.codigo)}</b></td><td>${esc(i.desc)}</td><td class="num"><b>${i.cant}</b> pza</td>
       <td class="num small muted" style="white-space:nowrap">${cu!==undefined?('≈ '+fmt(Math.round(cu*+i.cant*100)/100)):''}</td>
-      <td style="white-space:nowrap">${badgeCot(c[String(i.codigo||'').trim().toUpperCase()])}</td></tr>`; }).join('')}</table>
+      <td style="white-space:nowrap">${badgeCot(ck)}${(+ck.stock>0)?(' <span class="badge b-ambar" title="Ojo: de esto TODAVIA queda en tienda — confirma si de verdad hace falta pedirlo">📦 aún hay '+ck.stock+'</span>'):''}</td></tr>`; }).join('')}</table>
     ${(function(){ if(!esFinanzas()) return ''; let t=0, falt=0, sin=0; (s.items||[]).forEach(function(i){ const k=String(i.codigo||'').trim().toUpperCase(); const cu=CST[k]; if(cu===undefined){ sin++; return; } t+=cu*+i.cant; const e2=(c[k]||{}).est; if(e2==='falta'||e2==='nuevo') falt+=cu*+i.cant; }); if(!t) return ''; return '<div class="small" style="margin:2px 0 4px"><b>💰 Surtir todo: ≈ '+fmt(Math.round(t*100)/100)+'</b> (costo Indar, sin IVA)'+(falt&&Math.round(falt)!==Math.round(t)?' · solo lo que falta: ≈ '+fmt(Math.round(falt*100)/100):'')+(sin?' · '+sin+' articulo(s) sin costo conocido':'')+'</div>'; })()}
     ${s.estado==='pendiente'?`<div class="acciones" style="margin-top:4px">
       <button class="btn sec sm" onclick="excelSolicitudRes(${s.id})">📥 Excel Indar</button>
+      <button class="btn sm" onclick="excelSolicitudSel(${s.id})">📥 Excel solo palomeados</button>
       ${nFalta?`<button class="btn sec sm" onclick="excelSolicitudRes(${s.id}, true)">📥 Excel solo lo que falta (${nFalta})</button>`:''}
       <button class="btn sm" onclick="atenderSolicitudRes(${s.id})">✅ Atendida</button></div>`:''}
   </div>`; };
@@ -1459,6 +1460,21 @@ async function aplicarPreciosSug(){
   logEv('inventario','precios actualizados a mano: '+ok+' producto(s)');
   toast('✅ '+ok+' precio(s) actualizados · imprime las etiquetas nuevas en 🏷️ Etiquetas');
   if(typeof vInventario==='function') vInventario();
+}
+// v130: exportar SOLO los productos palomeados de una solicitud
+async function excelSolicitudSel(id){
+  const marcados = [...document.querySelectorAll('.selres-'+id+':checked')];
+  if(!marcados.length){ toast('Palomea al menos un producto de la lista', true); return; }
+  if(!window.XLSX){
+    try{ await new Promise(function(res,rej){ const sc=document.createElement('scr'+'ipt'); sc.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'; sc.onload=res; sc.onerror=rej; document.head.appendChild(sc); }); }
+    catch(e){ toast('No pude cargar el exportador', true); return; }
+  }
+  const items = marcados.map(function(el){ return { Codigos: el.dataset.cod, Cantidad: Math.max(1, +el.dataset.cant||1) }; });
+  const ws = XLSX.utils.json_to_sheet(items, { header:['Codigos','Cantidad'] });
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Hoja1');
+  XLSX.writeFile(wb, 'Solicitud_Resurtido_'+id+'_SELECCION.xlsx');
+  logEv('descarga','Excel selección de solicitud '+id+': '+items.length+' productos');
+  toast('Excel listo con '+items.length+' producto(s) palomeados 📥 Súbelo en Indar → Carrito');
 }
 async function excelSolicitudRes(id, soloFaltan){
   const s = (window._solData||[]).find(x=>x.id===id); if(!s) return;
