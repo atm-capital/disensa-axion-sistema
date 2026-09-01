@@ -1881,6 +1881,7 @@ function numALetras(n){
 }
 async function guardarVenta(){
   if(!carrito.length){ toast('Agrega al menos un producto', true); return; }
+  if($('nv-metodo').value==='credito' && !$('nv-cliente').value){ toast('Para vender a CRÉDITO elige al cliente (no puede ser Mostrador) — así sabemos quién nos debe', true); return; }
   $('nv-guardar').disabled = true;
   const items = carrito.map(c=>({producto_id:c.producto_id||null, cantidad:c.cantidad,
     precio_unit:c.precio_unit, descripcion: c.producto_id ? null : c.desc}));
@@ -4146,6 +4147,42 @@ async function guardarAportacion(){
   logEv('finanzas','aportación socio: '+$('sa-socio').value+' '+fmt(monto));
   vFinanzas();
 }
+// v135: cobranza de ventas a crédito
+async function pintarCobranza(){
+  const el = $('cobrar-panel'); if(!el) return;
+  const vs = (await sb.from('ventas').select('id,folio,fecha,total,cancelada,clientes(nombre)').eq('metodo_pago','credito').eq('cancelada',false).order('fecha',{ascending:false}).limit(200)).data||[];
+  const rc = await sb.from('cobros_credito').select('venta_id,monto,fecha,metodo');
+  if(rc.error){ el.innerHTML = '<p class="small muted">Para activar la cobranza corre 42_cobranza_credito.sql en Supabase.</p>'; return; }
+  const C = {}; (rc.data||[]).forEach(function(c){ C[c.venta_id]=(C[c.venta_id]||0)+ +c.monto; });
+  const rows = vs.map(function(v){ return Object.assign({}, v, {cobrado: C[v.id]||0, saldo: Math.round((+v.total-(C[v.id]||0))*100)/100}); }).filter(function(v){ return v.saldo>0.005; });
+  const tot = rows.reduce(function(s,v){ return s+v.saldo; },0);
+  el.innerHTML = rows.length ? `<p class="small" style="margin:0 0 6px">Nos deben <b>${fmt(tot)}</b> en ${rows.length} venta(s) a crédito.</p>
+    <div class="tbl-scroll"><table><thead><tr><th>Folio</th><th>Fecha</th><th>Cliente</th><th class="num">Total</th><th class="num">Cobrado</th><th class="num">Debe</th><th></th></tr></thead>
+    <tbody>${rows.map(v=>`<tr><td><b>#${v.folio}</b></td><td class="small">${fecha(v.fecha)}</td><td>${esc((v.clientes&&v.clientes.nombre)||'—')}</td>
+      <td class="num">${fmt(v.total)}</td><td class="num" style="color:#15803d">${fmt(v.cobrado)}</td><td class="num"><b style="color:#b91c1c">${fmt(v.saldo)}</b></td>
+      <td><button class="btn sm" onclick="cobrarCredito(${v.id},${v.saldo},'${esc((v.clientes&&v.clientes.nombre)||'')}')">💰 Cobrar</button></td></tr>`).join('')}</tbody></table></div>`
+    : '<p class="small muted">Nadie nos debe — no hay ventas a crédito pendientes ✓ (cuando el POS cobre a crédito, aquí aparece quién debe y cuánto)</p>';
+}
+function cobrarCredito(vid, saldo, cli){
+  abrirModal(`<h3>💰 Registrar cobro</h3><p class="small">${esc(cli||'Cliente')} debe <b>${fmt(saldo)}</b></p>
+    <div class="frow">
+      <div class="field"><label>Monto cobrado</label><input id="cc-monto" type="number" step="0.01" value="${saldo}" style="font-size:19px"></div>
+      <div class="field"><label>¿Cómo pagó?</label><select id="cc-met"><option value="efectivo">💵 Efectivo</option><option value="tarjeta">💳 Tarjeta</option><option value="transferencia">🏦 Transferencia</option></select></div>
+    </div>
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cancelar</button>
+      <button class="btn" onclick="guardarCobro(${vid},${saldo})">Guardar cobro</button></div>`);
+}
+async function guardarCobro(vid, saldo){
+  const monto = +($('cc-monto').value||0);
+  if(monto<=0){ toast('Pon el monto', true); return; }
+  if(monto > saldo+0.01){ toast('Es más de lo que debe ('+fmt(saldo)+')', true); return; }
+  const met = $('cc-met').value;
+  const r = await sb.from('cobros_credito').insert({venta_id:vid, monto, metodo:met, usuario_id:sesion.user.id, nombre:(typeof perfil!=='undefined'&&perfil?perfil.nombre:'')});
+  if(r.error){ toast(errMsg(r.error), true); return; }
+  if(met==='efectivo'){ try{ await sb.from('caja_movs').insert({tipo:'entrada', monto, concepto:'Cobro de venta a crédito', usuario_id:sesion.user.id, nombre:(typeof perfil!=='undefined'&&perfil?perfil.nombre:'')}); }catch(e){} }
+  logEv('finanzas','cobro de crédito: '+fmt(monto));
+  toast('Cobro registrado ✓'); cerrarModal(); pintarCobranza();
+}
 async function calcularDinero(hoy){
   const D = {ok:false};
   try{
@@ -4187,11 +4224,14 @@ async function calcularDinero(hoy){
     const gs = await sb.from('gastos').select('monto,metodo').gt('creado', desdeISO);
     D.salioGastos = (gs.data||[]).reduce((s,x)=>s+ +x.monto,0);
     const gastosEf = (gs.data||[]).filter(g=>g.metodo==='efectivo').reduce((s,x)=>s+ +x.monto,0);
+    // v135: cobros de crédito no-efectivo también entran al banco
+    let cobrosNoEf = 0;
+    try{ const cc = await sb.from('cobros_credito').select('monto,metodo').gt('creado', desdeISO); cobrosNoEf = (cc.data||[]).filter(function(c){ return c.metodo!=='efectivo'; }).reduce(function(s,c){ return s+ +c.monto; },0); }catch(e){}
     // v123: aportaciones de socios después de la captura también son entradas
     const ap = await sb.from('socios_aportaciones').select('monto').gt('creado', desdeISO).neq('via','histórico');
     D.entroAportes = (ap.data||[]).reduce((s,x)=>s+ +x.monto,0);
     // v124: banco y efectivo por separado; el total es la suma
-    D.bancoHoy = Math.round((D.banco + D.otros + D.entroAportes + (D.entroVentas - ventasEf) - D.salioPagos - (D.salioGastos - gastosEf))*100)/100;
+    D.bancoHoy = Math.round((D.banco + D.otros + D.entroAportes + cobrosNoEf + (D.entroVentas - ventasEf) - D.salioPagos - (D.salioGastos - gastosEf))*100)/100;
     D.efectivoHoy = Math.round((D.efectivoCaja + (D.cajaChica||0) + ventasEf - gastosEf)*100)/100;
     D.calculado = Math.round((D.bancoHoy + D.efectivoHoy)*100)/100;
     D.capturado = Math.round((D.banco + D.otros + D.efectivoCaja)*100)/100;
@@ -4351,6 +4391,10 @@ async function vFinanzas(){
       <div id="aportes-panel"><span class="small muted">Cargando…</span></div>
       <span style="display:none">${setTimeout(()=>{ if(typeof pintarAportaciones==='function') pintarAportaciones(); },250)&&''}</span>
     </div>`:''}
+    <div class="card" style="margin-bottom:14px" id="fin-cobrar"><h3>📄 Por cobrar (ventas a crédito)</h3>
+      <div id="cobrar-panel"><span class="small muted">Cargando…</span></div>
+      <span style="display:none">${setTimeout(()=>{ if(typeof pintarCobranza==='function') pintarCobranza(); },300)&&''}</span>
+    </div>
     <div class="kpis">
       <div class="kpi" style="cursor:pointer" title="Ver cuentas" onclick="$('fin-cxp').scrollIntoView({behavior:'smooth'})"><div class="l">Total por pagar</div><div class="v">${fmt(total)}</div><div class="s">${pend.length} cuenta(s)</div></div>
       <div class="kpi" style="cursor:pointer;border-top-color:${factDias!==null&&factDias<=7?'var(--ambar)':'inherit'}" title="Ver facturas" onclick="$('fin-fact').scrollIntoView({behavior:'smooth'})"><div class="l">Facturas por pagar</div><div class="v">${fmt(factTotal)}</div>
