@@ -4096,11 +4096,13 @@ async function pintarAportaciones(){
   filas.forEach(a=>{ por[a.socio] = (por[a.socio]||0) + +a.monto; });
   const socios = Object.entries(por).sort((a,b)=>b[1]-a[1]);
   const totalAp = socios.reduce((s,[,m])=>s+m,0);
-  el.innerHTML = `<div class="tbl-scroll"><table>
-    <thead><tr><th>Socio</th><th class="num">Aportado</th><th class="num">Parte igual</th><th class="num">Por aportar</th><th></th></tr></thead>
-    <tbody>${socios.map(([s,m])=>{ const falta = Math.max(0, Math.round((APORTE_META-m)*100)/100);
+  const refMax = Math.max(APORTE_META, socios.length?socios[0][1]:0);
+  el.innerHTML = `<p class="small muted" style="margin:0 0 6px">Para emparejar = igualar al socio que más ha puesto (${fmt(refMax)}). La parte igual del plan es ${fmt(APORTE_META)} por socio.</p>
+    <div class="tbl-scroll"><table>
+    <thead><tr><th>Socio</th><th class="num">Aportado</th><th class="num">Parte igual</th><th class="num">Para emparejar</th><th></th></tr></thead>
+    <tbody>${socios.map(([s,m])=>{ const dif = Math.round((refMax-m)*100)/100; const extra = Math.round((m-APORTE_META)*100)/100;
       return `<tr><td><b>${esc(s)}</b></td><td class="num">${fmt(m)}</td><td class="num small muted">${fmt(APORTE_META)}</td>
-      <td class="num">${falta>0?`<b style="color:#b91c1c">${fmt(falta)}</b>`:'<span class="badge b-verde">✓ completo</span>'}</td><td></td></tr>`;}).join('')}
+      <td class="num">${dif>0.005?`<b style="color:#b91c1c">le toca ${fmt(dif)}</b>`:(extra>0.005?`<span class="badge b-verde">✓ va arriba ${fmt(extra)}</span>`:'<span class="badge b-verde">✓ parejo</span>')}</td><td></td></tr>`;}).join('')}
     <tr style="border-top:2px solid var(--linea);background:#f8fafc"><td><b>TOTAL</b></td><td class="num"><b>${fmt(totalAp)}</b></td>
       <td class="num small muted">${fmt(APORTE_META*socios.length)}</td><td class="num"><b>${fmt(Math.max(0,APORTE_META*socios.length-totalAp))}</b></td><td></td></tr></tbody></table></div>
     ${esAdmin()?`<button class="btn sm" style="margin-top:6px" onclick="nuevaAportacion()">➕ Registrar aportación</button>`:''}
@@ -4119,7 +4121,9 @@ function nuevaAportacion(){
       <div class="field"><label>Fecha</label><input id="sa-fecha" type="date" value="${hoyMX()}"></div>
       <div class="field"><label>¿A qué cuenta / cómo?</label><input id="sa-via" placeholder="Ej. SPEI a Azteca Axion"></div>
     </div>
-    <div class="field"><label>Nota (opcional)</label><input id="sa-nota" placeholder="Ej. 2a aportación del plan"></div>
+    <div class="field"><label>Nota / para qué se usó (opcional)</label><input id="sa-nota" placeholder="Ej. 2a aportación del plan · pagó nómina directo"></div>
+    <label class="small" style="display:block;margin:2px 0 8px"><input type="checkbox" id="sa-gasto" onchange="$('sa-gasto-extra').style.display=this.checked?'block':'none'"> 💸 Este dinero se usó DIRECTO en un gasto (nunca entró a banco ni caja) — regístralo también como gasto</label>
+    <div class="field" id="sa-gasto-extra" style="display:none"><label>Categoría del gasto</label><select id="sa-gcat"><option>Nómina</option><option>General</option><option>Renta</option><option>Servicios</option><option>Equipo</option><option>Otro</option></select></div>
     <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cancelar</button>
       <button class="btn" onclick="guardarAportacion()">Guardar</button></div>`);
   setTimeout(()=>$('sa-monto')?.focus(),100);
@@ -4131,7 +4135,14 @@ async function guardarAportacion(){
     fecha:$('sa-fecha').value||hoyMX(), via:($('sa-via').value||'').trim(), nota:($('sa-nota').value||'').trim(),
     nombre:(typeof perfil!=='undefined'&&perfil?perfil.nombre:''), usuario_id: sesion.user.id});
   if(error){ toast(errMsg(error), true); return; }
-  cerrarModal(); toast('Aportación registrada ✓');
+  let msg = 'Aportación registrada ✓';
+  if($('sa-gasto') && $('sa-gasto').checked){
+    const g = await sb.from('gastos').insert({concepto: (($('sa-nota').value||'').trim() || ('Pagado directo por '+$('sa-socio').value)) + ' (aportación directa de '+$('sa-socio').value+')',
+      categoria: $('sa-gcat')?$('sa-gcat').value:'General', monto, metodo:'aportación directa', tipo:'gasto',
+      fecha: $('sa-fecha').value||hoyMX(), usuario_id: sesion.user.id});
+    msg = g.error ? 'Aportación ✓ pero el gasto NO se pudo registrar: '+errMsg(g.error) : 'Aportación Y gasto registrados ✓ (en el panel de dinero se cancelan solos)';
+  }
+  cerrarModal(); toast(msg);
   logEv('finanzas','aportación socio: '+$('sa-socio').value+' '+fmt(monto));
   vFinanzas();
 }
