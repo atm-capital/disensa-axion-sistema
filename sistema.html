@@ -1140,6 +1140,7 @@ async function nuevaVenta(){
         <div class="field"><label>Método de pago</label>
           <select id="nv-metodo" onchange="toggleCambio()"><option value="efectivo">Efectivo</option><option value="tarjeta">Tarjeta</option>
           <option value="transferencia">Transferencia</option><option value="ak_pago">AK Pago</option><option value="credito">Crédito</option></select></div>
+        <label class="small" style="display:block;margin:-4px 0 8px"><input type="checkbox" id="nv-consumo"> 🏷️ Consumo propio de la tienda — NO es venta (sale del inventario como gasto al costo)</label>
         <table class="carrito" style="margin:8px 0"><tbody id="nv-carrito"></tbody></table>
         <div class="tot-line"><span>Descuento</span><span>$ <input id="nv-desc" value="0" style="width:80px;padding:5px;border:1px solid var(--linea);border-radius:6px;text-align:right" oninput="pintarCarrito()"></span></div>
         <div class="tot-line grande"><span>Total</span><span id="nv-total">$0.00</span></div>
@@ -1879,8 +1880,30 @@ function numALetras(n){
   else letra=cientos(ent);
   return letra+(ent===1?' PESO ':' PESOS ')+String(cent).padStart(2,'0')+'/100 MN';
 }
+// v136: sacar mercancía para uso de la propia tienda (NO es venta; gasto al costo)
+async function guardarConsumoPropio(){
+  if(carrito.some(function(c){ return !c.producto_id; })){ toast('En consumo propio no van renglones libres — solo productos del inventario', true); return; }
+  if(carrito.some(function(c){ return c.granel; })){ toast('Consumo propio a granel aún no: registra la pieza completa', true); return; }
+  $('nv-guardar').disabled = true;
+  let costoTot = 0; const partes = [];
+  for(const c of carrito){
+    const r = await sb.from('productos').select('id,stock,costo,codigo').eq('id', c.producto_id).single();
+    if(r.error || !r.data){ toast('No encontré '+c.codigo, true); $('nv-guardar').disabled=false; return; }
+    const u = await sb.from('productos').update({stock: Math.round((+r.data.stock - +c.cantidad)*100)/100}).eq('id', c.producto_id);
+    if(u.error){ toast(errMsg(u.error), true); $('nv-guardar').disabled=false; return; }
+    costoTot += +r.data.costo * +c.cantidad;
+    partes.push(c.cantidad+'x '+r.data.codigo);
+  }
+  costoTot = Math.round(costoTot*100)/100;
+  const g = await sb.from('gastos').insert({concepto:('Consumo propio de tienda: '+partes.join(', ')).slice(0,140), categoria:'Consumo interno', monto: costoTot, metodo:'inventario', tipo:'gasto', usuario_id: sesion.user.id});
+  if(g.error){ toast('Inventario descontado pero el gasto falló: '+errMsg(g.error), true); }
+  logEv('inventario','consumo propio: '+partes.join(', ')+' ('+fmt(costoTot)+' costo)');
+  toast('Registrado como CONSUMO PROPIO ✓ '+fmt(costoTot)+' al costo — no cuenta como venta');
+  carrito = []; cerrarModal();
+}
 async function guardarVenta(){
   if(!carrito.length){ toast('Agrega al menos un producto', true); return; }
+  if($('nv-consumo') && $('nv-consumo').checked){ return await guardarConsumoPropio(); }
   if($('nv-metodo').value==='credito' && !$('nv-cliente').value){ toast('Para vender a CRÉDITO elige al cliente (no puede ser Mostrador) — así sabemos quién nos debe', true); return; }
   $('nv-guardar').disabled = true;
   const items = carrito.map(c=>({producto_id:c.producto_id||null, cantidad:c.cantidad,
@@ -3989,6 +4012,10 @@ function movCaja(){
     <label>Tipo</label><select id="mc-tipo"><option value="retiro">💸 Retiro (a bóveda / depósito)</option><option value="gasto">🧾 Gasto pagado de la caja</option><option value="entrada">➕ Entrada de efectivo</option></select>
     <label>Monto</label><input type="number" id="mc-monto" step="0.01" min="0.01" placeholder="0.00">
     <label>Concepto</label><input id="mc-con" placeholder="Ej: depósito al banco, gasolina, cambio de $500">
+    <label>¿Para qué se usó?</label><select id="mc-paraque"><option value="">— elige una opción —</option>
+      <option>🏪 Para la tienda (operación/mantenimiento)</option><option>📦 Para revender (mercancía)</option>
+      <option>👷 Para un trabajo/cliente</option><option>☕ Consumo del personal</option>
+      <option>🏦 Depósito / movimiento de dinero</option><option>Otro</option></select>
     <label>📎 Ticket o comprobante (foto o PDF — súbanlo siempre en depósitos)</label>
     <input type="file" id="mc-file" accept="image/*,application/pdf" capture="environment">
     <div class="acciones"><button class="btn" onclick="guardarMovCaja()">Guardar</button><button class="btn sec" onclick="cerrarModal()">Cancelar</button></div>`);
@@ -3997,6 +4024,7 @@ function movCaja(){
 async function guardarMovCaja(){
   const monto = +$('mc-monto').value||0;
   if(monto<=0){ toast('Escribe el monto', true); return; }
+  if($('mc-tipo').value!=='entrada' && $('mc-paraque') && !$('mc-paraque').value){ toast('Dinos PARA QUÉ se usó (elige una opción)', true); return; }
   let path = null;
   const f = $('mc-file') && $('mc-file').files && $('mc-file').files[0];
   if(f){
@@ -4005,7 +4033,8 @@ async function guardarMovCaja(){
     const up = await sb.storage.from('facturas').upload(path, f, {upsert:true});
     if(up.error){ toast('No se pudo subir el ticket: '+errMsg(up.error), true); path = null; }
   }
-  const fila = {tipo:$('mc-tipo').value, monto, concepto:$('mc-con').value.trim(), nombre:perfil.nombre||perfil.correo, usuario_id:perfil.id, fecha: window._cajaFecha||hoyMX()};
+  const pq9 = ($('mc-paraque') && $('mc-paraque').value) ? (' — '+$('mc-paraque').value) : '';
+  const fila = {tipo:$('mc-tipo').value, monto, concepto:($('mc-con').value.trim()+pq9).trim(), nombre:perfil.nombre||perfil.correo, usuario_id:perfil.id, fecha: window._cajaFecha||hoyMX()};
   if(path) fila.comprobante_path = path;
   let {error} = await sb.from('caja_movs').insert(fila);
   if(error && /comprobante/i.test(error.message||'')){ delete fila.comprobante_path; ({error} = await sb.from('caja_movs').insert(fila)); }
@@ -4222,7 +4251,7 @@ async function calcularDinero(hoy){
     const pg = await sb.from('pagos_cxp').select('monto').gt('creado', desdeISO);
     D.salioPagos = (pg.data||[]).reduce((s,x)=>s+ +x.monto,0);
     const gs = await sb.from('gastos').select('monto,metodo').gt('creado', desdeISO);
-    D.salioGastos = (gs.data||[]).reduce((s,x)=>s+ +x.monto,0);
+    D.salioGastos = (gs.data||[]).filter(x=>x.metodo!=='inventario').reduce((s,x)=>s+ +x.monto,0);
     const gastosEf = (gs.data||[]).filter(g=>g.metodo==='efectivo').reduce((s,x)=>s+ +x.monto,0);
     // v135: cobros de crédito no-efectivo también entran al banco
     let cobrosNoEf = 0;
