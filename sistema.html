@@ -945,11 +945,12 @@ function pintarVentas(){
   const hoy0 = new Date(); hoy0.setHours(0,0,0,0);
   const iniSem = new Date(hoy0); iniSem.setDate(hoy0.getDate() - ((hoy0.getDay()+6)%7));
   let tHoy=0, nHoy=0, tSem=0, nSem=0, uHoy=0;
-  data.forEach(v=>{ if(v.cancelada) return; const f=new Date(v.fecha);
+  data.forEach(v=>{ if(v.cancelada || esCP(v)) return; const f=new Date(v.fecha);
     if(f>=hoy0){ tHoy+=+v.total; nHoy++; if(utilPor[v.id]!==undefined) uHoy+=utilPor[v.id]; }
     if(f>=iniSem){ tSem+=+v.total; nSem++; } });
   // Totales del PERIODO elegido (respetando los filtros de pago/vendedor/búsqueda)
-  const vivas = rows.filter(v=>!v.cancelada);
+  const esCP = v => /CONSUMO PROPIO/i.test(v.notas||'');
+  const vivas = rows.filter(v=>!v.cancelada && !esCP(v));
   const tPer = vivas.reduce((s,v)=>s+ +v.total,0);
   const uPer = vivas.reduce((s,v)=>s+ (utilPor[v.id]||0),0);
   const ticket = vivas.length ? tPer/vivas.length : 0;
@@ -978,7 +979,7 @@ function pintarVentas(){
       <div style="min-width:60px"><b>#${v.folio}</b><div class="small muted">${hora}</div></div>
       <div style="flex:1;min-width:130px">${esc(v.clientes?.nombre||'Mostrador')}<div class="small muted">${esc(v.perfiles?.nombre||'')}</div></div>
       <div style="min-width:110px"><span class="badge b-gris">${ICO[v.metodo_pago]||'💵'} ${esc(v.metodo_pago)}</span>
-        ${v.cancelada?' <span class="badge b-rojo">cancelada</span>':''}
+        ${v.cancelada?' <span class="badge b-rojo">cancelada</span>':''}${/CONSUMO PROPIO/i.test(v.notas||'')?' <span class="badge b-ambar" title="Es consumo de la propia tienda: NO cuenta en los totales de venta">🏷️ consumo propio</span>':''}
         ${!v.cancelada && v.cancel_solicitada?` <span class="badge b-ambar" title="${esc(v.cancel_motivo||'sin motivo')}">⚠️ canc. solicitada</span>`:''}</div>
       <div style="text-align:right;min-width:110px"><b style="font-size:16px">${fmt(v.total)}</b>
         ${esFinanzas() && !v.cancelada && u!==undefined?`<div><span class="badge ${u>=0?'b-verde':'b-rojo'}" title="Utilidad de esta venta (sin IVA) y % sobre lo vendido">${fmt(u)}${+v.total>0?' · '+Math.round(u/(+v.total/1.16)*100)+'%':''}</span></div>`:''}</div>
@@ -995,7 +996,7 @@ function pintarVentas(){
   };
   $('vt-lista').innerHTML = Object.keys(dias).map(k=>{
     const vs = dias[k];
-    const tot = vs.filter(v=>!v.cancelada).reduce((s,v)=>s+ +v.total,0);
+    const tot = vs.filter(v=>!v.cancelada && !/CONSUMO PROPIO/i.test(v.notas||'')).reduce((s,v)=>s+ +v.total,0);
     return `<div class="card" style="margin-bottom:14px">
       <div style="display:flex;justify-content:space-between;align-items:baseline;border-bottom:2px solid var(--linea);padding-bottom:8px">
         <h3 style="margin:0;text-transform:capitalize">${nomDia(vs[0].fecha)}</h3>
@@ -1880,30 +1881,8 @@ function numALetras(n){
   else letra=cientos(ent);
   return letra+(ent===1?' PESO ':' PESOS ')+String(cent).padStart(2,'0')+'/100 MN';
 }
-// v136: sacar mercancía para uso de la propia tienda (NO es venta; gasto al costo)
-async function guardarConsumoPropio(){
-  if(carrito.some(function(c){ return !c.producto_id; })){ toast('En consumo propio no van renglones libres — solo productos del inventario', true); return; }
-  if(carrito.some(function(c){ return c.granel; })){ toast('Consumo propio a granel aún no: registra la pieza completa', true); return; }
-  $('nv-guardar').disabled = true;
-  let costoTot = 0; const partes = [];
-  for(const c of carrito){
-    const r = await sb.from('productos').select('id,stock,costo,codigo').eq('id', c.producto_id).single();
-    if(r.error || !r.data){ toast('No encontré '+c.codigo, true); $('nv-guardar').disabled=false; return; }
-    const u = await sb.from('productos').update({stock: Math.round((+r.data.stock - +c.cantidad)*100)/100}).eq('id', c.producto_id);
-    if(u.error){ toast(errMsg(u.error), true); $('nv-guardar').disabled=false; return; }
-    costoTot += +r.data.costo * +c.cantidad;
-    partes.push(c.cantidad+'x '+r.data.codigo);
-  }
-  costoTot = Math.round(costoTot*100)/100;
-  const g = await sb.from('gastos').insert({concepto:('Consumo propio de tienda: '+partes.join(', ')).slice(0,140), categoria:'Consumo interno', monto: costoTot, metodo:'inventario', tipo:'gasto', usuario_id: sesion.user.id});
-  if(g.error){ toast('Inventario descontado pero el gasto falló: '+errMsg(g.error), true); }
-  logEv('inventario','consumo propio: '+partes.join(', ')+' ('+fmt(costoTot)+' costo)');
-  toast('Registrado como CONSUMO PROPIO ✓ '+fmt(costoTot)+' al costo — no cuenta como venta');
-  carrito = []; cerrarModal();
-}
 async function guardarVenta(){
   if(!carrito.length){ toast('Agrega al menos un producto', true); return; }
-  if($('nv-consumo') && $('nv-consumo').checked){ return await guardarConsumoPropio(); }
   if($('nv-metodo').value==='credito' && !$('nv-cliente').value){ toast('Para vender a CRÉDITO elige al cliente (no puede ser Mostrador) — así sabemos quién nos debe', true); return; }
   $('nv-guardar').disabled = true;
   const items = carrito.map(c=>({producto_id:c.producto_id||null, cantidad:c.cantidad,
@@ -1913,7 +1892,7 @@ async function guardarVenta(){
     p_cliente_id: $('nv-cliente').value ? +$('nv-cliente').value : null,
     p_metodo: $('nv-metodo').value,
     p_descuento: +($('nv-desc').value||0),
-    p_notas: ''
+    p_notas: ($('nv-consumo') && $('nv-consumo').checked) ? 'CONSUMO PROPIO' : ''
   });
   if(error){ toast(errMsg(error), true); $('nv-guardar').disabled = false; return; }
   const cliSel = $('nv-cliente');
