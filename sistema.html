@@ -945,11 +945,11 @@ function pintarVentas(){
   const hoy0 = new Date(); hoy0.setHours(0,0,0,0);
   const iniSem = new Date(hoy0); iniSem.setDate(hoy0.getDate() - ((hoy0.getDay()+6)%7));
   let tHoy=0, nHoy=0, tSem=0, nSem=0, uHoy=0;
+  const esCP = v => /CONSUMO PROPIO/i.test(v.notas||'');
   data.forEach(v=>{ if(v.cancelada || esCP(v)) return; const f=new Date(v.fecha);
     if(f>=hoy0){ tHoy+=+v.total; nHoy++; if(utilPor[v.id]!==undefined) uHoy+=utilPor[v.id]; }
     if(f>=iniSem){ tSem+=+v.total; nSem++; } });
   // Totales del PERIODO elegido (respetando los filtros de pago/vendedor/búsqueda)
-  const esCP = v => /CONSUMO PROPIO/i.test(v.notas||'');
   const vivas = rows.filter(v=>!v.cancelada && !esCP(v));
   const tPer = vivas.reduce((s,v)=>s+ +v.total,0);
   const uPer = vivas.reduce((s,v)=>s+ (utilPor[v.id]||0),0);
