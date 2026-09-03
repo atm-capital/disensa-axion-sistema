@@ -274,6 +274,7 @@ async function cargarPerfil(){
   const vGuardada = localStorage.getItem('ax_vista');
   const vValida = vGuardada && VISTAS.some(v=>v.id===vGuardada && v.roles.includes(perfil.rol) && (!v.solo || v.solo===(perfil.correo||'')));
   irA(localStorage.getItem('ax_import') && perfil.rol === 'admin' ? 'importar' : (vValida ? vGuardada : 'resumen'));
+  if(typeof puedeVender==='function' && puedeVender()) setTimeout(avisoTarjetasInicio, 1500); // v144: al entrar, si hay precios nuevos se abre la lista sola
 }
 
 /* ================= AUTH ================= */
@@ -879,14 +880,48 @@ async function contarTarjetas(){
   b.textContent = n ? `🏷️ ${n} tarjeta(s) por cambiar` : '🏷️ Tarjetas';
   b.style.background = n ? '#e8862d' : ''; b.style.color = n ? '#fff' : ''; b.style.borderColor = n ? '#e8862d' : '';
 }
-async function verTarjetas(){
-  const r = await sb.from('precio_cambios').select('id,creado,antes,despues,antes_unidad,despues_unidad,productos(codigo,descripcion,granel,unidad_venta)').eq('atendido',false).order('id',{ascending:false}).limit(150);
+// v144: avisos automáticos + impresión de tarjetas
+async function avisoTarjetasInicio(){
+  if(sessionStorage.getItem('ax_tarj_visto')) return;
+  const r = await sb.from('precio_cambios').select('id',{count:'exact',head:true}).eq('atendido',false);
+  if((r.count||0) > 0){ sessionStorage.setItem('ax_tarj_visto','1'); verTarjetas(null, '👋 <b>Hay precios nuevos.</b> Imprime las tarjetas y cámbialas en el anaquel antes de seguir vendiendo.'); }
+}
+async function avisoTarjetasProductos(pids){
+  if(!pids || !pids.length) return;
+  const r = await sb.from('precio_cambios').select('id').eq('atendido',false).in('producto_id', pids);
+  if((r.data||[]).length) verTarjetas(pids, '📦 <b>De lo que acabas de recibir, estos productos traen precio NUEVO.</b> Imprime la tarjeta antes de acomodarlos en el anaquel:');
+}
+function imprimirTarjetas(){
+  const d = window._tarjData||[]; if(!d.length){ toast('No hay tarjetas que imprimir', true); return; }
+  const card = x => { const p = x.productos||{}; const u = esc(p.unidad_venta||'pza');
+    const suelto = p.granel && +x.despues_unidad>0 ? `<div class="su">Suelto: <b>${fmt(x.despues_unidad)}</b> / ${u}</div>` : '';
+    return `<div class="tj"><div class="hd">AXION TOOLS · Disensa</div><div class="ds">${esc(p.descripcion||'')}</div><div class="pr">${fmt(x.despues)}</div>${suelto}<div class="cd">${esc(p.codigo||'')} · ${fecha(String(x.creado).slice(0,10))}</div></div>`; };
+  const w = window.open('', '_blank');
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Tarjetas de precio</title><style>
+    body{font-family:Arial,Helvetica,sans-serif;margin:8mm}
+    .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:6mm}
+    .tj{border:1.5px solid #333;border-radius:6px;padding:5mm 6mm;height:52mm;box-sizing:border-box;display:flex;flex-direction:column;justify-content:space-between;page-break-inside:avoid}
+    .hd{font-size:9pt;color:#E1251B;font-weight:bold;letter-spacing:.5px}
+    .ds{font-size:12pt;font-weight:bold;line-height:1.2;max-height:2.5em;overflow:hidden}
+    .pr{font-size:30pt;font-weight:900;text-align:right}
+    .su{font-size:11pt;text-align:right;color:#1d4ed8}
+    .cd{font-size:8pt;color:#666}
+    @media print{ body{margin:6mm} }
+  </style></head><body><div class="grid">${d.map(card).join('')}</div><script>setTimeout(function(){window.print();},300);<\/script></body></html>`);
+  w.document.close();
+}
+async function verTarjetas(pids, aviso){
+  let q = sb.from('precio_cambios').select('id,creado,antes,despues,antes_unidad,despues_unidad,productos(codigo,descripcion,granel,unidad_venta)').eq('atendido',false).order('id',{ascending:false}).limit(150);
+  if(pids && pids.length) q = q.in('producto_id', pids);
+  const r = await q;
   if(r.error){ toast(errMsg(r.error), true); return; }
-  const d = r.data||[];
+  const d = r.data||[]; window._tarjData = d;
   const nom = ()=> (typeof perfil!=='undefined'&&perfil) ? (perfil.nombre||perfil.correo||'') : '';
   window._tarjNombre = nom();
   abrirModal(`<h3>🏷️ Tarjetas de precio por cambiar</h3>
-    <p class="small muted" style="margin:0 0 8px">Cada vez que cambia un precio de venta aparece aquí. Imprime la tarjeta nueva, cámbiala en el anaquel y palomea.</p>
+    ${aviso?`<div class="card" style="border-left:4px solid #e8862d;padding:10px;margin-bottom:8px">${aviso}</div>`:''}
+    <p class="small muted" style="margin:0 0 8px">Cada vez que cambia un precio de venta aparece aquí. Dale <b>🖨️ Imprimir tarjetas</b>, cámbialas en el anaquel y palomea.</p>
+    ${d.length?`<div style="margin:0 0 8px"><button class="btn" onclick="imprimirTarjetas()">🖨️ Imprimir tarjetas (${d.length})</button></div>`:''}
     ${d.length?`<div class="tbl-scroll"><table><thead><tr><th>Producto</th><th class="num">Antes</th><th class="num">Ahora</th><th>Cuándo</th><th></th></tr></thead><tbody>${d.map(x=>{
       const p = x.productos||{}; const u = esc(p.unidad_venta||'pza');
       const gr = p.granel && (+x.antes_unidad !== +x.despues_unidad);
@@ -896,7 +931,7 @@ async function verTarjetas(){
         <td class="num"><b>${fmt(x.despues)}</b>${gr?`<br><span class="small" style="color:var(--azul)"><b>${fmt(x.despues_unidad)}/${u}</b> suelto</span>`:''}</td>
         <td class="small">${fecha(String(x.creado).slice(0,10))}</td>
         <td><button class="btn sm" onclick="tarjetaLista(${x.id},this)">✓ Ya la cambié</button></td></tr>`; }).join('')}</tbody></table></div>
-      <div class="acciones"><button class="btn sec" onclick="tarjetasTodas()">✓ Todas cambiadas</button><button class="btn" onclick="cerrarModal()">Cerrar</button></div>`
+      <div class="acciones"><button class="btn sec" onclick="tarjetasTodas(${pids&&pids.length?'window._tarjData.map(x=>x.id)':''})">✓ Todas cambiadas</button><button class="btn" onclick="cerrarModal()">Cerrar</button></div>`
     : '<p style="color:var(--verde,#15803d)"><b>✓ No hay tarjetas pendientes.</b></p><div class="acciones"><button class="btn" onclick="cerrarModal()">Cerrar</button></div>'}`, true);
 }
 async function tarjetaLista(id, btn){
@@ -905,9 +940,11 @@ async function tarjetaLista(id, btn){
   if(btn){ const tr = btn.closest('tr'); if(tr) tr.remove(); }
   contarTarjetas();
 }
-async function tarjetasTodas(){
+async function tarjetasTodas(ids){
   if(!confirm('¿Ya cambiaron TODAS las tarjetas de la lista?')) return;
-  const {error} = await sb.from('precio_cambios').update({atendido:true, atendido_en:new Date().toISOString(), atendido_por:window._tarjNombre||''}).eq('atendido', false);
+  let q = sb.from('precio_cambios').update({atendido:true, atendido_en:new Date().toISOString(), atendido_por:window._tarjNombre||''}).eq('atendido', false);
+  if(ids && ids.length) q = q.in('id', ids);
+  const {error} = await q;
   if(error){ toast(errMsg(error), true); return; }
   cerrarModal(); toast('Tarjetas al día ✓'); contarTarjetas();
 }
@@ -3481,12 +3518,14 @@ async function registrarRecepcion(pedidoId){
   const {error} = await sb.rpc('recibir_partidas', {p_pedido_id:pedidoId, p_items:items});
   if(error){ toast(errMsg(error),true); return; }
   cerrarModal(); toast('Recepción registrada: inventario actualizado ✓'); vPedidos();
+  avisoTarjetasProductos(items.map(x=>(pedItems.find(i=>i.id===x.item_id)||{}).producto_id).filter(Boolean)); // v144
 }
 async function recibirPedido(id){
   if(!confirm('¿Recibir TODO lo pendiente del pedido? Las cantidades faltantes se sumarán al inventario.')) return;
   const {error} = await sb.rpc('recibir_pedido', {p_pedido_id:id});
   if(error){ toast(errMsg(error),true); return; }
   toast('Pedido recibido completo: inventario actualizado ✓'); vPedidos();
+  try{ const {data:pi} = await sb.from('pedido_compra_items').select('producto_id').eq('pedido_id', id); avisoTarjetasProductos((pi||[]).map(x=>x.producto_id).filter(Boolean)); }catch(e){} // v144
 }
 
 /* ============================================================
@@ -3928,7 +3967,7 @@ async function vCaja(){
   window._cajaCalc = {fecha:f, fondo:fondoUsar, efectivo, otros:totOtros, retiros:retiros-entradas, esperado, primero: !prev && !corte};
   const ico = {efectivo:'💵',tarjeta:'💳',transferencia:'🏦',ak_pago:'📱',credito:'📄'};
   $('vtools').innerHTML = `<input type="date" value="${f}" onchange="window._cajaFecha=this.value; vCaja()" style="padding:8px;border:1px solid var(--linea);border-radius:8px">
-    ${puedeVender()?`<button class="btn sec" onclick="movCaja()">💸 Retiro / gasto</button>`:''}
+    ${puedeVender()?`<button class="btn sec" onclick="movCaja()">💸 Retiro / gasto</button> <button class="btn sec" onclick="compraLocal()">🧾 Compra a proveedor local</button>`:''}
     ${esAdmin()?`<button class="btn sec" onclick="configFondo(${fondoFijo})">⚙️ Fondo fijo</button>`:''}`;
   $('v-caja').innerHTML = `
     <div class="kpis">
@@ -4029,6 +4068,104 @@ async function guardarDeposito(){
   cerrarModal(); toast('Depósito registrado con su ticket ✓');
   logEv('caja','depósito a cuenta: '+fmt(monto));
   vCaja();
+}
+// ===== v147: COMPRA A PROVEEDOR LOCAL (Truper, Arca, tlapalería...) en un solo paso =====
+let clItems = [];
+async function compraLocal(){
+  clItems = [];
+  const provs = (await sb.from('proveedores').select('id,nombre').order('nombre')).data||[];
+  abrirModal(`<h3>🧾 Compra a proveedor local</h3>
+    <p class="small muted" style="margin:0 0 10px">Para lo que se compra fuera de Indar/Holcim (Truper, refrescos, tlapalería…). En un solo paso: entra al inventario con su costo, se registra el proveedor y sale el dinero de donde lo pagaron.</p>
+    <div class="frow">
+      <div class="field"><label>Proveedor (escribe el nombre; si es nuevo se da de alta solo)</label><input id="cl-prov" list="cl-provs" placeholder="Ej. Truper Sra. Lupita / Arca Continental"><datalist id="cl-provs">${provs.map(p=>`<option value="${esc(p.nombre)}">`).join('')}</datalist></div>
+      <div class="field"><label>Ticket / nota / folio</label><input id="cl-folio" placeholder="Ej. nota 1234 (opcional)"></div>
+    </div>
+    <div class="field"><label>Buscar producto en el inventario (o escribe uno nuevo abajo)</label>
+      <input id="cl-buscar" placeholder="código o descripción…" oninput="clBuscar()" autocomplete="off">
+      <div id="cl-res" class="lista" style="max-height:140px;overflow:auto"></div></div>
+    <details style="margin:0 0 8px"><summary class="small" style="cursor:pointer">➕ Producto NUEVO (no está en el inventario)</summary>
+      <div class="frow" style="margin-top:6px">
+        <div class="field"><label>Descripción</label><input id="cln-desc" placeholder="Ej. Coca-Cola 250 ml"></div>
+        <div class="field"><label>Código (opcional)</label><input id="cln-cod" placeholder="se genera solo si lo dejas vacío"></div>
+      </div>
+      <div class="frow">
+        <div class="field"><label>Precio de VENTA (con IVA)</label><input id="cln-precio" type="number" step="1" placeholder="0"></div>
+        <div class="field"><label>Unidad</label><input id="cln-unidad" value="pza"></div>
+        <div class="field" style="align-self:end"><button class="btn sec" onclick="clAgregarNuevo()">Agregar</button></div>
+      </div></details>
+    <div class="tbl-scroll"><table><thead><tr><th>Producto</th><th class="num">Cant.</th><th class="num">Precio compra c/u</th><th class="num">Importe</th><th></th></tr></thead><tbody id="cl-tabla"><tr><td colspan="5" class="muted">Agrega productos…</td></tr></tbody></table></div>
+    <label class="small" style="display:block;margin:6px 0"><input type="checkbox" id="cl-iva" checked> El precio de compra ya incluye IVA (ticket normal). El costo se guarda sin IVA, como los de Indar.</label>
+    <div class="frow">
+      <div class="field"><label>¿Con qué se pagó?</label><select id="cl-pago" onchange="$('cl-plazo-w').style.display=this.value==='credito'?'':'none'">
+        <option value="cajon">💵 Efectivo del cajón (ventas del día)</option><option value="chica">🏠 Efectivo de la caja fuerte</option>
+        <option value="transferencia">🏦 Transferencia del banco</option><option value="credito">📄 Nos dieron crédito (queda por pagar)</option></select></div>
+      <div class="field" id="cl-plazo-w" style="display:none"><label>Plazo (días)</label><input id="cl-plazo" type="number" value="15"></div>
+    </div>
+    <div class="field"><label>📎 Foto del ticket (obligatoria)</label><input type="file" id="cl-file" accept="image/*,application/pdf" capture="environment"></div>
+    <div class="field"><label>Nota (opcional)</label><input id="cl-nota" placeholder="Ej. la trajo la señora de Truper"></div>
+    <p style="text-align:right;margin:6px 0"><b>Total: <span id="cl-total">$0.00</span></b></p>
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cancelar</button><button class="btn" id="cl-btn" onclick="guardarCompraLocal()">✅ Registrar compra</button></div>`, true);
+  setTimeout(()=>$('cl-prov')?.focus(), 100);
+}
+let clTimer = null;
+function clBuscar(){ clearTimeout(clTimer); clTimer = setTimeout(clBuscarYa, 250); }
+async function clBuscarYa(){
+  const q = ($('cl-buscar')?.value||'').trim(); const box = $('cl-res'); if(!box) return;
+  if(q.length < 2){ box.innerHTML = ''; return; }
+  const like = `%${q.replace(/[%,]/g,' ')}%`;
+  const r = await sb.from('productos').select('id,codigo,descripcion,costo,precio,stock,unidad').eq('activo',true).or(`codigo.ilike.${like},descripcion.ilike.${like}`).limit(8);
+  box.innerHTML = (r.data||[]).map(p=>`<div class="it" onclick='clAgregar(${JSON.stringify({id:p.id,c:p.codigo,d:p.descripcion,co:+p.costo,pr:+p.precio,st:+p.stock}).replace(/'/g,"&#39;")})'>
+      <span><b>${esc(p.codigo)}</b> ${esc((p.descripcion||'').slice(0,45))} <span class="badge b-gris">${+p.stock} en stock</span></span><span class="small muted">costo ${fmt(p.costo)}</span></div>`).join('') || '<div class="it muted">No está en el inventario — usa "Producto NUEVO".</div>';
+}
+function clAgregar(p){
+  if(!clItems.find(x=>x.producto_id===p.id)) clItems.push({producto_id:p.id, codigo:p.c, descripcion:p.d, cantidad:1, precioCompra: Math.round(p.co*1.16*100)/100, precioVenta:p.pr});
+  $('cl-buscar').value=''; $('cl-res').innerHTML=''; clPintar();
+}
+function clAgregarNuevo(){
+  const d = ($('cln-desc').value||'').trim(); if(!d){ toast('Escribe la descripción del producto nuevo', true); return; }
+  clItems.push({producto_id:null, codigo:($('cln-cod').value||'').trim(), descripcion:d, cantidad:1, precioCompra:0, precioVenta:+($('cln-precio').value||0), unidad:($('cln-unidad').value||'pza').trim()});
+  $('cln-desc').value=''; $('cln-cod').value=''; $('cln-precio').value=''; clPintar();
+}
+function clSet(i, k, v){ clItems[i][k] = +v||0; clPintar(false); }
+function clPintar(redraw=true){
+  const tot = clItems.reduce((s,x)=>s + x.cantidad*x.precioCompra, 0);
+  $('cl-total').textContent = fmt(tot);
+  if(!redraw) { clItems.forEach((x,i)=>{ const el=$('cl-imp-'+i); if(el) el.textContent = fmt(x.cantidad*x.precioCompra); }); return; }
+  $('cl-tabla').innerHTML = clItems.map((x,i)=>`<tr><td><b>${esc(x.codigo||'nuevo')}</b><br><span class="small muted">${esc(x.descripcion.slice(0,40))}${x.producto_id?'':' <span class="badge b-azul">nuevo · venta '+fmt(x.precioVenta)+'</span>'}</span></td>
+    <td><input type="number" step="1" min="0.01" value="${x.cantidad}" style="width:64px" onchange="clSet(${i},'cantidad',this.value)"></td>
+    <td><input type="number" step="0.01" min="0" value="${x.precioCompra}" style="width:84px" onchange="clSet(${i},'precioCompra',this.value)"></td>
+    <td class="num" id="cl-imp-${i}">${fmt(x.cantidad*x.precioCompra)}</td>
+    <td><span class="x" onclick="clItems.splice(${i},1);clPintar()">✕</span></td></tr>`).join('') || '<tr><td colspan="5" class="muted">Agrega productos…</td></tr>';
+}
+async function guardarCompraLocal(){
+  const prov = ($('cl-prov').value||'').trim(); if(!prov){ toast('Pon el nombre del proveedor', true); return; }
+  if(!clItems.length){ toast('Agrega al menos un producto', true); return; }
+  if(clItems.some(x=>!(x.cantidad>0) || !(x.precioCompra>0))){ toast('Cada renglón necesita cantidad y precio de compra', true); return; }
+  const f = $('cl-file') && $('cl-file').files && $('cl-file').files[0];
+  if(!f){ toast('Falta la foto del ticket — es obligatoria', true); return; }
+  const btn = $('cl-btn'); btn.disabled = true; btn.textContent = 'Registrando…';
+  const ext = (f.name.split('.').pop()||'jpg').toLowerCase();
+  const path = 'compras/'+hoyMX()+'-'+Date.now()+'.'+ext;
+  const up = await sb.storage.from('facturas').upload(path, f, {upsert:true});
+  if(up.error){ toast('No se pudo subir el ticket: '+errMsg(up.error), true); btn.disabled=false; btn.textContent='✅ Registrar compra'; return; }
+  const conIva = $('cl-iva').checked;
+  const items = clItems.map(x=>({producto_id:x.producto_id, codigo:x.codigo||'', descripcion:x.descripcion, unidad:x.unidad||'pza', precio: x.producto_id?null:redondearPrecio(x.precioVenta||0),
+    cantidad:x.cantidad, costo: Math.round((conIva ? x.precioCompra/1.16 : x.precioCompra)*10000)/10000}));
+  const pago = $('cl-pago').value;
+  const r = await sb.rpc('compra_local', {p_proveedor:prov, p_folio:($('cl-folio').value||'').trim(), p_items:items, p_pago:pago, p_nota:($('cl-nota').value||'').trim(),
+    p_nombre:(typeof perfil!=='undefined'&&perfil?(perfil.nombre||perfil.correo):''), p_comprobante:path, p_plazo:+($('cl-plazo')?.value||15)});
+  if(r.error){ toast(errMsg(r.error), true); btn.disabled=false; btn.textContent='✅ Registrar compra'; return; }
+  const d = r.data||{};
+  if(pago==='transferencia' && d.cuenta_id){
+    const p2 = await sb.rpc('registrar_pago', {p_cuenta_id:d.cuenta_id, p_monto:+d.total, p_metodo:'transferencia', p_referencia:'Compra local '+prov+' · ticket '+path});
+    if(p2.error) toast('La compra quedó registrada pero el pago no: '+errMsg(p2.error), true);
+    else await sb.from('cuentas_pagar').update({saldo:0, estado:'pagada'}).eq('id', d.cuenta_id);
+  }
+  logEv('compra_local', prov+' '+fmt(d.total)+' ('+pago+') pedido #'+d.pedido_id);
+  cerrarModal();
+  toast(`✅ Compra registrada: ${d.partidas} producto(s) al inventario${d.nuevos?', '+d.nuevos+' nuevo(s)':''} · ${fmt(d.total)} ${pago==='credito'?'por pagar':'pagados'}`);
+  if(d.nuevos && typeof avisoTarjetasProductos==='function'){ const pids = items.filter(x=>x.producto_id).map(x=>x.producto_id); setTimeout(()=>verTarjetas(null, '🆕 Los productos nuevos necesitan tarjeta de precio:'), 600); }
+  if(typeof vCaja==='function' && document.querySelector('#v-caja')) vCaja();
 }
 function movCaja(){
   abrirModal(`<h3>Retiro, gasto o entrada de efectivo</h3>
@@ -4619,7 +4756,7 @@ function parsearRecibo(txt){
   // factura | saldo | %desc | imp.desc | vencimiento | importe a cobrar
   // Se procesa renglón por renglón para evitar regex lentos sobre textos largos.
   const n = s => +String(s).replace(/,/g,'');
-  const re = /^(\d{6,10})\s+([\d,.]+)\s+([\d.]+)%\s+([\d,.]+)\s+(\d{4}-\d{2}-\d{2})\s+([\d,.]+)$/;
+  const re = /^(\d{6,10})\s+([\d,.]+)\s+([\d.]+)%\s+([\d,.]+)%?\s+(\d{4}-\d{2}-\d{2})\s+([\d,.]+)$/; // v145: con 0% Indar pone "0.00%" en Imp. Descuento
   const out = [];
   for(let linea of String(txt).split(/[\r\n]+/)){
     const l = linea.trim().replace(/\s+/g,' ');
@@ -5174,9 +5311,28 @@ async function historialPagos(){
     <tbody>${(r.data||[]).map(p=>`<tr><td>${fecha(p.fecha)}</td><td class="small"><b>${esc(p.lote)}</b><div class="muted">${esc(p.nombre||'')}</div></td>
       <td class="num">${p.n_facturas}</td><td class="num">${fmt(p.suma_saldos)}</td><td class="num"><b>${fmt(p.transferido)}</b></td>
       <td class="num" style="color:#15803d">${fmt(p.descuento)}</td><td class="small muted">${esc(p.referencia||'')}</td>
-      <td>${p.comprobante_path?`<button class="btn sm sec" onclick="verPdfFactura('${esc(p.comprobante_path)}')">📎 Ver</button>`:'<span class="muted small">—</span>'}</td></tr>`).join('')
+      <td>${p.comprobante_path?`<button class="btn sm sec" onclick="verPdfFactura('${esc(p.comprobante_path)}')">📎 Ver</button>`:(esAdmin()?`<button class="btn sm sec" onclick="subirCompLote('${esc(p.lote)}')">📎 Subir</button>`:'<span class="muted small">—</span>')}</td></tr>`).join('')
       || '<tr><td colspan="8" class="muted">Aún no hay pagos registrados.</td></tr>'}</tbody></table></div>
     <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
+}
+// v146: adjuntar el comprobante a un pago ya registrado (SPEI del banco, recibo de Indar)
+function subirCompLote(lote){
+  abrirModal(`<h3>📎 Comprobante del pago ${esc(lote)}</h3>
+    <p class="small muted" style="margin:0 0 10px">Sube el PDF del SPEI (o la imagen). Queda ligado a este lote y se ve con "📎 Ver".</p>
+    <div class="field"><input type="file" id="cl-file" accept="image/*,application/pdf"></div>
+    <div class="acciones"><button class="btn sec" onclick="historialPagos()">Cancelar</button><button class="btn" onclick="guardarCompLote('${esc(lote)}')">Guardar</button></div>`);
+}
+async function guardarCompLote(lote){
+  const f = $('cl-file') && $('cl-file').files && $('cl-file').files[0];
+  if(!f){ toast('Elige el archivo', true); return; }
+  const ext = (f.name.split('.').pop()||'pdf').toLowerCase();
+  const path = 'pagos/'+lote+'.'+ext;
+  const up = await sb.storage.from('facturas').upload(path, f, {upsert:true});
+  if(up.error){ toast('No se pudo subir: '+errMsg(up.error), true); return; }
+  const {error} = await sb.from('pagos_lote').update({comprobante_path: path}).eq('lote', lote);
+  if(error){ toast(errMsg(error), true); return; }
+  logEv('finanzas', 'comprobante adjuntado al pago '+lote);
+  toast('Comprobante guardado ✓'); historialPagos();
 }
 function pagarCuenta(id){
   const c = cxpData.find(x=>x.id===id);
