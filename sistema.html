@@ -2716,12 +2716,18 @@ async function vInventario(){
   const [{data, error}, mv, mr] = await Promise.all([
     traerTodo(()=>sb.from('productos').select('*').order('descripcion')).then(d=>({data:d, error:null})),
     traerTodo(()=>sb.from('venta_items').select('producto_id,cantidad,ventas!inner(cancelada)').eq('ventas.cancelada', false).order('id')).then(d=>({data:d})),
-    traerTodo(()=>sb.from('pedido_compra_items').select('producto_id').gt('cantidad_recibida', 0).order('id')).then(d=>({data:d}))
+    traerTodo(()=>sb.from('pedido_compra_items').select('producto_id,pedidos_compra(proveedores(nombre))').gt('cantidad_recibida', 0).order('id')).then(d=>({data:d}))
   ]);
   if(error) throw error;
   invData = data;
   window._invVend = new Set((mv.data||[]).map(x=>x.producto_id));
   window._invRec = new Set((mr.data||[]).map(x=>x.producto_id));
+  // v148: último proveedor que surtió cada producto (para filtrar el inventario por proveedor)
+  window._invProv = {};
+  (mr.data||[]).forEach(x=>{ const n = x.pedidos_compra && x.pedidos_compra.proveedores && x.pedidos_compra.proveedores.nombre; if(n) window._invProv[x.producto_id] = n; });
+  const provDe0 = p => window._invProv[p.id] || 'Indar (inventario inicial)';
+  const provCnt = {}; data.forEach(p=>{ const n=provDe0(p); provCnt[n]=(provCnt[n]||0)+1; });
+  const provs = Object.keys(provCnt).sort();
   window._invVendCnt = {};
   (mv.data||[]).forEach(x=>{ window._invVendCnt[x.producto_id] = (window._invVendCnt[x.producto_id]||0) + (+x.cantidad||0); });
   const cats = [...new Set(data.map(p=>p.categoria))].sort();
@@ -2739,6 +2745,8 @@ async function vInventario(){
       <input type="search" id="inv-q" placeholder="Buscar por código o descripción..." oninput="pintarInv()">
       <select id="inv-cat" onchange="pintarInv()"><option value="">Todas las categorías</option>
         ${cats.map(c=>`<option>${esc(c)}</option>`).join('')}</select>
+      <select id="inv-prov" onchange="pintarInv()"><option value="">Todos los proveedores</option>
+        ${provs.map(n=>`<option value="${esc(n)}">${esc(n)} (${provCnt[n]})</option>`).join('')}</select>
       <select id="inv-est" onchange="pintarInv()">
         <option value="">Todos (${nTot})</option>
         <option value="con">Con stock (${nCon})</option>
@@ -2768,10 +2776,12 @@ function pintarInv(){
   const cat = $('inv-cat').value;
   const soloBajo = $('inv-bajo').checked;
   const est = $('inv-est')?.value || '';
+  const prov = $('inv-prov')?.value || ''; // v148
+  const provDe = p => (window._invProv||{})[p.id] || 'Indar (inventario inicial)';
   const sinMov = p => !(window._invVend||new Set()).has(p.id) && !(window._invRec||new Set()).has(p.id);
   const rows = invData.filter(p =>
     (!q || p.codigo.toLowerCase().includes(q) || p.descripcion.toLowerCase().includes(q) || (p.codigo_barras && nbarra(p.codigo_barras).includes(nbarra(q)))) &&
-    (!cat || p.categoria === cat) && (!soloBajo || +p.stock <= +p.stock_min) &&
+    (!cat || p.categoria === cat) && (!soloBajo || +p.stock <= +p.stock_min) && (!prov || provDe(p)===prov) &&
     (est==='' || (est==='con' && +p.stock>0) || (est==='agotado' && +p.stock<=0) || (est==='sinmov' && sinMov(p)) || (est==='sincb' && !(p.codigo_barras||'').trim()) || (est==='vendidos' && ((window._invVendCnt||{})[p.id]||0)>0)));
   const orden = $('inv-orden')?.value || 'az';
   const vc = window._invVendCnt || {};
@@ -2788,7 +2798,7 @@ function pintarInv(){
     const bm = pct>=30?'b-verde':(pct>=15?'b-ambar':'b-rojo');
     return `<tr style="cursor:pointer;${p.activo?(+p.stock<=0?'opacity:.7':''):'opacity:.45'}" onclick="fichaProducto(${p.id})" title="Ver historial del producto">
       <td><b>${esc(p.codigo)}</b></td><td>${esc(p.descripcion)}${+p.stock<=0?' <span class="badge b-rojo">agotado</span>':''}${sinMov(p)?' <span class="badge b-gris" title="Nunca ha tenido venta ni recepción">sin movimiento</span>':''}${verVend&&(vc[p.id]||0)>0?` <span class="badge b-verde" title="Piezas vendidas">🛒 ${vc[p.id]}</span>`:''}</td>
-      <td><span class="badge b-gris">${esc(p.categoria)}</span></td>
+      <td><span class="badge b-gris">${esc(p.categoria)}</span>${!/^Indar/.test(provDe(p))?` <span class="badge b-azul" title="Último proveedor que lo surtió">${esc(provDe(p))}</span>`:''}</td>
       ${esFinanzas()?`<td class="num">${fmt(p.costo)}</td>`:''}
       <td class="num"><b>${fmt(p.precio)}</b></td>
       ${esFinanzas()?`<td class="num"><span class="badge ${bm}">${pct.toFixed(0)}%</span> <span class="small muted">${fmt(marg)}</span></td>`:''}
