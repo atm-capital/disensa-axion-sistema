@@ -871,11 +871,53 @@ async function vResumen(){
    VISTA: VENTAS (POS + historial)
 ============================================================ */
 let carrito = [], prodCache = [], cliCache = [];
+// ===== v143: tarjetas de precio por cambiar (cada cambio de precio de venta queda en precio_cambios, SQL 45) =====
+async function contarTarjetas(){
+  const b = $('btn-tarjetas'); if(!b) return;
+  const r = await sb.from('precio_cambios').select('id',{count:'exact',head:true}).eq('atendido',false);
+  const n = r.count||0;
+  b.textContent = n ? `🏷️ ${n} tarjeta(s) por cambiar` : '🏷️ Tarjetas';
+  b.style.background = n ? '#e8862d' : ''; b.style.color = n ? '#fff' : ''; b.style.borderColor = n ? '#e8862d' : '';
+}
+async function verTarjetas(){
+  const r = await sb.from('precio_cambios').select('id,creado,antes,despues,antes_unidad,despues_unidad,productos(codigo,descripcion,granel,unidad_venta)').eq('atendido',false).order('id',{ascending:false}).limit(150);
+  if(r.error){ toast(errMsg(r.error), true); return; }
+  const d = r.data||[];
+  const nom = ()=> (typeof perfil!=='undefined'&&perfil) ? (perfil.nombre||perfil.correo||'') : '';
+  window._tarjNombre = nom();
+  abrirModal(`<h3>🏷️ Tarjetas de precio por cambiar</h3>
+    <p class="small muted" style="margin:0 0 8px">Cada vez que cambia un precio de venta aparece aquí. Imprime la tarjeta nueva, cámbiala en el anaquel y palomea.</p>
+    ${d.length?`<div class="tbl-scroll"><table><thead><tr><th>Producto</th><th class="num">Antes</th><th class="num">Ahora</th><th>Cuándo</th><th></th></tr></thead><tbody>${d.map(x=>{
+      const p = x.productos||{}; const u = esc(p.unidad_venta||'pza');
+      const gr = p.granel && (+x.antes_unidad !== +x.despues_unidad);
+      const pz = +x.antes !== +x.despues;
+      return `<tr><td><b>${esc(p.codigo||'')}</b><br><span class="small muted">${esc((p.descripcion||'').slice(0,55))}</span></td>
+        <td class="num">${pz?fmt(x.antes):'<span class="muted">'+fmt(x.antes)+'</span>'}${gr?`<br><span class="small">${+x.antes_unidad?fmt(x.antes_unidad)+'/'+u:'— (no se vendía suelto)'}</span>`:''}</td>
+        <td class="num"><b>${fmt(x.despues)}</b>${gr?`<br><span class="small" style="color:var(--azul)"><b>${fmt(x.despues_unidad)}/${u}</b> suelto</span>`:''}</td>
+        <td class="small">${fecha(String(x.creado).slice(0,10))}</td>
+        <td><button class="btn sm" onclick="tarjetaLista(${x.id},this)">✓ Ya la cambié</button></td></tr>`; }).join('')}</tbody></table></div>
+      <div class="acciones"><button class="btn sec" onclick="tarjetasTodas()">✓ Todas cambiadas</button><button class="btn" onclick="cerrarModal()">Cerrar</button></div>`
+    : '<p style="color:var(--verde,#15803d)"><b>✓ No hay tarjetas pendientes.</b></p><div class="acciones"><button class="btn" onclick="cerrarModal()">Cerrar</button></div>'}`, true);
+}
+async function tarjetaLista(id, btn){
+  const {error} = await sb.from('precio_cambios').update({atendido:true, atendido_en:new Date().toISOString(), atendido_por:window._tarjNombre||''}).eq('id', id);
+  if(error){ toast(errMsg(error), true); return; }
+  if(btn){ const tr = btn.closest('tr'); if(tr) tr.remove(); }
+  contarTarjetas();
+}
+async function tarjetasTodas(){
+  if(!confirm('¿Ya cambiaron TODAS las tarjetas de la lista?')) return;
+  const {error} = await sb.from('precio_cambios').update({atendido:true, atendido_en:new Date().toISOString(), atendido_por:window._tarjNombre||''}).eq('atendido', false);
+  if(error){ toast(errMsg(error), true); return; }
+  cerrarModal(); toast('Tarjetas al día ✓'); contarTarjetas();
+}
 async function vVentas(){
   if(puedeVender()){
     $('vtools').innerHTML = `<button class="btn" onclick="nuevaVenta()">+ Nueva venta</button>
       <button class="btn sec" onclick="cuadreSafdiModal()">⚖️ Cuadre SAFDI</button>
-      <button class="btn sec" onclick="pedirCompra()">🛠️ Necesito algo</button>`;
+      <button class="btn sec" onclick="pedirCompra()">🛠️ Necesito algo</button>
+      <button class="btn sec" id="btn-tarjetas" onclick="verTarjetas()">🏷️ Tarjetas</button>`;
+    setTimeout(contarTarjetas, 50);
   }
   // Periodo: hoy / semana / mes / mes pasado / todo / rango a mano
   const hoyD = new Date(); hoyD.setHours(0,0,0,0);
