@@ -2322,7 +2322,7 @@ async function nuevaCot(editId){
   $('ct-buscar').focus();
 }
 let ctTimer = null;
-const DESC_DISENSA = 0.05; // descuento mínimo Disensa sobre lista Indar (confirmado en factura)
+const DESC_DISENSA = 0; // v141: el costo del sistema YA es el precio neto que factura Indar; el descuento por ser Disensa y el pronto pago NO se consideran para vender (costo al 100%)
 function pzasDe(d){
   const s = String(d||'');
   const m = s.match(/(?:C\/|CON\s+|X\s+)(\d{1,4})\s*P(?:ZA|IEZA)S?/i) || s.match(/\((\d{1,4})\s*P(?:ZA|IEZA)S?\)/i);
@@ -2389,13 +2389,13 @@ function pintarCot(){
         <option value="">precio…</option><option value="pub">Público</option><option value="m25">May +25%</option><option value="m20">May +20%</option><option value="m15">May +15%</option><option value="m10">May +10%</option></select>
       ${pz?`<br><span class="small" style="color:var(--azul)">≈ ${fmt(c.precio/pz)} por pieza (${pz} pzas)</span>`:''}</td>
     <td class="num">${fmt(c.cantidad*c.precio)}${esAdmin()?`<br>
-      <span class="small" style="color:${col}">${costoD>0?`lista ${fmt(c.costo)} · Disensa ${fmt(costoD)} · marg ${pct.toFixed(0)}%`:'sin costo'}</span>`:''}</td>
+      <span class="small" style="color:${col}">${costoD>0?`costo ${fmt(c.costo)} · marg ${pct.toFixed(0)}%`:'sin costo'}</span>`:''}</td>
     <td><span class="x" onclick="cotCarrito.splice(${i},1);pintarCot()">✕</span></td></tr>`;
   }).join('') || '<tr><td class="muted" style="padding:12px 6px">Busca productos y da clic para agregarlos.</td></tr>';
   const tot = cotCarrito.reduce((s,c)=>s+c.cantidad*c.precio,0);
   const cost = cotCarrito.reduce((s,c)=>s+c.cantidad*(c.costo||0)*(1-DESC_DISENSA),0);
   const mg = cost>0 ? ((tot/1.16-cost)/cost*100) : null;
-  $('ct-total').innerHTML = fmt(tot) + (esAdmin() && mg!==null?` <span class="small" style="color:var(--gris)">· margen total ${mg.toFixed(1)}% con desc. Disensa 5% (no se imprime)</span>`:'');
+  $('ct-total').innerHTML = fmt(tot) + (esAdmin() && mg!==null?` <span class="small" style="color:var(--gris)">· margen total ${mg.toFixed(1)}% sobre costo real, sin descuentos (no se imprime)</span>`:'');
 }
 async function guardarCot(){
   if(!cotCarrito.length){ toast('Agrega al menos una partida', true); return; }
@@ -2529,7 +2529,7 @@ async function pintarCatalogo(agregar){
   window._catData = window._catData || {}; (data||[]).forEach(p=>{ window._catData[p.codigo] = p; });
   if(q.length>=2 && !catPagina){ clearTimeout(window._evT); window._evT=setTimeout(function(){ logEv('busqueda', q); }, 1500); }
   const html = (data||[]).map(p=>{
-    const costoD = Math.round(+p.precio_lista*(1-(+p.promo_pct||0))*0.95*100)/100;
+    const costoD = Math.round(+p.precio_lista*(1-(+p.promo_pct||0))*100)/100; // v141: costo al 100%
     const sel = catSel.has(p.codigo);
     const pz = pzasDe(p.descripcion);
     return `<div class="card" style="margin:0;padding:12px;${sel?'outline:2px solid var(--rojo)':''}">
@@ -2538,7 +2538,7 @@ async function pintarCatalogo(agregar){
       <div class="small" style="min-height:48px;cursor:pointer" onclick='fichaCat(${JSON.stringify(p.codigo).replace(/'/g,"&#39;")})'><b>${esc(p.codigo)}</b> <span class="badge b-gris">${esc(p.marca||'')}</span> <a href="https://indar.mx/portal/detallesProducto/${encodeURIComponent(p.codigo.replace(/ /g,'_'))}" target="_blank" class="link" title="Ver producto y ficha técnica en Indar (con tu sesión iniciada)" onclick="event.stopPropagation()">📎ficha</a><br>${esc((p.descripcion||'').slice(0,60))}</div>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">
         <div><b>${fmt(p.precio_sugerido)}</b>${pz?`<br><span class="small muted">${fmt(p.precio_sugerido/pz)}/pza</span>`:''}
-          ${esAdmin()?`<br><span class="small muted">costo −5%: ${fmt(costoD)}</span>`:''}</div>
+          ${esAdmin()?`<br><span class="small muted">costo: ${fmt(costoD)}</span>`:''}</div>
         <button class="btn sm ${sel?'':'sec'}" onclick='toggleCat(${JSON.stringify({c:p.codigo,d:p.descripcion,pr:+p.precio_sugerido,co:Math.round(+p.precio_lista*(1-(+p.promo_pct||0))*100)/100,su:+p.precio_sugerido}).replace(/'/g,"&#39;")})'>${sel?'✓':'+'}</button>
       </div></div>`;
   }).join('');
@@ -2554,12 +2554,12 @@ function toggleCat(p){
 function fichaCat(cod){
   const p = (window._catData||{})[cod]; if(!p) return;
   const pz = pzasDe(p.descripcion);
-  const costoD = Math.round(+p.precio_lista*(1-(+p.promo_pct||0))*0.95*100)/100;
+  const costoD = Math.round(+p.precio_lista*(1-(+p.promo_pct||0))*100)/100; // v141: costo al 100%
   abrirModal(`<div style="text-align:center"><img src="https://storage.googleapis.com/indararticulos/${encodeURIComponent(p.codigo.replace(/[^A-Za-z0-9]/g,'_'))}_MD.webp" style="width:100%;max-width:380px;height:280px;object-fit:contain" onerror="this.style.display='none'"></div>
     <p class="small" style="margin:8px 0 2px"><span class="badge b-gris">${esc(p.marca||'sin marca')}</span> · <b>${esc(p.codigo)}</b> · <a href="https://indar.mx/portal/detallesProducto/${encodeURIComponent(p.codigo.replace(/ /g,'_'))}" target="_blank" class="link">📎 ficha técnica en Indar</a></p>
     <h3 style="margin:6px 0;line-height:1.4">${esc(p.descripcion)}</h3>
     <p style="font-size:19px;margin:8px 0"><b>${fmt(p.precio_sugerido)}</b> <span class="small muted">sugerido con IVA${pz?` · ${fmt(p.precio_sugerido/pz)}/pza`:''}</span>
-    ${esAdmin()?`<br><span class="small muted">costo −5%: ${fmt(costoD)} · lista: ${fmt(p.precio_lista)}${+p.promo_pct?` · promo ${Math.round(+p.promo_pct*100)}%`:''}</span>`:''}</p>
+    ${esAdmin()?`<br><span class="small muted">costo: ${fmt(costoD)} · lista: ${fmt(p.precio_lista)}${+p.promo_pct?` · promo ${Math.round(+p.promo_pct*100)}%`:''}</span>`:''}</p>
     <p class="small" id="fcat-inv" style="margin:4px 0 8px"><span class="muted">⏳ checando inventario y pedidos...</span></p>
     <div class="acciones">
       <button class="btn" onclick='toggleCat(${JSON.stringify({c:p.codigo,d:p.descripcion,pr:+p.precio_sugerido,co:Math.round(+p.precio_lista*(1-(+p.promo_pct||0))*100)/100,su:+p.precio_sugerido}).replace(/'/g,"&#39;")}); cerrarModal();'>➕ Seleccionar para cotizar</button>
@@ -5714,7 +5714,7 @@ async function fxArchivar(d){ // guarda en tabla facturas + sube PDF (si existen
 async function aplicarFacturas(){
   $('fx-aplicar').disabled = true;
   const st = m => $('fx-status').textContent = m;
-  let aplicadas = 0, cxpN = 0, partidas = 0, archivadas = 0; const pedTocados = new Set();
+  let aplicadas = 0, cxpN = 0, partidas = 0, archivadas = 0; const pedTocados = new Set(); const cotejo = []; // v141: diferencias pedido vs factura
   try{
     const {data:prov} = await sb.from('proveedores').select('id').eq('nombre','Indar').single();
     for(const d of fxDocs){
@@ -5727,10 +5727,11 @@ async function aplicarFacturas(){
       if(d.pedidoId){
         const ped = fxPedidos.find(p=>p.id===d.pedidoId);
         folioPed = ped ? ped.folio : ''; pedTocados.add(d.pedidoId);
-        const {data:its} = await sb.from('pedido_compra_items').select('id,producto_id,cantidad,cantidad_facturada,productos(codigo)').eq('pedido_id', d.pedidoId);
+        const {data:its} = await sb.from('pedido_compra_items').select('id,producto_id,cantidad,cantidad_facturada,costo_unit,productos(codigo)').eq('pedido_id', d.pedidoId);
         for(const c of d.items){
           const it = (its||[]).find(x=>x.productos?.codigo===c.cod);
-          if(!it) continue;
+          if(!it){ cotejo.push('⚠️ Fact '+d.folio+' · '+c.cod+': viene en la factura pero NO está en el pedido '+folioPed); continue; }
+          if(Math.abs(+it.costo_unit - c.pu) > 0.015) cotejo.push('Fact '+d.folio+' · '+c.cod+': pedido '+fmt(it.costo_unit)+' → factura '+fmt(c.pu)+' ('+(c.pu>+it.costo_unit?'+':'')+fmt(Math.round((c.pu-+it.costo_unit)*100)/100)+' × '+c.cant+')');
           const upd = {costo_unit: c.pu, importe: Math.round(+it.cantidad * c.pu * 100)/100};
           try{ upd.cantidad_facturada = (+it.cantidad_facturada||0) + c.cant; }catch(e){}
           const {error:eU} = await sb.from('pedido_compra_items').update(upd).eq('id', it.id);
@@ -5761,6 +5762,11 @@ async function aplicarFacturas(){
     st('');
     try{ await limpiarCanceladosIndar(pedTocados); }catch(eL){}
     toast(`✅ ${aplicadas} factura(s) aplicadas (${cxpN} CxP, ${partidas} partidas a precio de factura) · ${archivadas} archivada(s) en Finanzas → Facturas`);
+    // v141: cotejo pedido vs factura — el costo del sistema queda al precio FACTURADO; aquí se ve qué cambió
+    if(partidas) abrirModal(`<h3>🔎 Cotejo pedido vs factura</h3>
+      <p class="small muted" style="margin:0 0 8px">Se revisaron ${partidas} partida(s). El costo del sistema ya quedó al precio que Indar facturó (sin descuentos de pronto pago).</p>
+      ${cotejo.length?`<p><b>${cotejo.length} diferencia(s):</b></p><ul class="small" style="margin:0 0 10px 18px">${cotejo.map(x=>'<li>'+esc(x)+'</li>').join('')}</ul>`:'<p style="color:var(--verde,#15803d)"><b>✓ Todas las partidas se facturaron al mismo precio del pedido.</b></p>'}
+      <div class="acciones"><button class="btn" onclick="cerrarModal()">Entendido</button></div>`, true);
     leerFacturas();
   }catch(e){ st(''); toast(errMsg(e), true); }
   const b = $('fx-aplicar'); if(b) b.disabled = false;
