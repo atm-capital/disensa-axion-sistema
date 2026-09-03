@@ -4382,7 +4382,7 @@ async function vFinanzas(){
   let cajaG = [];
   try{
     const rcm = await sb.from('caja_movs').select('*').in('tipo',['gasto','retiro']).gte('fecha', gD).order('fecha',{ascending:false});
-    cajaG = (rcm.data||[]).filter(function(m){ return !/\(desde Finanzas\)/.test(m.concepto||'') && (!gH || m.fecha < gH); });
+    cajaG = (rcm.data||[]).filter(function(m){ return !/\(desde Finanzas\)/.test(m.concepto||'') && !/Para revender/i.test(m.concepto||'') && (!gH || m.fecha < gH); }); // v139: mercancía para revender NO es gasto
   }catch(e){}
   cajaG.forEach(function(m){ gTot.gasto += +m.monto; gCat['Caja tienda'] = (gCat['Caja tienda']||0) + +m.monto; });
   const gRows = gastos.data.map(function(g){ return {fecha:g.fecha, tipo:g.tipo||'gasto', concepto:g.concepto, categoria:g.categoria, metodo:g.metodo||'', monto:+g.monto, origen:'admin'}; })
