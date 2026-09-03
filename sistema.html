@@ -5727,11 +5727,11 @@ async function aplicarFacturas(){
       if(d.pedidoId){
         const ped = fxPedidos.find(p=>p.id===d.pedidoId);
         folioPed = ped ? ped.folio : ''; pedTocados.add(d.pedidoId);
-        const {data:its} = await sb.from('pedido_compra_items').select('id,producto_id,cantidad,cantidad_facturada,costo_unit,productos(codigo)').eq('pedido_id', d.pedidoId);
+        const {data:its} = await sb.from('pedido_compra_items').select('id,producto_id,cantidad,cantidad_facturada,costo_unit,productos(codigo,precio)').eq('pedido_id', d.pedidoId);
         for(const c of d.items){
           const it = (its||[]).find(x=>x.productos?.codigo===c.cod);
-          if(!it){ cotejo.push('⚠️ Fact '+d.folio+' · '+c.cod+': viene en la factura pero NO está en el pedido '+folioPed); continue; }
-          if(Math.abs(+it.costo_unit - c.pu) > 0.015) cotejo.push('Fact '+d.folio+' · '+c.cod+': pedido '+fmt(it.costo_unit)+' → factura '+fmt(c.pu)+' ('+(c.pu>+it.costo_unit?'+':'')+fmt(Math.round((c.pu-+it.costo_unit)*100)/100)+' × '+c.cant+')');
+          if(!it){ cotejo.push({t:'⚠️ Fact '+d.folio+' · '+c.cod+': viene en la factura pero NO está en el pedido '+folioPed}); continue; }
+          if(Math.abs(+it.costo_unit - c.pu) > 0.015) cotejo.push({fact:d.folio, cod:c.cod, pid:it.producto_id, antes:+it.costo_unit, ahora:c.pu, cant:c.cant, precio:+((it.productos&&it.productos.precio)||0)}); // v142
           const upd = {costo_unit: c.pu, importe: Math.round(+it.cantidad * c.pu * 100)/100};
           try{ upd.cantidad_facturada = (+it.cantidad_facturada||0) + c.cant; }catch(e){}
           const {error:eU} = await sb.from('pedido_compra_items').update(upd).eq('id', it.id);
@@ -5765,11 +5765,42 @@ async function aplicarFacturas(){
     // v141: cotejo pedido vs factura — el costo del sistema queda al precio FACTURADO; aquí se ve qué cambió
     if(partidas) abrirModal(`<h3>🔎 Cotejo pedido vs factura</h3>
       <p class="small muted" style="margin:0 0 8px">Se revisaron ${partidas} partida(s). El costo del sistema ya quedó al precio que Indar facturó (sin descuentos de pronto pago).</p>
-      ${cotejo.length?`<p><b>${cotejo.length} diferencia(s):</b></p><ul class="small" style="margin:0 0 10px 18px">${cotejo.map(x=>'<li>'+esc(x)+'</li>').join('')}</ul>`:'<p style="color:var(--verde,#15803d)"><b>✓ Todas las partidas se facturaron al mismo precio del pedido.</b></p>'}
+      ${cotejo.length?cotejoTabla(cotejo):'<p style="color:var(--verde,#15803d)"><b>✓ Todas las partidas se facturaron al mismo precio del pedido.</b></p>'}
       <div class="acciones"><button class="btn" onclick="cerrarModal()">Entendido</button></div>`, true);
     leerFacturas();
   }catch(e){ st(''); toast(errMsg(e), true); }
   const b = $('fx-aplicar'); if(b) b.disabled = false;
+}
+// v142: tabla del cotejo con margen al precio de venta actual y precio sugerido para conservar el margen
+function cotejoTabla(cotejo){
+  const sub = cotejo.filter(x=>x.ahora>x.antes+0.015).length;
+  const filas = cotejo.map((x,i)=>{
+    if(x.t) return `<tr><td colspan="7" class="small" style="color:#b45309">${esc(x.t)}</td></tr>`;
+    const neto = x.precio/1.16;
+    const mAntes = neto>0 ? (neto - x.antes)/neto : 0;
+    const mAhora = neto>0 ? (neto - x.ahora)/neto*100 : null;
+    const sug = (x.ahora>x.antes && mAntes>0) ? redondearPrecio(x.ahora*1.16/(1-mAntes)) : null;
+    const col = mAhora===null?'var(--gris)':(mAhora>=25?'var(--verde,#15803d)':(mAhora>=15?'#b45309':'#b91c1c'));
+    const subio = x.ahora>x.antes+0.015;
+    return `<tr${subio?' style="background:#fff7ed"':''}><td class="small"><b>${esc(x.cod)}</b><br><span class="muted">fact ${esc(x.fact)}</span></td>
+      <td class="num">${fmt(x.antes)}</td><td class="num"><b>${fmt(x.ahora)}</b><br><span class="small" style="color:${subio?'#b91c1c':'var(--verde,#15803d)'}">${subio?'▲':'▼'} ${fmt(Math.abs(x.ahora-x.antes))} × ${x.cant}</span></td>
+      <td class="num">${x.precio?fmt(x.precio):'<span class="muted">—</span>'}</td>
+      <td class="num" style="color:${col}"><b>${mAhora===null?'—':mAhora.toFixed(0)+'%'}</b>${x.precio?`<br><span class="small muted">antes ${(mAntes*100).toFixed(0)}%</span>`:''}</td>
+      <td class="num">${sug?fmt(sug):'<span class="muted">—</span>'}</td>
+      <td>${x.pid&&esAdmin()?`<input id="ctj-p-${i}" type="number" step="1" value="${sug||x.precio||''}" style="width:70px;padding:4px;border:1px solid var(--linea);border-radius:6px"> <button class="btn sm" onclick="cotejoPrecio(${x.pid},'ctj-p-${i}',this)">Guardar</button>`:''}</td></tr>`;
+  }).join('');
+  return `<p><b>${cotejo.length} diferencia(s)</b>${sub?` · <span style="color:#b91c1c">${sub} subieron de precio — revisa tu precio de venta</span>`:''}</p>
+    <div class="tbl-scroll"><table><thead><tr><th>Producto</th><th class="num">Costo pedido</th><th class="num">Costo factura</th><th class="num">Precio venta</th><th class="num">Margen ahora</th><th class="num">Sugerido*</th><th></th></tr></thead><tbody>${filas}</tbody></table></div>
+    <p class="small muted" style="margin:6px 0 10px">*Precio que conserva el margen que tenías antes de la subida (redondeado al peso). El precio de venta NO cambia solo: si quieres ajustarlo, escribe el nuevo y dale Guardar.</p>`;
+}
+async function cotejoPrecio(pid, inputId, btn){
+  const v = redondearPrecio($(inputId).value||0);
+  if(!(v>0)){ toast('Pon un precio válido', true); return; }
+  const {error} = await sb.from('productos').update({precio:v}).eq('id', pid);
+  if(error){ toast(errMsg(error), true); return; }
+  if(btn){ btn.textContent='✓ '+fmt(v); btn.disabled=true; }
+  logEv('inventario','precio ajustado tras cotejo de factura: producto '+pid+' → '+fmt(v));
+  toast('Precio de venta actualizado a '+fmt(v));
 }
 const MX_STOP = new Set(['DE','LA','EL','CON','PARA','DEL','LOS','LAS','EN','POR','SIN','KG','MTS','MM','LTRS','CAL','QUE','UNA','SEGUNDA','BOLSAS','LARGO','COLOR']);
 function mxToks(s){ return normTxt(s).split(/\s+/).filter(t=>t.length>2 && !MX_STOP.has(t)); }
