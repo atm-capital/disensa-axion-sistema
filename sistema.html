@@ -3816,7 +3816,7 @@ async function pintarEfectivo(cajon){
   const el = $('efectivo-panel'); if(!el) return;
   const [ct, mv, dp, cc] = await Promise.all([
     sb.from('cortes_caja').select('fecha,deposito'),
-    sb.from('caja_movs').select('tipo,monto,fecha'),
+    sb.from('caja_movs').select('tipo,monto,fecha,origen'),
     sb.from('depositos_cuenta').select('monto,fecha'),
     sb.from('caja_chica_conteos').select('*').order('id',{ascending:false}).limit(1)
   ]);
@@ -3827,7 +3827,8 @@ async function pintarEfectivo(cajon){
   const alBanco = ((dp.data||[])).reduce((s,x)=>s+ +x.monto,0);
   const bancoDesde = S(dp.data,()=>true);
   const base = conteo ? +conteo.monto : 0;
-  const chica = Math.round((base + deCortes + S(mv.data,m=>m.tipo==='retiro') - S(mv.data,m=>m.tipo==='entrada') - bancoDesde)*100)/100;
+  // v140: lo pagado con dinero de la caja fuerte (origen='chica') sale de la caja chica, no del cajón
+  const chica = Math.round((base + deCortes + S(mv.data,m=>m.tipo==='retiro'&&m.origen!=='chica') - S(mv.data,m=>m.tipo!=='entrada'&&m.origen==='chica') - S(mv.data,m=>m.tipo==='entrada') - bancoDesde)*100)/100;
   window._chicaActual = chica;
   const mes = hoyMX().slice(0,7);
   const bancoMes = ((dp.data||[]).filter(d=>String(d.fecha).startsWith(mes))).reduce((s,x)=>s+ +x.monto,0);
@@ -3877,7 +3878,8 @@ async function vCaja(){
   const efectivo = vts.filter(v=>v.metodo_pago==='efectivo').reduce((s,v)=>s+ +v.total,0);
   const otros = {}; vts.filter(v=>v.metodo_pago!=='efectivo').forEach(v=>{ otros[v.metodo_pago]=(otros[v.metodo_pago]||0)+ +v.total; });
   const totOtros = Object.values(otros).reduce((s,x)=>s+x,0);
-  const retiros = movs.filter(m=>m.tipo!=='entrada').reduce((s,m)=>s+ +m.monto,0);
+  const deChica = movs.filter(m=>m.tipo!=='entrada'&&m.origen==='chica').reduce((s,m)=>s+ +m.monto,0); // v140: pagado de la caja fuerte, no toca el cajón
+  const retiros = movs.filter(m=>m.tipo!=='entrada'&&m.origen!=='chica').reduce((s,m)=>s+ +m.monto,0);
   const entradas = movs.filter(m=>m.tipo==='entrada').reduce((s,m)=>s+ +m.monto,0);
   const fondoUsar = corte ? +corte.fondo : (prev ? +prev.deja_fondo : fondoFijo);
   const esperado = Math.round((fondoUsar + efectivo + entradas - retiros)*100)/100;
@@ -3890,7 +3892,7 @@ async function vCaja(){
     <div class="kpis">
       <div class="kpi"><div class="l">Ventas en efectivo</div><div class="v">${fmt(efectivo)}</div><div class="s">${vts.filter(v=>v.metodo_pago==='efectivo').length} venta(s)</div></div>
       <div class="kpi"><div class="l">Otros pagos</div><div class="v">${fmt(totOtros)}</div><div class="s">${Object.keys(otros).map(k=>(ico[k]||'')+' '+fmt(otros[k])).join(' · ')||'—'}</div></div>
-      <div class="kpi"><div class="l">Retiros y gastos</div><div class="v">${fmt(retiros)}</div><div class="s">${movs.length} movimiento(s)</div></div>
+      <div class="kpi"><div class="l">Retiros y gastos del cajón</div><div class="v">${fmt(retiros)}</div><div class="s">${movs.length} movimiento(s)${deChica?' · '+fmt(deChica)+' salieron de la caja fuerte (no cuentan aquí)':''}</div></div>
       <div class="kpi" style="outline:2px solid var(--naranja,#e8862d)"><div class="l">Efectivo que debe haber</div><div class="v">${fmt(esperado)}</div><div class="s">fondo ${fmt(fondoUsar)} + ventas − retiros</div></div>
     </div>
     <div class="card"><h3>💵 ¿Dónde está el efectivo?</h3>
@@ -3911,7 +3913,7 @@ async function vCaja(){
       <thead><tr><th>Hora</th><th>Tipo</th><th>Concepto</th><th>Quién</th><th class="num">Monto</th></tr></thead>
       <tbody>${movs.map(m=>`<tr><td class="small">${(m.creado||'').slice(11,16)}</td>
         <td><span class="badge ${m.tipo==='entrada'?'b-verde':'b-ambar'}">${m.tipo}</span></td>
-        <td>${esc(m.concepto)||'—'}</td><td class="small">${esc(m.nombre)||''}</td>
+        <td>${esc(m.concepto)||'—'}${m.origen==='chica'?' <span class="badge b-azul">🏠 caja fuerte</span>':''}</td><td class="small">${esc(m.nombre)||''}</td>
         <td class="num"><b>${m.tipo==='entrada'?'+':'−'}${fmt(m.monto)}</b>${m.comprobante_path?` <button class="btn sm sec" title="Ver ticket" onclick="verPdfFactura('${esc(m.comprobante_path)}')">📎</button>`:''}</td></tr>`).join('')}</tbody></table></div></div>`:''}
     <div class="card"><h3>🏦 Depósitos a la cuenta</h3>
       <p class="small muted" style="margin:0 0 8px">Dinero de la caja grande depositado al banco. <b>No</b> toca el corte del cajón — es puro registro con su ticket.</p>
@@ -3989,6 +3991,7 @@ async function guardarDeposito(){
 function movCaja(){
   abrirModal(`<h3>Retiro, gasto o entrada de efectivo</h3>
     <label>Tipo</label><select id="mc-tipo"><option value="retiro">💸 Retiro (a bóveda / depósito)</option><option value="gasto">🧾 Gasto pagado de la caja</option><option value="entrada">➕ Entrada de efectivo</option></select>
+    <label>¿De dónde salió el dinero?</label><select id="mc-origen"><option value="cajon">🗄️ Del cajón (ventas del día) — cuenta en el corte</option><option value="chica">🏠 De la caja fuerte / caja chica — no toca el corte</option></select>
     <label>Monto</label><input type="number" id="mc-monto" step="0.01" min="0.01" placeholder="0.00">
     <label>Concepto</label><input id="mc-con" placeholder="Ej: depósito al banco, gasolina, cambio de $500">
     <label>¿Para qué se usó?</label><select id="mc-paraque"><option value="">— elige una opción —</option>
@@ -4013,9 +4016,11 @@ async function guardarMovCaja(){
     if(up.error){ toast('No se pudo subir el ticket: '+errMsg(up.error), true); path = null; }
   }
   const pq9 = ($('mc-paraque') && $('mc-paraque').value) ? (' — '+$('mc-paraque').value) : '';
-  const fila = {tipo:$('mc-tipo').value, monto, concepto:($('mc-con').value.trim()+pq9).trim(), nombre:perfil.nombre||perfil.correo, usuario_id:perfil.id, fecha: window._cajaFecha||hoyMX()};
+  const fila = {tipo:$('mc-tipo').value, monto, concepto:($('mc-con').value.trim()+pq9).trim(), nombre:perfil.nombre||perfil.correo, usuario_id:perfil.id, fecha: window._cajaFecha||hoyMX(),
+    origen: ($('mc-tipo').value!=='entrada' && $('mc-origen') && $('mc-origen').value==='chica') ? 'chica' : 'cajon'}; // v140
   if(path) fila.comprobante_path = path;
   let {error} = await sb.from('caja_movs').insert(fila);
+  if(error && /origen/i.test(error.message||'')){ delete fila.origen; ({error} = await sb.from('caja_movs').insert(fila)); }
   if(error && /comprobante/i.test(error.message||'')){ delete fila.comprobante_path; ({error} = await sb.from('caja_movs').insert(fila)); }
   if(error){ toast(errMsg(error), true); return; }
   logEv('caja_mov', $('mc-tipo').value+' '+monto);
@@ -4207,7 +4212,7 @@ async function calcularDinero(hoy){
     // v124: caja chica (anclada al último conteo, igual que en Corte de caja)
     const [ctc, mvc, dpc, ccc] = await Promise.all([
       sb.from('cortes_caja').select('fecha,deposito'),
-      sb.from('caja_movs').select('tipo,monto,fecha'),
+      sb.from('caja_movs').select('tipo,monto,fecha,origen'),
       sb.from('depositos_cuenta').select('monto,fecha'),
       sb.from('caja_chica_conteos').select('*').order('id',{ascending:false}).limit(1)
     ]);
@@ -4215,7 +4220,7 @@ async function calcularDinero(hoy){
     const desdeC = x => !conteoC || String(x.fecha) > String(conteoC.fecha);
     const SC = (a,f)=>((a||[]).filter(x=>desdeC(x)&&f(x)).reduce((s,x)=>s+ +x.monto,0));
     D.cajaChica = Math.round(((conteoC?+conteoC.monto:0) + ((ctc.data)||[]).filter(desdeC).reduce((s,x)=>s+ +(x.deposito||0),0)
-      + SC(mvc.data,m=>m.tipo==='retiro') - SC(mvc.data,m=>m.tipo==='entrada') - SC(dpc.data,()=>true))*100)/100;
+      + SC(mvc.data,m=>m.tipo==='retiro'&&m.origen!=='chica') - SC(mvc.data,m=>m.tipo!=='entrada'&&m.origen==='chica') - SC(mvc.data,m=>m.tipo==='entrada') - SC(dpc.data,()=>true))*100)/100; // v140
     if(!D.cap){ D.banco = 0; D.otros = 0; D.desde = null; return D; }
     D.banco = +D.cap.banco; D.otros = +D.cap.otros;
     D.desde = D.cap.fecha;
