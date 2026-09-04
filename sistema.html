@@ -3748,9 +3748,12 @@ function nuevoApartado(){
     <input id="ap-q" placeholder="Código o descripción..." oninput="buscarProdAp()">
     <div id="ap-res" class="small"></div>
     <div id="ap-lista" style="margin:10px 0"></div>
+    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:0 0 8px"><span>Descuento <span class="small muted" id="ap-desc-info"></span></span>
+      <button class="btn sm sec" onclick="apDescPct(5)">5%</button> <button class="btn sm sec" onclick="apDescPct(10)">10%</button> <button class="btn sm sec" onclick="apDescPct(15)">15%</button>
+      <input id="ap-descpct" inputmode="decimal" placeholder="%" title="Porcentaje de descuento" style="width:46px;padding:5px;text-align:right" oninput="apDescPct(this.value)"> $ <input id="ap-desc" type="number" step="0.01" value="0" style="width:90px;padding:5px;text-align:right" oninput="if($('ap-descpct'))$('ap-descpct').value='';calcAp()"></div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
       <div><label>💵 Anticipo que deja</label><input type="number" id="ap-ant" step="0.01" placeholder="0.00" oninput="calcAp()">
-        <button class="btn sm sec" style="margin-top:4px" onclick="$('ap-ant').value=apItems.reduce((s,i)=>s+i.cantidad*i.precio_unit,0).toFixed(2); calcAp()">💯 Dejó liquidado</button></div>
+        <button class="btn sm sec" style="margin-top:4px" onclick="$('ap-ant').value=apTotal().toFixed(2); calcAp()">💯 Dejó liquidado</button></div>
       <div><label>Forma de pago del anticipo</label><select id="ap-met">
         <option value="efectivo">💵 Efectivo</option><option value="tarjeta">💳 Tarjeta</option>
         <option value="transferencia">🏦 Transferencia</option><option value="ak_pago">📱 AK Pago</option></select></div>
@@ -3798,28 +3801,39 @@ function addProdAp(p){
   $('ap-q').value=''; $('ap-res').innerHTML='';
   calcAp();
 }
+// v152: descuento en el apartado (por % o $), igual que en Ventas
+function apSub(){ return apItems.reduce((s,i)=>s+i.cantidad*i.precio_unit,0); }
+function apDesc(){ const sub = apSub(); const pctEl = $('ap-descpct'); if(pctEl && +pctEl.value>0 && $('ap-desc')) $('ap-desc').value = Math.round(sub*(+pctEl.value)/100*100)/100; return Math.min(sub, Math.max(0, +($('ap-desc')?.value||0))); }
+function apTotal(){ return Math.round((apSub()-apDesc())*100)/100; }
+function apDescPct(v){
+  const pct = Math.max(0, Math.min(100, +String(v).replace(',','.')||0));
+  const el = $('ap-descpct'); if(el && document.activeElement!==el) el.value = pct||'';
+  if($('ap-desc')) $('ap-desc').value = pct ? Math.round(apSub()*pct/100*100)/100 : 0;
+  calcAp();
+}
 function calcAp(){
   const el = $('ap-lista');
-  if(el) el.innerHTML = apItems.length ? `<table><tbody>${apItems.map((i,n)=>`<tr>
+  if(el) el.innerHTML = apItems.length ? `<table><thead><tr><th>Producto</th><th>Cant.</th><th>Precio ✏️</th><th class="num">Importe</th><th></th></tr></thead><tbody>${apItems.map((i,n)=>`<tr>
     <td>${esc(i.descripcion.slice(0,42))}</td>
     <td style="width:70px"><input type="number" min="1" value="${i.cantidad}" style="width:60px;padding:4px;text-align:right" onchange="apItems[${n}].cantidad=+this.value||1; calcAp()"></td>
     <td style="width:90px"><input type="number" step="0.01" value="${i.precio_unit}" style="width:80px;padding:4px;text-align:right" onchange="apItems[${n}].precio_unit=+this.value||0; calcAp()"></td>
     <td class="num" style="width:90px"><b>${fmt(i.cantidad*i.precio_unit)}</b></td>
     <td style="width:30px"><button class="btn sec sm" onclick="apItems.splice(${n},1); calcAp()">✖</button></td></tr>`).join('')}</tbody></table>`
     : '<p class="small muted">Busca y agrega los productos que va a apartar.</p>';
-  const tot = apItems.reduce((s,i)=>s+i.cantidad*i.precio_unit,0);
+  const sub = apSub(), desc = apDesc(), tot = Math.round((sub-desc)*100)/100;
+  const info = $('ap-desc-info'); if(info) info.textContent = (desc>0 && sub>0) ? '(−'+(desc/sub*100).toFixed(1).replace(/\.0$/,'')+'%)' : '';
   const ant = +($('ap-ant')?$('ap-ant').value:0)||0;
   const t = $('ap-tot');
-  if(t) t.innerHTML = `Total: <b>${fmt(tot)}</b> · Anticipo: <b style="color:var(--verde,#15803d)">${fmt(ant)}</b> · Queda a pagar: <b>${fmt(Math.max(0, Math.round((tot-ant)*100)/100))}</b>${tot>0&&ant>=tot?' <span class="badge b-verde">✅ LIQUIDADO — solo se entrega cuando llegue</span>':''}`;
+  if(t) t.innerHTML = `${desc>0?`Subtotal ${fmt(sub)} − descuento <b>${fmt(desc)}</b> · `:''}Total: <b>${fmt(tot)}</b> · Anticipo: <b style="color:var(--verde,#15803d)">${fmt(ant)}</b> · Queda a pagar: <b>${fmt(Math.max(0, Math.round((tot-ant)*100)/100))}</b>${tot>0&&ant>=tot?' <span class="badge b-verde">✅ LIQUIDADO — solo se entrega cuando llegue</span>':''}`;
 }
 async function guardarApartado(){
-  const tot = apItems.reduce((s,i)=>s+i.cantidad*i.precio_unit,0);
+  const desc = apDesc(), tot = apTotal(); // v152
   const ant = +$('ap-ant').value||0;
   if(!apItems.length){ toast('Agrega al menos un producto', true); return; }
   if(ant<=0){ toast('Captura el anticipo que dejó el cliente', true); return; }
   if(ant>tot){ toast('El anticipo no puede ser mayor al total', true); return; }
   const cli = ($('ap-cli').value||'').trim() || 'Público en general';
-  const row = {cliente_nombre:cli, telefono:($('ap-tel').value||'').trim(), total:Math.round(tot*100)/100,
+  const row = {cliente_nombre:cli, telefono:($('ap-tel').value||'').trim(), total:Math.round(tot*100)/100, descuento:Math.round(desc*100)/100,
     anticipo:ant, saldo:Math.round((tot-ant)*100)/100, metodo_anticipo:$('ap-met').value,
     vence:$('ap-vence').value||null, vendedor:perfil.nombre||perfil.correo, vendedor_id:perfil.id, nota:($('ap-nota').value||'').trim()};
   const {data, error} = await sb.from('apartados').insert(row).select().single();
@@ -3843,6 +3857,7 @@ async function entregarApartado(id){
     <p>Cliente: <b>${esc(a.cliente_nombre)}</b></p>
     <table style="width:100%;margin:10px 0"><tbody>
       ${(a.apartado_items||[]).map(i=>`<tr><td>${+i.cantidad} × ${esc(i.descripcion)}</td><td class="num">${fmt(i.importe)}</td></tr>`).join('')}
+      ${+a.descuento>0?`<tr><td>Descuento</td><td class="num">−${fmt(a.descuento)}</td></tr>`:''}
       <tr><td>Total</td><td class="num">${fmt(a.total)}</td></tr>
       <tr><td>− Anticipo (${esc(a.metodo_anticipo)}, ${fecha(a.fecha)})</td><td class="num" style="color:var(--verde,#15803d)">−${fmt(a.anticipo)}</td></tr>
       <tr><th style="border-top:2px solid var(--linea);font-size:17px">Cobrar ahora</th><th class="num" style="border-top:2px solid var(--linea);font-size:19px">${fmt(a.saldo)}</th></tr>
@@ -3861,7 +3876,7 @@ async function confirmarEntrega(id){
   const items = (a.apartado_items||[]).filter(i=>i.producto_id).map(i=>({producto_id:i.producto_id, cantidad:+i.cantidad, precio_unit:+i.precio_unit}));
   if(!items.length){ toast('El apartado no tiene productos del inventario', true); return; }
   const {data:vid, error} = await sb.rpc('registrar_venta', {
-    p_cliente_id: a.cliente_id, p_metodo: met, p_descuento: 0, p_items: items,
+    p_cliente_id: a.cliente_id, p_metodo: met, p_descuento: +(a.descuento||0), p_items: items,
     p_notas: 'Apartado #'+a.folio+' · anticipo '+fmt(a.anticipo)+' el '+fecha(a.fecha)
   });
   if(error){ toast(errMsg(error), true); return; }
@@ -3904,7 +3919,9 @@ async function imprimirApartado(id){
     <hr><div class="b">PRODUCTOS APARTADOS</div>
     <table>${(a.apartado_items||[]).map(i=>`<tr><td colspan="2">${esc(i.descripcion)}</td></tr><tr><td>&nbsp;&nbsp;${+i.cantidad} x ${fmt(i.precio_unit)}</td><td class="n">${fmt(i.importe)}</td></tr>`).join('')}</table>
     <hr><table>
+      ${+a.descuento>0?`<tr><td>SUBTOTAL</td><td class="n">${fmt(+a.total + +a.descuento)}</td></tr><tr><td>DESCUENTO</td><td class="n">−${fmt(a.descuento)}</td></tr>`:''}
       <tr><td>TOTAL</td><td class="n">${fmt(a.total)}</td></tr>
+
       <tr><td>ANTICIPO PAGADO</td><td class="n">${fmt(a.anticipo)}</td></tr>
       <tr><td class="tot">RESTA</td><td class="n tot">${fmt(a.saldo)}</td></tr>
     </table>
