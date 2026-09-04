@@ -1237,6 +1237,9 @@ async function nuevaVenta(){
 }
 function volverVenta(){ if(window._ventaUI){ window._ventaUI(); } else { cerrarModal(); } }
 function nbarra(s){ return String(s||'').trim().replace(/^0+/,''); }
+// v151: buscar códigos sin importar espacios ("b31377-5g2" encuentra "B3 1377-5G2")
+function codMatch(codigo, q){ const c=String(codigo||'').toLowerCase(); q=String(q||'').toLowerCase().trim(); if(!q) return true; return c.includes(q) || c.replace(/\s+/g,'').includes(q.replace(/\s+/g,'')); }
+function qCodVar(q){ const s=String(q||'').trim().replace(/\s+/g,''); const v=s.replace(/^([a-z]\d)(?=\S)/i,'$1 '); return v!==s ? v : null; }
 function redondearPrecio(p){ p = +p||0; return p>0 ? Math.ceil(p - 0.001) : 0; }
 function escanear(inp){
   const v = (inp.value||'').trim();
@@ -1262,7 +1265,7 @@ function mostrarAsignarCB(cb){
 function buscarProdCB(){
   const q = ($('cb-buscar').value||'').toLowerCase().trim();
   if(!q){ $('cb-res').innerHTML=''; return; }
-  const res = prodCache.filter(p => p.codigo.toLowerCase().includes(q) || p.descripcion.toLowerCase().includes(q)).slice(0,15);
+  const res = prodCache.filter(p => codMatch(p.codigo,q) || p.descripcion.toLowerCase().includes(q)).slice(0,15);
   $('cb-res').innerHTML = res.map(p=>`
     <div class="it" onclick="asignarCB(${p.id})">
       <span><b>${esc(p.codigo)}</b> ${esc(p.descripcion.slice(0,50))}</span>
@@ -1301,7 +1304,7 @@ function solicitarResurtido(){
 }
 function buscarProdSol(){
   const q = ($('sol-buscar').value||'').toLowerCase().trim();
-  const res = q ? invData.filter(p=>p.codigo.toLowerCase().includes(q)||p.descripcion.toLowerCase().includes(q)).slice(0,8) : [];
+  const res = q ? invData.filter(p=>codMatch(p.codigo,q)||p.descripcion.toLowerCase().includes(q)).slice(0,8) : [];
   const vc = window._invVendCnt||{};
   $('sol-res').innerHTML = res.map(p=>`
     <div class="it" style="display:flex;justify-content:space-between;gap:8px;padding:7px;border-bottom:1px solid var(--linea);cursor:pointer" onclick="addProdSol(${p.id})">
@@ -1665,7 +1668,7 @@ async function guardarCB(pid){
 function buscarProd(){
   const q = ($('nv-buscar').value||'').toLowerCase().trim();
   const nq = nbarra(q);
-  const res = prodCache.filter(p => !q || p.codigo.toLowerCase().includes(q) || p.descripcion.toLowerCase().includes(q) || (p.codigo_barras && nq && nbarra(p.codigo_barras).includes(nq))).slice(0,40);
+  const res = prodCache.filter(p => !q || codMatch(p.codigo,q) || p.descripcion.toLowerCase().includes(q) || (p.codigo_barras && nq && nbarra(p.codigo_barras).includes(nq))).slice(0,40);
   $('nv-res').innerHTML = res.map(p=>{
     const gr = esGranel(p);
     const ap = +(window._apRes && window._apRes[p.id] || 0);
@@ -2174,7 +2177,7 @@ function resolverItemSafdi(idx, it){
 function buscarProdSafdi(idx, idItem, pu, qn){
   const q = ($('sf-buscar').value||'').toLowerCase().trim();
   const prods = window._safdiProds||[];
-  const res = q ? prods.filter(p=>p.codigo.toLowerCase().includes(q)||p.descripcion.toLowerCase().includes(q)).slice(0,15) : [];
+  const res = q ? prods.filter(p=>codMatch(p.codigo,q)||p.descripcion.toLowerCase().includes(q)).slice(0,15) : [];
   $('sf-res').innerHTML = res.map(p=>`
     <div class="it" style="display:flex;justify-content:space-between;padding:8px;border-bottom:1px solid var(--linea);cursor:pointer" onclick="elegirProdSafdi(${idx},${idItem},${p.id})">
       <span><b>${esc(p.codigo)}</b> ${esc(p.descripcion.slice(0,45))}</span>
@@ -2792,7 +2795,7 @@ function pintarInv(){
   const provDe = p => (window._invProv||{})[p.id] || 'Indar (inventario inicial)';
   const sinMov = p => !(window._invVend||new Set()).has(p.id) && !(window._invRec||new Set()).has(p.id);
   const rows = invData.filter(p =>
-    (!q || p.codigo.toLowerCase().includes(q) || p.descripcion.toLowerCase().includes(q) || (p.codigo_barras && nbarra(p.codigo_barras).includes(nbarra(q)))) &&
+    (!q || codMatch(p.codigo,q) || p.descripcion.toLowerCase().includes(q) || (p.codigo_barras && nbarra(p.codigo_barras).includes(nbarra(q)))) &&
     (!cat || p.categoria === cat) && (!soloBajo || +p.stock <= +p.stock_min) && (!prov || provDe(p)===prov) &&
     (est==='' || (est==='con' && +p.stock>0) || (est==='agotado' && +p.stock<=0) || (est==='sinmov' && sinMov(p)) || (est==='sincb' && !(p.codigo_barras||'').trim()) || (est==='vendidos' && ((window._invVendCnt||{})[p.id]||0)>0)));
   const orden = $('inv-orden')?.value || 'az';
@@ -3766,7 +3769,9 @@ async function buscarProdAp(){
   const q = ($('ap-q').value||'').trim();
   const el = $('ap-res');
   if(q.length<2){ el.innerHTML=''; return; }
-  const r = await sb.from('productos').select('id,codigo,descripcion,precio,stock,unidad').or(`codigo.ilike.%${q}%,descripcion.ilike.%${q}%`).eq('activo',true).limit(8);
+  const q2 = qCodVar(q); // v151: "b31377-5g2" también busca "B3 1377-5G2"
+  const r = await sb.from('productos').select('id,codigo,descripcion,precio,stock,unidad').or(`codigo.ilike.%${q}%,${q2?`codigo.ilike.%${q2}%,`:''}descripcion.ilike.%${q}%`).eq('activo',true).limit(8);
+
   let html = (r.data||[]).map(p=>`<div style="padding:7px;border-bottom:1px solid var(--linea);cursor:pointer" onclick='addProdAp(${JSON.stringify(p).replace(/'/g,"&#39;")})'>
     <b>${esc(p.codigo)}</b> ${esc(p.descripcion.slice(0,42))} · <b>${fmt(p.precio)}</b>
     <span class="small ${+p.stock>0?'muted':''}" ${+p.stock<=0?'style="color:#d97706"':''}>${+p.stock>0?'stock '+(+p.stock):'sin stock (se aparta para cuando llegue)'}</span></div>`).join('');
