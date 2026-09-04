@@ -1222,7 +1222,7 @@ async function nuevaVenta(){
           <option value="transferencia">Transferencia</option><option value="ak_pago">AK Pago</option><option value="credito">Crédito</option></select></div>
         <label class="small" style="display:block;margin:-4px 0 8px"><input type="checkbox" id="nv-consumo"> 🏷️ Consumo propio de la tienda — NO es venta (sale del inventario como gasto al costo)</label>
         <table class="carrito" style="margin:8px 0"><tbody id="nv-carrito"></tbody></table>
-        <div class="tot-line"><span>Descuento</span><span>$ <input id="nv-desc" value="0" style="width:80px;padding:5px;border:1px solid var(--linea);border-radius:6px;text-align:right" oninput="pintarCarrito()"></span></div>
+        <div class="tot-line"><span>Descuento <span class="small muted" id="nv-desc-info"></span></span><span style="white-space:nowrap"><button class="btn sm sec" onclick="descPct(5)">5%</button> <button class="btn sm sec" onclick="descPct(10)">10%</button> <button class="btn sm sec" onclick="descPct(15)">15%</button> <input id="nv-descpct" inputmode="decimal" placeholder="%" title="Porcentaje de descuento" style="width:46px;padding:5px;border:1px solid var(--linea);border-radius:6px;text-align:right" oninput="descPct(this.value)"> &nbsp;$ <input id="nv-desc" value="0" style="width:80px;padding:5px;border:1px solid var(--linea);border-radius:6px;text-align:right" oninput="if($('nv-descpct'))$('nv-descpct').value='';pintarCarrito()"></span></div>
         <div class="tot-line grande"><span>Total</span><span id="nv-total">$0.00</span></div>
         <div class="tot-line" id="nv-recibido-row"><span>💵 Recibido</span><span>$ <input id="nv-recibido" inputmode="decimal" placeholder="0" style="width:80px;padding:5px;border:1px solid var(--linea);border-radius:6px;text-align:right" oninput="calcCambio()"></span></div>
         <div class="tot-line grande" id="nv-cambio-row" style="display:none;color:var(--verde,#15803d)"><span>Cambio</span><span id="nv-cambio">$0.00</span></div>
@@ -1917,10 +1917,22 @@ function pintarCarrito(){
     <td><span class="x" onclick="quitarProd(${i})">✕</span></td></tr>`).join('')
     || '<tr><td class="muted" style="padding:14px 6px">El carrito está vacío — busca y da clic en un producto.</td></tr>';
   const sub = carrito.reduce((s,c)=>s+c.cantidad*c.precio_unit,0);
+  // v150: si hay % capturado, el $ de descuento se recalcula con el carrito actual
+  const pctEl = $('nv-descpct');
+  if(pctEl && +pctEl.value>0 && $('nv-desc')) $('nv-desc').value = Math.round(sub*(+pctEl.value)/100*100)/100;
   const desc = +($('nv-desc')?.value||0);
+  const info = $('nv-desc-info'); if(info) info.textContent = (desc>0 && sub>0) ? '(−'+(desc/sub*100).toFixed(1).replace(/\.0$/,'')+'%)' : '';
   window._nvTotal = Math.round((sub - desc)*100)/100;
   $('nv-total').textContent = fmt(window._nvTotal);
   if($('nv-recibido')) calcCambio();
+}
+// v150: descuento por porcentaje de volada (botones 5/10/15 o escribir el %)
+function descPct(v){
+  const pct = Math.max(0, Math.min(100, +String(v).replace(',','.')||0));
+  const el = $('nv-descpct'); if(el && document.activeElement!==el) el.value = pct||'';
+  const sub = carrito.reduce((s,c)=>s+c.cantidad*c.precio_unit,0);
+  if($('nv-desc')) $('nv-desc').value = pct ? Math.round(sub*pct/100*100)/100 : 0;
+  pintarCarrito();
 }
 function toggleCambio(){
   const esEfectivo = $('nv-metodo').value==='efectivo';
