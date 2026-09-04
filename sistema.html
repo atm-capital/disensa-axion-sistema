@@ -3880,14 +3880,19 @@ async function confirmarEntrega(id){
     p_notas: 'Apartado #'+a.folio+' · anticipo '+fmt(a.anticipo)+' el '+fecha(a.fecha)
   });
   if(error){ toast(errMsg(error), true); return; }
-  await sb.from('apartados').update({estado:'entregado', entregado_en:new Date().toISOString(), venta_id:vid}).eq('id',id);
+  // v153: registrar_venta regresa {venta_id, folio, total}; antes se guardaba el objeto completo en venta_id,
+  // el update fallaba en silencio y el apartado se quedaba "activo" (pasó con el #2: se entregó 2 veces).
+  const ventaId = (vid && typeof vid==='object') ? (vid.venta_id ?? vid.id ?? null) : (vid ?? null);
+  const {error:eUp} = await sb.from('apartados').update({estado:'entregado', entregado_en:new Date().toISOString(), venta_id:ventaId}).eq('id',id);
+  if(eUp){ toast('La venta #'+(vid?.folio||ventaId)+' sí se registró, pero no pude cerrar el apartado: '+errMsg(eUp)+' — avísale a Andrés', true); }
   // El anticipo ya había entrado a caja: se descuenta del efectivo del día para no contarlo dos veces
   if(a.metodo_anticipo==='efectivo' && met==='efectivo' && +a.anticipo>0){
     await sb.from('caja_movs').insert({tipo:'retiro', monto:+a.anticipo,
       concepto:'Anticipo del apartado #'+a.folio+' ya cobrado el '+fecha(a.fecha)+' (ajuste, no salió dinero)',
       nombre:perfil.nombre||perfil.correo, usuario_id:perfil.id});
   }
-  logEv('apartado_entregado', '#'+a.folio+' venta '+vid);
+  logEv('apartado_entregado', '#'+a.folio+' venta #'+(vid?.folio||ventaId));
+
   cerrarModal(); toast('Entregado ✓ Venta registrada'); vApartados();
 }
 async function cancelarApartado(id){
