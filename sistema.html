@@ -4005,7 +4005,7 @@ async function vCaja(){
       <tbody>${movs.map(m=>`<tr><td class="small">${(m.creado||'').slice(11,16)}</td>
         <td><span class="badge ${m.tipo==='entrada'?'b-verde':'b-ambar'}">${m.tipo}</span></td>
         <td>${esc(m.concepto)||'—'}${m.origen==='chica'?' <span class="badge b-azul">🏠 caja fuerte</span>':''}</td><td class="small">${esc(m.nombre)||''}</td>
-        <td class="num"><b>${m.tipo==='entrada'?'+':'−'}${fmt(m.monto)}</b>${m.comprobante_path?` <button class="btn sm sec" title="Ver ticket" onclick="verPdfFactura('${esc(m.comprobante_path)}')">📎</button>`:''}</td></tr>`).join('')}</tbody></table></div></div>`:''}
+        <td class="num"><b>${m.tipo==='entrada'?'+':'−'}${fmt(m.monto)}</b>${m.comprobante_path?` <button class="btn sm sec" title="Ver ticket" onclick="verPdfFactura('${esc(m.comprobante_path)}')">📎</button>`:''}${esAdmin()?` <button class="btn sm sec" title="Editar" onclick="editarMovCaja(${m.id})">✏️</button> <button class="btn sm sec" title="Borrar" onclick="borrarMovCaja(${m.id})">🗑️</button>`:''}</td></tr>`).join('')}</tbody></table></div></div>`:''}
     <div class="card"><h3>🏦 Depósitos a la cuenta</h3>
       <p class="small muted" style="margin:0 0 8px">Dinero de la caja grande depositado al banco. <b>No</b> toca el corte del cajón — es puro registro con su ticket.</p>
       <button class="btn sm" onclick="registrarDeposito()">➕ Registrar depósito</button>
@@ -4176,6 +4176,35 @@ async function guardarCompraLocal(){
   toast(`✅ Compra registrada: ${d.partidas} producto(s) al inventario${d.nuevos?', '+d.nuevos+' nuevo(s)':''} · ${fmt(d.total)} ${pago==='credito'?'por pagar':'pagados'}`);
   if(d.nuevos && typeof avisoTarjetasProductos==='function'){ const pids = items.filter(x=>x.producto_id).map(x=>x.producto_id); setTimeout(()=>verTarjetas(null, '🆕 Los productos nuevos necesitan tarjeta de precio:'), 600); }
   if(typeof vCaja==='function' && document.querySelector('#v-caja')) vCaja();
+}
+// v149: el admin puede corregir o borrar un movimiento de caja (duplicados, origen equivocado, monto)
+async function editarMovCaja(id){
+  const {data:m, error} = await sb.from('caja_movs').select('*').eq('id', id).single();
+  if(error||!m){ toast('No encontré el movimiento', true); return; }
+  abrirModal(`<h3>✏️ Corregir movimiento #${m.id}</h3>
+    <p class="small muted" style="margin:0 0 10px">Registrado por ${esc(m.nombre||'—')}. Si fue un duplicado, mejor bórralo con 🗑️.</p>
+    <div class="frow">
+      <div class="field"><label>Tipo</label><select id="em-tipo"><option value="retiro" ${m.tipo==='retiro'?'selected':''}>💸 Retiro</option><option value="gasto" ${m.tipo==='gasto'?'selected':''}>🧾 Gasto</option><option value="entrada" ${m.tipo==='entrada'?'selected':''}>➕ Entrada</option></select></div>
+      <div class="field"><label>Monto</label><input id="em-monto" type="number" step="0.01" value="${+m.monto}"></div>
+      <div class="field"><label>Fecha</label><input id="em-fecha" type="date" value="${m.fecha}"></div>
+    </div>
+    <div class="field"><label>¿De dónde salió?</label><select id="em-origen"><option value="cajon" ${m.origen!=='chica'?'selected':''}>🗄️ Del cajón (cuenta en el corte)</option><option value="chica" ${m.origen==='chica'?'selected':''}>🏠 De la caja fuerte (no toca el corte)</option></select></div>
+    <div class="field"><label>Concepto</label><input id="em-con" value="${esc(m.concepto||'')}"></div>
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal();vCaja()">Cancelar</button><button class="btn" onclick="guardarEditMovCaja(${m.id})">Guardar</button></div>`);
+}
+async function guardarEditMovCaja(id){
+  const monto = +($('em-monto').value||0); if(!(monto>0)){ toast('Monto inválido', true); return; }
+  const {error} = await sb.from('caja_movs').update({tipo:$('em-tipo').value, monto, fecha:$('em-fecha').value, origen:$('em-origen').value, concepto:($('em-con').value||'').trim()}).eq('id', id);
+  if(error){ toast(errMsg(error), true); return; }
+  logEv('caja_mov', 'corregido #'+id+' → '+$('em-tipo').value+' '+fmt(monto)+' ('+$('em-origen').value+')');
+  cerrarModal(); toast('Movimiento corregido ✓'); window._cajaFecha = $('em-fecha').value; vCaja();
+}
+async function borrarMovCaja(id){
+  if(!confirm('¿Borrar este movimiento de caja? Úsalo solo para duplicados o capturas equivocadas. No se puede deshacer.')) return;
+  const {error} = await sb.from('caja_movs').delete().eq('id', id);
+  if(error){ toast(errMsg(error), true); return; }
+  logEv('caja_mov', 'borrado #'+id);
+  toast('Movimiento borrado'); vCaja();
 }
 function movCaja(){
   abrirModal(`<h3>Retiro, gasto o entrada de efectivo</h3>
