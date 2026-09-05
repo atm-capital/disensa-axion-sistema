@@ -953,6 +953,7 @@ async function vVentas(){
     $('vtools').innerHTML = `<button class="btn" onclick="nuevaVenta()">+ Nueva venta</button>
       <button class="btn sec" onclick="cuadreSafdiModal()">⚖️ Cuadre SAFDI</button>
       <button class="btn sec" onclick="pedirCompra()">🛠️ Necesito algo</button>
+      <button class="btn sec" onclick="akServicio()">📱 Servicio AK Pago</button>
       <button class="btn sec" id="btn-tarjetas" onclick="verTarjetas()">🏷️ Tarjetas</button>`;
     setTimeout(contarTarjetas, 50);
   }
@@ -3937,6 +3938,200 @@ async function imprimirApartado(id){
   w.document.close();
 }
 
+// ===== v155: MONEDERO AK PAGO (5-sep-2026) =====
+// La tienda es punto AK Pago (Suite de pagos Elektra). Cada servicio (abono Elektra, pago de servicio,
+// tiempo aire, retiro QR) SALE del saldo del monedero, que se fondea desde el banco. El cliente paga en
+// la tienda: si fue efectivo entra al cajón con origen 'akpago' (cuenta en el corte del día, NO le
+// resta a la caja chica). Saldo del monedero = suma con signo de akpago_movs.monto. SQL 49.
+const AK_SERVICIOS = ['Abono Elektra','Pago de servicio','Tiempo aire','Retiro con QR','Cobro con QR','Tarjeta de regalo'];
+const AK_COBRO = {efectivo:'💵 efectivo (entra al cajón)', tarjeta:'💳 tarjeta', transferencia:'🏦 transferencia', propio:'🏷️ propio / no se cobró', pendiente:'❓ por aclarar'};
+async function akSaldo(){
+  const r = await sb.from('akpago_movs').select('monto');
+  if(r.error) return null;
+  return Math.round((r.data||[]).reduce(function(s,m){ return s + +m.monto; },0)*100)/100;
+}
+function akTotal(){
+  const t = Math.round(((+($('ak-importe')?.value||0)) + (+($('ak-comision')?.value||0)))*100)/100;
+  const el = $('ak-total'); if(el) el.textContent = fmt(t);
+  const s = window._akSaldo; const av = $('ak-aviso');
+  if(av) av.innerHTML = (s!==null && s!==undefined && t>0 && t>s) ? '<span class="badge b-rojo">⚠️ El monedero solo tiene '+fmt(s)+' — hay que fondearlo antes</span>' : '';
+  return t;
+}
+async function akServicio(){
+  if(!puedeVender()) return;
+  window._akSaldo = await akSaldo();
+  abrirModal(`<h3>📱 Servicio AK Pago</h3>
+    <p class="small muted" style="margin:0 0 10px">Captura aquí lo que cobraste con la app de AK Pago (abono Elektra, servicio, tiempo aire…). Saldo del monedero ahora: <b>${window._akSaldo===null?'—':fmt(window._akSaldo)}</b>. <span id="ak-aviso"></span></p>
+    <div class="frow">
+      <div class="field"><label>¿Qué operación fue?</label><select id="ak-serv">${AK_SERVICIOS.map(function(s){ return '<option>'+s+'</option>'; }).join('')}</select></div>
+      <div class="field"><label>Autorización / folio del ticket</label><input id="ak-aut" placeholder="Ej. 139467364"></div>
+    </div>
+    <div class="frow">
+      <div class="field"><label>Importe (lo que se abonó o pagó)</label><input id="ak-importe" type="number" step="0.01" min="0" placeholder="0.00" oninput="akTotal()"></div>
+      <div class="field"><label>Comisión cobrada al cliente</label><input id="ak-comision" type="number" step="0.01" min="0" value="0" oninput="akTotal()"></div>
+    </div>
+    <div class="frow">
+      <div class="field"><label>Referencia del cliente (crédito, teléfono, contrato)</label><input id="ak-ref" placeholder="opcional"></div>
+      <div class="field"><label>¿Cómo pagó el cliente?</label><select id="ak-cobro">${Object.keys(AK_COBRO).map(function(k){ return '<option value="'+k+'">'+AK_COBRO[k]+'</option>'; }).join('')}</select></div>
+    </div>
+    <div class="field"><label>Liga del ticket digital (WALIapp) — opcional</label><input id="ak-ticket" placeholder="https://ticket.waliapp.com/t?c=…"></div>
+    <div class="field"><label>Nota (opcional)</label><input id="ak-nota" placeholder="Ej. cliente Juan, pagó su abono"></div>
+    <p style="text-align:right;margin:6px 0"><b>Total cobrado al cliente: <span id="ak-total">$0.00</span></b></p>
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cancelar</button><button class="btn" id="ak-btn" onclick="guardarAkServicio()">✅ Registrar</button></div>`);
+  setTimeout(function(){ $('ak-importe')?.focus(); }, 100);
+}
+async function guardarAkServicio(){
+  const importe = +($('ak-importe').value||0), comision = +($('ak-comision').value||0);
+  if(importe<=0){ toast('Pon el importe de la operación', true); return; }
+  const cobro = $('ak-cobro').value;
+  const aut = ($('ak-aut').value||'').trim();
+  if(!aut && !confirm('No pusiste la autorización del ticket. ¿Registrar de todos modos?')) return;
+  const btn = $('ak-btn'); btn.disabled = true; btn.textContent = 'Registrando…';
+  const r = await sb.rpc('akpago_servicio', {p_servicio:$('ak-serv').value, p_importe:importe, p_comision:comision, p_autorizacion:aut,
+    p_referencia:($('ak-ref').value||'').trim(), p_ticket_url:($('ak-ticket').value||'').trim(), p_cobro:cobro, p_nota:($('ak-nota').value||'').trim(),
+    p_nombre:(typeof perfil!=='undefined'&&perfil?(perfil.nombre||perfil.correo):'')});
+  if(r.error){ toast(errMsg(r.error), true); btn.disabled=false; btn.textContent='✅ Registrar'; return; }
+  const d = r.data||{};
+  logEv('akpago', $('ak-serv').value+' '+fmt(d.total)+' ('+cobro+')'+(aut?' aut. '+aut:''));
+  cerrarModal();
+  toast('📱 '+$('ak-serv').value+' registrado: '+fmt(d.total)+(cobro==='efectivo'?' → entra al cajón para el corte':(cobro==='pendiente'?' · queda POR ACLARAR cómo pagó':'')));
+  if(document.querySelector('#v-caja') && typeof vCaja==='function') vCaja();
+  if($('akpago-panel')) pintarAkpago();
+}
+function akBadgeTipo(m){
+  const t = {fondeo:'<span class="badge b-verde">➕ fondeo</span>', comision_ak:'<span class="badge b-gris">comisión AK</span>', servicio:'<span class="badge b-azul">📱 servicio</span>', ganancia:'<span class="badge b-verde">ganancia</span>', ajuste:'<span class="badge b-ambar">ajuste</span>'};
+  return t[m.tipo] || esc(m.tipo);
+}
+async function pintarAkpago(){
+  const el = $('akpago-panel'); if(!el) return;
+  const r = await sb.from('akpago_movs').select('*').order('fecha',{ascending:false}).order('id',{ascending:false}).limit(300);
+  if(r.error){ el.innerHTML = '<p class="small muted">Para activar el monedero corre <b>49_akpago.sql</b> en Supabase (SQL Editor).</p>'; return; }
+  const movs = r.data||[];
+  const saldo = Math.round(movs.reduce(function(s,m){ return s + +m.monto; },0)*100)/100;
+  const fond = movs.filter(function(m){ return m.tipo==='fondeo'; }).reduce(function(s,m){ return s + +m.monto; },0);
+  const serv = movs.filter(function(m){ return m.tipo==='servicio'; });
+  const cobrado = serv.reduce(function(s,m){ return s - +m.monto; },0);
+  const comis = serv.reduce(function(s,m){ return s + +(m.comision||0); },0);
+  const gan = movs.filter(function(m){ return m.tipo==='ganancia'; }).reduce(function(s,m){ return s + +m.monto; },0);
+  const costoAk = movs.filter(function(m){ return m.tipo==='comision_ak'; }).reduce(function(s,m){ return s - +m.monto; },0);
+  const pend = serv.filter(function(m){ return m.cobro_metodo==='pendiente'; });
+  window._akSaldo = saldo;
+  el.innerHTML = `<div class="kpis" style="margin-bottom:8px">
+      <div class="kpi" style="outline:2px solid var(--naranja,#e8862d)"><div class="l">📱 Saldo del monedero</div><div class="v">${fmt(saldo)}</div><div class="s">debe coincidir con "Saldo disponible" en la app</div></div>
+      <div class="kpi"><div class="l">Fondeado</div><div class="v">${fmt(fond)}</div><div class="s">desde el banco · AK cobró ${fmt(costoAk)} por depósitos</div></div>
+      <div class="kpi"><div class="l">Cobrado a clientes</div><div class="v">${fmt(cobrado)}</div><div class="s">${serv.length} operación(es) · ${fmt(comis)} de comisiones al cliente</div></div>
+      <div class="kpi"><div class="l">Ganancia que nos abonó AK</div><div class="v" style="color:${gan>0?'#15803d':'inherit'}">${fmt(gan)}</div><div class="s">se captura al cotejar con la app</div></div>
+    </div>
+    ${pend.length?`<p class="small" style="margin:0 0 8px;color:#b45309"><b>❓ ${pend.length} operación(es) sin saber cómo pagó el cliente</b> — ciérralas con "Cerrar cobro" para que el efectivo quede donde va.</p>`:''}
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+      ${puedeVender()?'<button class="btn sm" onclick="akServicio()">📱 Registrar servicio</button>':''}
+      ${esAdmin()?'<button class="btn sm sec" onclick="akFondeo()">➕ Fondeo desde el banco</button> <button class="btn sm sec" onclick="akCotejar()">⚖️ Cotejar con la app</button>':''}
+    </div>
+    <div class="tbl-scroll" style="max-height:360px;overflow-y:auto"><table>
+      <thead><tr><th>Fecha</th><th>Tipo</th><th>Detalle</th><th>Cobro</th><th class="num">Monto</th><th></th></tr></thead>
+      <tbody>${movs.map(function(m){
+        const det = m.tipo==='servicio'
+          ? '<b>'+esc(m.servicio||'servicio')+'</b>'+(m.importe!==null?' · '+fmt(m.importe)+(+m.comision?' + '+fmt(m.comision)+' comisión':''):'')+(m.autorizacion?'<br><span class="small muted">aut. '+esc(m.autorizacion)+(m.referencia?' · ref. '+esc(m.referencia):'')+'</span>':'')
+          : esc(m.nota||m.referencia||'')+(m.referencia&&m.nota?' <span class="small muted">('+esc(m.referencia)+')</span>':'');
+        const cobro = m.tipo==='servicio' ? '<span class="badge '+(m.cobro_metodo==='pendiente'?'b-rojo':(m.cobro_metodo==='efectivo'?'b-verde':'b-gris'))+'">'+esc((AK_COBRO[m.cobro_metodo]||m.cobro_metodo||'').split(' (')[0])+'</span>' : '';
+        const links = (m.ticket_url?' <a class="btn sm sec" href="'+esc(m.ticket_url)+'" target="_blank" rel="noopener" title="Ticket digital">🔗</a>':'')
+          + (m.comprobante_path?' <button class="btn sm sec" title="Ver comprobante" onclick="verPdfFactura(\''+esc(m.comprobante_path)+'\')">📎</button>':'')
+          + (esAdmin() && m.tipo==='servicio' && m.cobro_metodo==='pendiente' ? ' <button class="btn sm" onclick="akCerrarCobro('+m.id+')">Cerrar cobro</button>':'')
+          + (esAdmin()?' <button class="btn sm sec" title="Borrar" onclick="akBorrar('+m.id+')">🗑️</button>':'');
+        return '<tr><td class="small" style="white-space:nowrap">'+fecha(m.fecha)+'<br><span class="muted">'+esc(m.nombre||'')+'</span></td><td>'+akBadgeTipo(m)+'</td><td>'+det+'</td><td>'+cobro+'</td>'
+          +'<td class="num"><b style="color:'+(+m.monto<0?'#b91c1c':'#15803d')+'">'+(+m.monto<0?'−':'+')+fmt(Math.abs(+m.monto))+'</b></td><td style="white-space:nowrap">'+links+'</td></tr>';
+      }).join('') || '<tr><td colspan="6" class="muted">Sin movimientos. Empieza con "➕ Fondeo desde el banco".</td></tr>'}</tbody></table></div>
+    <p class="small muted" style="margin:6px 0 0">Cómo viaja el dinero: <b>banco → monedero</b> (fondeo, AK cobra su comisión por depósito) → cada servicio <b>sale del monedero</b> y el cliente paga en tienda (efectivo → cajón, cuenta en el corte). Lo que AK nos abone de ganancia se captura con ⚖️ Cotejar.</p>`;
+}
+function akFondeo(){
+  abrirModal(`<h3>➕ Fondeo del monedero AK Pago</h3>
+    <p class="small muted" style="margin:0 0 10px">Dinero que mandaste del banco a la cuenta de AK Pago (referencia del usuario punto de venta). AK cobra una comisión por el depósito — ponla para que el saldo cuadre con la app.</p>
+    <div class="frow">
+      <div class="field"><label>Monto transferido</label><input id="af-monto" type="number" step="0.01" min="0" placeholder="500.00"></div>
+      <div class="field"><label>Fecha</label><input id="af-fecha" type="date" value="${hoyMX()}"></div>
+    </div>
+    <div class="frow">
+      <div class="field"><label>Comisión que cobró AK</label><input id="af-com" type="number" step="0.01" min="0" value="2.00"></div>
+      <div class="field"><label>Banco y folio</label><input id="af-ref" placeholder="Ej. BBVA folio 0027946072"></div>
+    </div>
+    <div class="field"><label>📎 Comprobante de la transferencia (imagen o PDF)</label><input type="file" id="af-file" accept="image/*,application/pdf"></div>
+    <div class="field"><label>Nota (opcional)</label><input id="af-nota" placeholder="Ej. salió de BBVA, de lo que iba a Azteca"></div>
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cancelar</button><button class="btn" id="af-btn" onclick="guardarAkFondeo()">Guardar fondeo</button></div>`);
+  setTimeout(function(){ $('af-monto')?.focus(); }, 100);
+}
+async function guardarAkFondeo(){
+  const monto = +($('af-monto').value||0); if(monto<=0){ toast('Pon el monto transferido', true); return; }
+  const com = +($('af-com').value||0); const f = $('af-file').files && $('af-file').files[0];
+  const fechaF = $('af-fecha').value || hoyMX();
+  const btn = $('af-btn'); btn.disabled = true; btn.textContent = 'Guardando…';
+  let path = null;
+  if(f){
+    const ext = (f.name.split('.').pop()||'jpg').toLowerCase();
+    path = 'akpago/fondeo-'+fechaF+'-'+Date.now()+'.'+ext;
+    const up = await sb.storage.from('facturas').upload(path, f, {upsert:true});
+    if(up.error){ toast('No se pudo subir el comprobante: '+errMsg(up.error), true); btn.disabled=false; btn.textContent='Guardar fondeo'; return; }
+  }
+  const nom = (typeof perfil!=='undefined'&&perfil?perfil.nombre:''), uid = sesion.user.id;
+  const filas = [{fecha:fechaF, tipo:'fondeo', monto:monto, referencia:($('af-ref').value||'').trim()||null, comprobante_path:path, nota:($('af-nota').value||'').trim()||null, nombre:nom, usuario_id:uid}];
+  if(com>0) filas.push({fecha:fechaF, tipo:'comision_ak', monto:-com, referencia:($('af-ref').value||'').trim()||null, nota:'Comisión de AK Pago por el depósito', nombre:nom, usuario_id:uid});
+  const {error} = await sb.from('akpago_movs').insert(filas);
+  if(error){ toast(errMsg(error), true); btn.disabled=false; btn.textContent='Guardar fondeo'; return; }
+  logEv('akpago', 'fondeo '+fmt(monto)+(com?' (comisión AK '+fmt(com)+')':''));
+  cerrarModal(); toast('Fondeo registrado ✓ · el monedero sube '+fmt(monto-com));
+  pintarAkpago();
+}
+async function akCotejar(){
+  const saldo = await akSaldo();
+  abrirModal(`<h3>⚖️ Cotejar con la app de AK Pago</h3>
+    <p class="small muted" style="margin:0 0 10px">Entra a la app con el usuario <b>punto de venta</b> → Reportes → <b>Saldo Actual</b>. Según el sistema el monedero debe traer <b>${fmt(saldo||0)}</b>.</p>
+    <div class="frow">
+      <div class="field"><label>Saldo disponible que marca la app</label><input id="ac-saldo" type="number" step="0.01" style="font-size:18px" oninput="akCmp(${saldo||0})"></div>
+      <div class="field"><label>Ganancia que AK nos abonó (si aparece)</label><input id="ac-gan" type="number" step="0.01" min="0" value="0"></div>
+    </div>
+    <div id="ac-cmp" class="small" style="margin:0 0 8px"></div>
+    <div class="field"><label>Nota</label><input id="ac-nota" placeholder="Ej. cotejado con Saldo Actual del 5-sep"></div>
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cancelar</button><button class="btn" onclick="guardarAkCotejo(${saldo||0})">Guardar</button></div>`);
+  setTimeout(function(){ $('ac-saldo')?.focus(); }, 100);
+}
+function akCmp(sis){
+  const v = $('ac-saldo').value; const el = $('ac-cmp'); if(!el) return;
+  if(v===''){ el.innerHTML=''; return; }
+  const dif = Math.round((+v - sis)*100)/100;
+  el.innerHTML = Math.abs(dif)<0.005 ? '<span class="badge b-verde">✓ cuadra exacto</span>' : '<span class="badge b-ambar">diferencia '+(dif>0?'+':'')+fmt(dif)+' — si guardas, se registra como AJUSTE para que el sistema quede igual que la app</span>';
+}
+async function guardarAkCotejo(sis){
+  const v = $('ac-saldo').value; const gan = +($('ac-gan').value||0);
+  const nom = (typeof perfil!=='undefined'&&perfil?perfil.nombre:''), uid = sesion.user.id, nota = ($('ac-nota').value||'').trim();
+  const filas = [];
+  if(gan>0) filas.push({tipo:'ganancia', monto:gan, nota:nota||'Ganancia abonada por AK Pago', nombre:nom, usuario_id:uid});
+  if(v!==''){ const dif = Math.round((+v - sis - gan)*100)/100; if(Math.abs(dif)>=0.005) filas.push({tipo:'ajuste', monto:dif, nota:(nota?nota+' · ':'')+'Ajuste al cotejar: la app marca '+fmt(+v)+' y el sistema '+fmt(sis), nombre:nom, usuario_id:uid}); }
+  if(!filas.length){ cerrarModal(); toast('Cuadra exacto — nada que registrar ✓'); return; }
+  const {error} = await sb.from('akpago_movs').insert(filas);
+  if(error){ toast(errMsg(error), true); return; }
+  logEv('akpago', 'cotejo: '+filas.map(function(x){ return x.tipo+' '+fmt(x.monto); }).join(', '));
+  cerrarModal(); toast('Cotejo guardado ✓'); pintarAkpago();
+}
+function akCerrarCobro(id){
+  abrirModal(`<h3>Cerrar cobro del servicio #${id}</h3>
+    <p class="small muted" style="margin:0 0 10px">¿Cómo pagó el cliente al final? Si fue efectivo, la entrada se mete al cajón en la fecha que indiques (si el corte de ese día ya cerró, ponla en la fecha de hoy para que cuadre el corte de hoy).</p>
+    <div class="frow">
+      <div class="field"><label>Forma de pago</label><select id="acc-cobro">${['efectivo','tarjeta','transferencia','propio'].map(function(k){ return '<option value="'+k+'">'+AK_COBRO[k]+'</option>'; }).join('')}</select></div>
+      <div class="field"><label>Fecha de la entrada al cajón</label><input id="acc-fecha" type="date" value="${hoyMX()}"></div>
+    </div>
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cancelar</button><button class="btn" onclick="guardarAkCierre(${id})">Guardar</button></div>`);
+}
+async function guardarAkCierre(id){
+  const r = await sb.rpc('akpago_marcar_cobrado', {p_id:id, p_cobro:$('acc-cobro').value, p_fecha:$('acc-fecha').value||hoyMX(), p_nombre:(typeof perfil!=='undefined'&&perfil?perfil.nombre:'')});
+  if(r.error){ toast(errMsg(r.error), true); return; }
+  logEv('akpago', 'cobro cerrado #'+id+' → '+$('acc-cobro').value);
+  cerrarModal(); toast('Cobro cerrado ✓'); pintarAkpago();
+}
+async function akBorrar(id){
+  if(!confirm('¿Borrar este movimiento del monedero? Si tenía entrada al cajón, esa se conserva (bórrala en Corte de caja si también fue error).')) return;
+  const {error} = await sb.from('akpago_movs').delete().eq('id', id);
+  if(error){ toast(errMsg(error), true); return; }
+  logEv('akpago', 'borrado #'+id); toast('Movimiento borrado'); pintarAkpago();
+}
 /* ============================================================
    VISTA: CORTE DE CAJA (v72)
 ============================================================ */
@@ -3958,7 +4153,7 @@ async function pintarEfectivo(cajon){
   const bancoDesde = S(dp.data,()=>true);
   const base = conteo ? +conteo.monto : 0;
   // v140: lo pagado con dinero de la caja fuerte (origen='chica') sale de la caja chica, no del cajón
-  const chica = Math.round((base + deCortes + S(mv.data,m=>m.tipo==='retiro'&&m.origen!=='chica') - S(mv.data,m=>m.tipo!=='entrada'&&m.origen==='chica') - S(mv.data,m=>m.tipo==='entrada') - bancoDesde)*100)/100;
+  const chica = Math.round((base + deCortes + S(mv.data,m=>m.tipo==='retiro'&&m.origen!=='chica') - S(mv.data,m=>m.tipo!=='entrada'&&m.origen==='chica') - S(mv.data,m=>m.tipo==='entrada'&&m.origen!=='akpago') - bancoDesde)*100)/100;
   window._chicaActual = chica;
   const mes = hoyMX().slice(0,7);
   const bancoMes = ((dp.data||[]).filter(d=>String(d.fecha).startsWith(mes))).reduce((s,x)=>s+ +x.monto,0);
@@ -4043,7 +4238,7 @@ async function vCaja(){
       <thead><tr><th>Hora</th><th>Tipo</th><th>Concepto</th><th>Quién</th><th class="num">Monto</th></tr></thead>
       <tbody>${movs.map(m=>`<tr><td class="small">${(m.creado||'').slice(11,16)}</td>
         <td><span class="badge ${m.tipo==='entrada'?'b-verde':'b-ambar'}">${m.tipo}</span></td>
-        <td>${esc(m.concepto)||'—'}${m.origen==='chica'?' <span class="badge b-azul">🏠 caja fuerte</span>':''}</td><td class="small">${esc(m.nombre)||''}</td>
+        <td>${esc(m.concepto)||'—'}${m.origen==='chica'?' <span class="badge b-azul">🏠 caja fuerte</span>':''}${m.origen==='akpago'?' <span class="badge b-verde">📱 AK Pago</span>':''}</td><td class="small">${esc(m.nombre)||''}</td>
         <td class="num"><b>${m.tipo==='entrada'?'+':'−'}${fmt(m.monto)}</b>${m.comprobante_path?` <button class="btn sm sec" title="Ver ticket" onclick="verPdfFactura('${esc(m.comprobante_path)}')">📎</button>`:''}${esAdmin()?` <button class="btn sm sec" title="Editar" onclick="editarMovCaja(${m.id})">✏️</button> <button class="btn sm sec" title="Borrar" onclick="borrarMovCaja(${m.id})">🗑️</button>`:''}</td></tr>`).join('')}</tbody></table></div></div>`:''}
     <div class="card"><h3>🏦 Depósitos a la cuenta</h3>
       <p class="small muted" style="margin:0 0 8px">Dinero de la caja grande depositado al banco. <b>No</b> toca el corte del cajón — es puro registro con su ticket.</p>
@@ -4227,7 +4422,7 @@ async function editarMovCaja(id){
       <div class="field"><label>Monto</label><input id="em-monto" type="number" step="0.01" value="${+m.monto}"></div>
       <div class="field"><label>Fecha</label><input id="em-fecha" type="date" value="${m.fecha}"></div>
     </div>
-    <div class="field"><label>¿De dónde salió?</label><select id="em-origen"><option value="cajon" ${m.origen!=='chica'?'selected':''}>🗄️ Del cajón (cuenta en el corte)</option><option value="chica" ${m.origen==='chica'?'selected':''}>🏠 De la caja fuerte (no toca el corte)</option></select></div>
+    <div class="field"><label>¿De dónde salió?</label><select id="em-origen"><option value="cajon" ${m.origen!=='chica'&&m.origen!=='akpago'?'selected':''}>🗄️ Del cajón (cuenta en el corte)</option><option value="chica" ${m.origen==='chica'?'selected':''}>🏠 De la caja fuerte (no toca el corte)</option><option value="akpago" ${m.origen==='akpago'?'selected':''}>📱 Cobro AK Pago (entrada al cajón)</option></select></div>
     <div class="field"><label>Concepto</label><input id="em-con" value="${esc(m.concepto||'')}"></div>
     <div class="acciones"><button class="btn sec" onclick="cerrarModal();vCaja()">Cancelar</button><button class="btn" onclick="guardarEditMovCaja(${m.id})">Guardar</button></div>`);
 }
@@ -4477,7 +4672,7 @@ async function calcularDinero(hoy){
     const desdeC = x => !conteoC || String(x.fecha) > String(conteoC.fecha);
     const SC = (a,f)=>((a||[]).filter(x=>desdeC(x)&&f(x)).reduce((s,x)=>s+ +x.monto,0));
     D.cajaChica = Math.round(((conteoC?+conteoC.monto:0) + ((ctc.data)||[]).filter(desdeC).reduce((s,x)=>s+ +(x.deposito||0),0)
-      + SC(mvc.data,m=>m.tipo==='retiro'&&m.origen!=='chica') - SC(mvc.data,m=>m.tipo!=='entrada'&&m.origen==='chica') - SC(mvc.data,m=>m.tipo==='entrada') - SC(dpc.data,()=>true))*100)/100; // v140
+      + SC(mvc.data,m=>m.tipo==='retiro'&&m.origen!=='chica') - SC(mvc.data,m=>m.tipo!=='entrada'&&m.origen==='chica') - SC(mvc.data,m=>m.tipo==='entrada'&&m.origen!=='akpago') - SC(dpc.data,()=>true))*100)/100; // v140
     if(!D.cap){ D.banco = 0; D.otros = 0; D.desde = null; return D; }
     D.banco = +D.cap.banco; D.otros = +D.cap.otros;
     D.desde = D.cap.fecha;
@@ -4500,10 +4695,20 @@ async function calcularDinero(hoy){
     // v123: aportaciones de socios después de la captura también son entradas
     const ap = await sb.from('socios_aportaciones').select('monto').gt('creado', desdeISO).neq('via','histórico');
     D.entroAportes = (ap.data||[]).reduce((s,x)=>s+ +x.monto,0);
+    // v155: monedero AK Pago = bolsa aparte. Los fondeos posteriores a la captura salen del banco;
+    // el efectivo que cobra la tienda por servicios AK entra al cajón (caja_movs origen 'akpago').
+    D.monedero = 0; D.fondeosDesde = 0; D.akEf = 0;
+    try{
+      const akm = await sb.from('akpago_movs').select('tipo,monto,creado');
+      if(!akm.error){ D.monedero = Math.round((akm.data||[]).reduce((s,x)=>s+ +x.monto,0)*100)/100;
+        D.fondeosDesde = (akm.data||[]).filter(x=>x.tipo==='fondeo' && x.creado > desdeISO).reduce((s,x)=>s+ +x.monto,0); }
+      const ake = (mvc.data||[]).filter(m=>m.tipo==='entrada' && m.origen==='akpago' && (m.fecha||'') > String(D.cap.fecha));
+      D.akEf = ake.reduce((s,x)=>s+ +x.monto,0);
+    }catch(e){}
     // v124: banco y efectivo por separado; el total es la suma
-    D.bancoHoy = Math.round((D.banco + D.otros + D.entroAportes + cobrosNoEf + (D.entroVentas - ventasEf) - D.salioPagos - (D.salioGastos - gastosEf))*100)/100;
-    D.efectivoHoy = Math.round((D.efectivoCaja + (D.cajaChica||0) + ventasEf - gastosEf)*100)/100;
-    D.calculado = Math.round((D.bancoHoy + D.efectivoHoy)*100)/100;
+    D.bancoHoy = Math.round((D.banco + D.otros + D.entroAportes + cobrosNoEf + (D.entroVentas - ventasEf) - D.salioPagos - (D.salioGastos - gastosEf) - (D.fondeosDesde||0))*100)/100;
+    D.efectivoHoy = Math.round((D.efectivoCaja + (D.cajaChica||0) + ventasEf - gastosEf + (D.akEf||0))*100)/100;
+    D.calculado = Math.round((D.bancoHoy + D.efectivoHoy + (D.monedero||0))*100)/100;
     D.capturado = Math.round((D.banco + D.otros + D.efectivoCaja)*100)/100;
     D.dias = Math.round((hoy - new Date(D.cap.fecha+'T00:00:00'))/864e5);
   }catch(e){ D.ok = false; }
@@ -4527,7 +4732,7 @@ function panelDinero(D){
     <div class="kpis" style="margin-top:10px">
       <div class="kpi" style="border-top-color:var(--verde)"><div class="l">💰 Deberíamos tener HOY</div>
         <div class="v" style="font-size:27px;color:#15803d">${fmt(D.calculado)}</div>
-        <div class="s">banco + efectivo en cajas</div></div>
+        <div class="s">banco + efectivo en cajas${D.monedero?' + monedero AK Pago '+fmt(D.monedero):''}</div></div>
       <div class="kpi"><div class="l">🏦 En el banco</div><div class="v">${fmt(D.bancoHoy)}</div>
         <div class="s">capturado el ${fecha(D.desde)} + movimientos</div></div>
       <div class="kpi"><div class="l">💵 Efectivo en cajas</div><div class="v">${fmt(D.efectivoHoy)}</div>
@@ -4657,6 +4862,10 @@ async function vFinanzas(){
   window._pagoSel = window._pagoSel || {};
   const dinero = await calcularDinero(hoy);
   $('v-finanzas').innerHTML = panelDinero(dinero) + `
+    ${esFinanzas()?`<div class="card" style="margin-bottom:14px" id="fin-akpago"><h3>📱 Monedero AK Pago</h3>
+      <div id="akpago-panel"><span class="small muted">Cargando…</span></div>
+      <span style="display:none">${setTimeout(()=>{ if(typeof pintarAkpago==='function') pintarAkpago(); },220)&&''}</span>
+    </div>`:''}
     ${esFinanzas()?`<div class="card" style="margin-bottom:14px"><h3>🤝 Aportaciones de socios</h3>
       <div id="aportes-panel"><span class="small muted">Cargando…</span></div>
       <span style="display:none">${setTimeout(()=>{ if(typeof pintarAportaciones==='function') pintarAportaciones(); },250)&&''}</span>
