@@ -479,7 +479,7 @@ function resumenPartes(grupos, facturas, data, pindar){
       if(+pi.cant_facturada>0 && !fs.length) vivo += '<br><span class="badge b-rojo">⚠️ falta subir XML</span>';
       vivo += '<br><span class="muted small">'+tiempoRel(pi.actualizado)+'</span>';
     }
-    const fh = fs.length ? fs.map(function(f){ return '🧾 <b>'+esc(f.folio)+'</b>'+((esFinanzas()||puedeVender())?' ('+fmt(f.total)+')'+(f.pdf_path?' <button class="btn sm sec" onclick="verPdfFactura(\''+esc(f.pdf_path)+'\')">📄 Ver</button>':''):''); }).join('<br>') : '<span class="muted small">sin factura aún</span>';
+    const fh = fs.length ? fs.map(function(f){ return '🧾 <b>'+esc(f.folio)+'</b>'+((esFinanzas()||puedeVender())?' ('+fmt(f.total)+')'+(f.pdf_path?' <button class="btn sm sec" onclick="verPdfFactura(\''+esc(f.pdf_path)+'\')">📄 Ver</button>':btnPdfFactura(f)):''); }).join('<br>') : '<span class="muted small">sin factura aún</span>';
     return '<tr style="cursor:pointer" title="Clic: ir a esta parte en la lista" onclick="irAParte(\''+String(p)+'\')"><td style="white-space:nowrap"><b>'+(p?'Parte '+esc(p):'Sin parte')+'</b></td><td class="num">'+its.length+'</td>'+(esFinanzas()?'<td class="num">'+fmt(Math.round(tot*116)/100)+'</td>':'')+'<td>'+est+'</td><td>'+fh+'</td><td>'+vivo+'</td></tr>';
   }).join('');
   return '<div class="tbl-scroll" style="margin:6px 0 10px"><table><thead><tr><th>Parte</th><th class="num">Partidas</th>'+(esFinanzas()?'<th class="num">Total c/IVA</th>':'')+'<th>Estado</th><th>Factura(s)</th><th>Indar en vivo</th></tr></thead><tbody>'+filas+'</tbody></table></div>';
@@ -3384,7 +3384,7 @@ let pedItems = [];
 async function verPedido(id, estado){
   const [it, fx, pix] = await Promise.all([
     sb.from('pedido_compra_items').select('*, productos(codigo,descripcion)').eq('pedido_id', id).order('id'),
-    sb.from('facturas').select('folio,total,pdf_path,items').eq('pedido_id', id).eq('tipo','I'),
+    sb.from('facturas').select('id,uuid,folio,total,pdf_path,items').eq('pedido_id', id).eq('tipo','I'),
     sb.from('partes_indar').select('*').eq('pedido_id', id),
   ]);
   if(it.error){ toast(errMsg(it.error),true); return; }
@@ -3395,7 +3395,7 @@ async function verPedido(id, estado){
   const nomDev = {pendiente:'por recoger', recogido:'ya se la llevaron', nota_credito:'nota de crédito ✓', repuesto:'repuesto ✓', rechazado:'rechazada'};
   const pedR = await sb.from('pedidos_compra').select('folio_externo').eq('id', id).maybeSingle();
   const pedFolio = (pedR.data||{}).folio_externo || '';
-  window._pedFolioAct = pedFolio; window._recOk = false;
+  window._pedFolioAct = pedFolio; window._recOk = false; window._pedAct = {id:id, estado:estado}; // v154: para refrescar tras adjuntar un PDF
   window._pindPed = {}; pindar.forEach(z=>{ window._pindPed[String(z.parte)] = z; });
   pedItems = data;
   const tot = data.reduce((s,i)=>s+ +i.importe,0);
@@ -3435,7 +3435,7 @@ async function verPedido(id, estado){
       <br><span class="small muted">Esas piezas ya NO cuentan en el inventario. Dale seguimiento en la pestaña ↩️ Devoluciones.</span>
       <br><button class="btn sec sm" style="margin-top:6px" onclick="cerrarModal(); irA('devoluciones')">Ver devoluciones</button></div>`:''}
     <div id="ev-ped" class="small" style="margin:0 0 8px"></div>
-    ${facturas.length ? `<p class="small" style="margin-bottom:6px">🧾 <b>Facturas de este pedido:</b> ${facturas.map(f=>`${esc(f.folio)}${verFx?` (${fmt(f.total)})${f.pdf_path?` <button class="btn sm sec" onclick="verPdfFactura('${esc(f.pdf_path)}')">📄 Ver</button>`:''}`:''}`).join(' · ')}</p>` : ''}
+    ${facturas.length ? `<p class="small" style="margin-bottom:6px">🧾 <b>Facturas de este pedido:</b> ${facturas.map(f=>`${esc(f.folio)}${verFx?` (${fmt(f.total)})${f.pdf_path?` <button class="btn sm sec" onclick="verPdfFactura('${esc(f.pdf_path)}')">📄 Ver</button>`:btnPdfFactura(f)}`:''}`).join(' · ')}</p>` : ''}
     ${recibiendo?`<div class="card" style="border-left:4px solid var(--naranja,#e8862d);padding:10px;margin-bottom:10px">
       <b>⚠️ Antes de recibir, checa el papel:</b> el número de <b>pedido ${esc(pedFolio||'')}</b> o de <b>parte</b> que trae la lista de empaque debe aparecer en esta pantalla. Si el papel dice otro número, ciérrala y abre el pedido correcto.
       <br><span class="small muted">Luego: 📦 Recibir esta parte → coteja cantidades → sube la foto del papel firmado → Registrar recepción.</span></div>`:''}
@@ -4702,7 +4702,7 @@ async function vFinanzas(){
             return `<tr data-ftipo="${f.tipo}"${f.tipo!=='I'?' class="oculto"':''}><td>${f.pdf_path?`<input type="checkbox" class="fsel" title="Seleccionar para mandar" data-path="${esc(f.pdf_path)}" data-folio="${esc(f.folio)}" data-total="${+f.total||0}" data-ped="${esc(f.pedidos_compra?.folio_externo||'')}">`:''}</td><td>${tb[f.tipo]||esc(f.tipo)}</td><td><b>${esc(f.folio)}</b></td><td>${f.fecha?fecha(f.fecha):'—'}</td>
               <td>${f.pedidos_compra?.folio_externo ? `<a href="#" title="Ver partidas del pedido" onclick="event.preventDefault();verPedido(${f.pedido_id},'${esc(f.pedidos_compra.estado||'')}')">#${esc(f.pedidos_compra.folio_externo)}</a>` : '<span class="muted small">—</span>'}</td>
               <td class="num">${fmt(f.total)}</td><td class="small">${v}</td>
-              <td style="white-space:nowrap">${f.pdf_path ? `<button class="btn sm sec" onclick="verPdfFactura('${esc(f.pdf_path)}')">📄 Ver</button> <button class="btn sm sec" title="Mandar liga por WhatsApp" onclick="compartirFactura('wa','${esc(f.pdf_path)}','${esc(f.folio)}',${+f.total||0},'${esc(f.pedidos_compra?.folio_externo||'')}')">📱 WhatsApp</button> <button class="btn sm sec" title="Mandar liga por correo" onclick="compartirFactura('mail','${esc(f.pdf_path)}','${esc(f.folio)}',${+f.total||0},'${esc(f.pedidos_compra?.folio_externo||'')}')">✉️</button>` : '<span class="muted small">—</span>'}</td></tr>`;
+              <td style="white-space:nowrap">${f.pdf_path ? `<button class="btn sm sec" onclick="verPdfFactura('${esc(f.pdf_path)}')">📄 Ver</button> <button class="btn sm sec" title="Mandar liga por WhatsApp" onclick="compartirFactura('wa','${esc(f.pdf_path)}','${esc(f.folio)}',${+f.total||0},'${esc(f.pedidos_compra?.folio_externo||'')}')">📱 WhatsApp</button> <button class="btn sm sec" title="Mandar liga por correo" onclick="compartirFactura('mail','${esc(f.pdf_path)}','${esc(f.folio)}',${+f.total||0},'${esc(f.pedidos_compra?.folio_externo||'')}')">✉️</button>` : (esAdmin() && f.id ? `<button class="btn sm sec" title="Esta factura se registró con el XML pero sin PDF — súbelo aquí" onclick="subirPdfFactura(${f.id},'${esc(f.folio)}',function(){ vFinanzas(); })">📎 Subir PDF</button>` : '<span class="muted small">—</span>')}</td></tr>`;
           }).join('') || '<tr><td colspan="8" class="muted">Aún no hay facturas archivadas. Súbelas en Importar → Facturas Indar (XML).</td></tr>'}</tbody></table></div>`}
     </div>
     <div class="card" id="fin-gastos"><h3>💸 Gastos, inversiones y retiros</h3>
@@ -4725,6 +4725,36 @@ async function vFinanzas(){
         return `<tr><td>${fecha(g.fecha)}</td><td>${tb[g.tipo||'gasto']||tb.gasto}${g.origen==='caja'?' <span class="badge b-ambar" title="Lo registró la tienda desde su caja">🏪 caja</span>':''}</td><td>${esc(g.concepto)}${g.comp?(' <a href="#" class="small" onclick="event.preventDefault();verPdfFactura(\''+esc(g.comp)+'\')">🧾 ticket</a>'):''}</td>
         <td><span class="badge b-gris">${esc(g.categoria)}</span></td><td class="small muted">${esc(g.metodo||'')}</td><td class="num"><b>${fmt(g.monto)}</b></td></tr>`;}).join('')
         || '<tr><td colspan="6" class="muted">Sin movimientos en este periodo. Usa <b>+ Gasto</b> arriba para registrar gastos, inversiones o retiros.</td></tr>'}</tbody></table></div></div>`;
+}
+// v154: adjuntar el PDF a una factura que se registró solo con el XML (el link "📄 Ver" no aparecía
+// para contadores/vendedores). Sube el PDF como <UUID>.pdf al bucket y liga facturas.pdf_path.
+function btnPdfFactura(f){
+  if(!esAdmin() || !f || !f.id) return '';
+  return ' <button class="btn sm sec" title="Esta factura no tiene PDF — súbelo aquí" onclick="subirPdfFactura('+f.id+',\''+esc(f.folio)+'\',function(){ if(window._pedAct) verPedido(window._pedAct.id, window._pedAct.estado); })">📎 PDF</button>';
+}
+function subirPdfFactura(id, folio, despues){
+  let inp = document.getElementById('fx-pdf-solo');
+  if(!inp){ inp = document.createElement('input'); inp.type = 'file'; inp.id = 'fx-pdf-solo'; inp.accept = 'application/pdf,.pdf'; inp.style.display = 'none'; document.body.appendChild(inp); }
+  inp.value = '';
+  inp.onchange = async function(){
+    const f = inp.files && inp.files[0]; if(!f) return;
+    toast('Subiendo PDF de '+folio+'…');
+    const ok = await guardarPdfFactura(id, f);
+    if(ok){ toast('PDF de la factura '+folio+' guardado ✓ — ya aparece "📄 Ver"'); if(typeof despues === 'function') despues(); }
+  };
+  inp.click();
+}
+async function guardarPdfFactura(id, f){
+  if(!(/\.pdf$/i.test(f.name) || f.type === 'application/pdf')){ toast('Elige el PDF de la factura (no imagen ni XML)', true); return false; }
+  const {data:fx, error:e1} = await sb.from('facturas').select('id,uuid,folio').eq('id', id).single();
+  if(e1 || !fx){ toast('No encontré la factura: '+errMsg(e1||{}), true); return false; }
+  const path = fx.uuid + '.pdf';
+  const up = await sb.storage.from('facturas').upload(path, f, {upsert:true, contentType:'application/pdf'});
+  if(up.error){ toast('No se pudo subir el PDF: '+errMsg(up.error), true); return false; }
+  const {error:e2} = await sb.from('facturas').update({pdf_path: path}).eq('id', id);
+  if(e2){ toast('Se subió el PDF pero no se pudo ligar a la factura: '+errMsg(e2), true); return false; }
+  logEv('finanzas', 'PDF adjuntado a factura '+fx.folio);
+  return true;
 }
 async function verPdfFactura(path){
   const {data, error} = await sb.storage.from('facturas').createSignedUrl(path, 300);
@@ -5935,12 +5965,14 @@ async function leerFacturas(archivos){
     fxPedidos = (peds||[]).map(p=>({id:p.id, folio:p.folio_externo, total:p.total,
       codes: new Set((p.pedido_compra_items||[]).map(i=>i.productos?.codigo).filter(Boolean))}));
     // ¿ya están en el registro de facturas? (si la tabla no existe aún, seguimos sin registro)
-    let regUuids = new Set(), hayTabla = true;
-    { const {data:fr, error:eF} = await sb.from('facturas').select('uuid').in('uuid', fxDocs.map(d=>d.uuid));
-      if(eF) hayTabla = false; else regUuids = new Set((fr||[]).map(r=>r.uuid)); }
+    let regUuids = new Set(), hayTabla = true, regPdf = {};
+    { const {data:fr, error:eF} = await sb.from('facturas').select('uuid,pdf_path').in('uuid', fxDocs.map(d=>d.uuid));
+      if(eF) hayTabla = false; else { regUuids = new Set((fr||[]).map(r=>r.uuid)); (fr||[]).forEach(r=>{ regPdf[r.uuid] = !!r.pdf_path; }); } }
     window._fxTabla = hayTabla;
     for(const d of fxDocs){
       d.enRegistro = regUuids.has(d.uuid);
+      d.tienePdf = !!regPdf[d.uuid]; // v154: registrada pero sin PDF → si ahora viene el PDF, se agrega
+      d.pdfAgregado = false;
       if(d.tipo!=='I'){ d.reg = d.enRegistro; d.pedidoId = null; continue; }
       const {data:ya} = await sb.from('cuentas_pagar').select('id').ilike('concepto', `Factura ${d.folio}%`);
       d.reg = !!(ya && ya.length);
@@ -5956,14 +5988,15 @@ async function leerFacturas(archivos){
     const nI = fxDocs.filter(d=>d.tipo==='I').length, nT = fxDocs.filter(d=>d.tipo==='T').length, nE = fxDocs.filter(d=>d.tipo==='E').length;
     st(`${fxDocs.length} XML leídos (${nI} ingreso, ${nT} traslado${nE?', '+nE+' nota de crédito':''}) · ${Object.keys(fxPdfs).length} PDF` + (errores.length ? ` · ⚠️ sin leer: ${errores.join(', ')}` : ''));
     const tipoB = {I:'<span class="badge b-azul">Compra (por pagar)</span>', T:'<span class="badge b-gris">Traslado (envío)</span>', E:'<span class="badge b-ambar">Nota de crédito</span>'};
-    const pendiente = d => (d.tipo==='I' && !d.reg) || (window._fxTabla && !d.enRegistro);
+    const faltaPdf = d => window._fxTabla && d.enRegistro && !d.tienePdf && !!d.pdf; // v154
+    const pendiente = d => (d.tipo==='I' && !d.reg) || (window._fxTabla && !d.enRegistro) || faltaPdf(d);
     $('fx-res').innerHTML = `
       <div class="tbl-scroll" style="margin-top:8px"><table>
       <thead><tr><th>Tipo</th><th>Folio</th><th>Fecha</th><th class="num">Total</th><th class="num">Conceptos</th><th>PDF</th><th>Pedido vinculado</th><th>Estado</th></tr></thead>
       <tbody>${fxDocs.map((d,i)=>`<tr>
         <td>${tipoB[d.tipo]||d.tipo}</td><td><b>${esc(d.folio)}</b></td><td>${d.fecha}</td>
         <td class="num">${fmt(d.total)}</td><td class="num">${d.items.length}</td>
-        <td>${d.pdf ? '📄' : '<span class="muted small">—</span>'}</td>
+        <td>${d.pdf ? (faltaPdf(d) ? '<span class="badge b-ambar" title="La factura ya estaba registrada sin PDF; al aplicar se agrega">📄 se agrega</span>' : '📄') : (d.enRegistro && !d.tienePdf ? '<span class="badge b-gris" title="Registrada sin PDF: súbelo junto con el XML, o con 📎 en Finanzas → Facturas">sin PDF</span>' : '<span class="muted small">—</span>')}</td>
         <td>${d.tipo==='I' ? `<select onchange="fxDocs[${i}].pedidoId = this.value?+this.value:null">
           <option value="">— sin pedido —</option>
           ${fxPedidos.map(p=>`<option value="${p.id}" ${d.pedidoId===p.id?'selected':''}>#${esc(p.folio)} (${d.pedidoId===p.id?d.matchPct+'% partidas':fmt(p.total)})</option>`).join('')}
@@ -5977,7 +6010,14 @@ async function leerFacturas(archivos){
   if($('fx-btn')) $('fx-btn').disabled = false;
 }
 async function fxArchivar(d){ // guarda en tabla facturas + sube PDF (si existen tabla/bucket)
-  if(!window._fxTabla || d.enRegistro) return;
+  if(!window._fxTabla) return;
+  if(d.enRegistro){ // v154: ya registrada (XML) — si le faltaba el PDF y ahora viene, se agrega
+    if(!d.tienePdf && d.pdf){
+      const {error:eP} = await sb.storage.from('facturas').upload(d.uuid+'.pdf', d.pdf, {upsert:true, contentType:'application/pdf'});
+      if(!eP){ const {error:eU} = await sb.from('facturas').update({pdf_path:d.uuid+'.pdf'}).eq('uuid', d.uuid); if(!eU){ d.tienePdf = true; d.pdfAgregado = true; } }
+    }
+    return;
+  }
   let pdfPath = null;
   if(d.pdf){
     const {error:eS} = await sb.storage.from('facturas').upload(d.uuid+'.pdf', d.pdf, {upsert:true, contentType:'application/pdf'});
@@ -6037,7 +6077,8 @@ async function aplicarFacturas(){
     }
     st('');
     try{ await limpiarCanceladosIndar(pedTocados); }catch(eL){}
-    toast(`✅ ${aplicadas} factura(s) aplicadas (${cxpN} CxP, ${partidas} partidas a precio de factura) · ${archivadas} archivada(s) en Finanzas → Facturas`);
+    const pdfsAdd = fxDocs.filter(d=>d.pdfAgregado).length; // v154
+    toast(`✅ ${aplicadas} factura(s) aplicadas (${cxpN} CxP, ${partidas} partidas a precio de factura) · ${archivadas} archivada(s) en Finanzas → Facturas${pdfsAdd?` · ${pdfsAdd} PDF agregado(s) a facturas ya registradas`:''}`);
     // v141: cotejo pedido vs factura — el costo del sistema queda al precio FACTURADO; aquí se ve qué cambió
     if(partidas) abrirModal(`<h3>🔎 Cotejo pedido vs factura</h3>
       <p class="small muted" style="margin:0 0 8px">Se revisaron ${partidas} partida(s). El costo del sistema ya quedó al precio que Indar facturó (sin descuentos de pronto pago).</p>
