@@ -4032,7 +4032,7 @@ async function pintarAkpago(){
       <tbody>${movs.map(function(m){
         const det = m.tipo==='servicio'
           ? '<b>'+esc(m.servicio||'servicio')+'</b>'+(m.importe!==null?' · '+fmt(m.importe)+(+m.comision?' + '+fmt(m.comision)+' comisión':''):'')+(m.autorizacion?'<br><span class="small muted">aut. '+esc(m.autorizacion)+(m.referencia?' · ref. '+esc(m.referencia):'')+'</span>':'')
-          : esc(m.nota||m.referencia||'')+(m.referencia&&m.nota?' <span class="small muted">('+esc(m.referencia)+')</span>':'');
+          : (m.tipo==='fondeo'?'<span class="badge b-gris">'+({banco:'🏦 banco',cajon:'🗄️ cajón',chica:'🏠 caja chica'}[m.fondeo_origen||'banco']||esc(m.fondeo_origen))+'</span> ':'')+esc(m.nota||m.referencia||'')+(m.referencia&&m.nota?' <span class="small muted">('+esc(m.referencia)+')</span>':'');
         const cobro = m.tipo==='servicio' ? '<span class="badge '+(m.cobro_metodo==='pendiente'?'b-rojo':(m.cobro_metodo==='efectivo'?'b-verde':'b-gris'))+'">'+esc((AK_COBRO[m.cobro_metodo]||m.cobro_metodo||'').split(' (')[0])+'</span>' : '';
         const links = (m.ticket_url?' <a class="btn sm sec" href="'+esc(m.ticket_url)+'" target="_blank" rel="noopener" title="Ticket digital">🔗</a>':'')
           + (m.comprobante_path?' <button class="btn sm sec" title="Ver comprobante" onclick="verPdfFactura(\''+esc(m.comprobante_path)+'\')">📎</button>':'')
@@ -4045,11 +4045,15 @@ async function pintarAkpago(){
 }
 function akFondeo(){
   abrirModal(`<h3>➕ Fondeo del monedero AK Pago</h3>
-    <p class="small muted" style="margin:0 0 10px">Dinero que mandaste del banco a la cuenta de AK Pago (referencia del usuario punto de venta). AK cobra una comisión por el depósito — ponla para que el saldo cuadre con la app.</p>
+    <p class="small muted" style="margin:0 0 10px">Dinero que se metió a la cuenta de AK Pago (referencia del usuario punto de venta). AK cobra una comisión por el depósito — ponla para que el saldo cuadre con la app.</p>
     <div class="frow">
-      <div class="field"><label>Monto transferido</label><input id="af-monto" type="number" step="0.01" min="0" placeholder="500.00"></div>
+      <div class="field"><label>Monto depositado</label><input id="af-monto" type="number" step="0.01" min="0" placeholder="500.00"></div>
       <div class="field"><label>Fecha</label><input id="af-fecha" type="date" value="${hoyMX()}"></div>
     </div>
+    <div class="field"><label>¿De dónde salió el dinero?</label><select id="af-origen">
+      <option value="banco">🏦 Transferencia desde el banco</option>
+      <option value="cajon">🗄️ Efectivo del cajón (lo cobrado a clientes) — se registra la salida para que cuadre el corte</option>
+      <option value="chica">🏠 Efectivo de la caja fuerte / caja chica</option></select></div>
     <div class="frow">
       <div class="field"><label>Comisión que cobró AK</label><input id="af-com" type="number" step="0.01" min="0" value="2.00"></div>
       <div class="field"><label>Banco y folio</label><input id="af-ref" placeholder="Ej. BBVA folio 0027946072"></div>
@@ -4072,12 +4076,19 @@ async function guardarAkFondeo(){
     if(up.error){ toast('No se pudo subir el comprobante: '+errMsg(up.error), true); btn.disabled=false; btn.textContent='Guardar fondeo'; return; }
   }
   const nom = (typeof perfil!=='undefined'&&perfil?perfil.nombre:''), uid = sesion.user.id;
-  const filas = [{fecha:fechaF, tipo:'fondeo', monto:monto, referencia:($('af-ref').value||'').trim()||null, comprobante_path:path, nota:($('af-nota').value||'').trim()||null, nombre:nom, usuario_id:uid}];
+  const origen = ($('af-origen')&&$('af-origen').value)||'banco'; // v156: banco | cajon | chica
+  let cajaMovId = null;
+  if(origen!=='banco'){ // el efectivo sale del cajón (origen akpago: cuenta en el corte, no va a caja chica) o de la caja chica
+    const mv = await sb.from('caja_movs').insert({fecha:fechaF, tipo:'retiro', monto:monto, concepto:'Fondeo monedero AK Pago'+(($('af-ref').value||'').trim()?' · '+($('af-ref').value||'').trim():''), usuario_id:uid, nombre:nom, origen: origen==='chica'?'chica':'akpago', comprobante_path:path}).select('id').single();
+    if(mv.error){ toast('No se pudo registrar la salida de efectivo: '+errMsg(mv.error), true); btn.disabled=false; btn.textContent='Guardar fondeo'; return; }
+    cajaMovId = mv.data.id;
+  }
+  const filas = [{fecha:fechaF, tipo:'fondeo', monto:monto, referencia:($('af-ref').value||'').trim()||null, comprobante_path:path, nota:($('af-nota').value||'').trim()||null, nombre:nom, usuario_id:uid, fondeo_origen:origen, caja_mov_id:cajaMovId}];
   if(com>0) filas.push({fecha:fechaF, tipo:'comision_ak', monto:-com, referencia:($('af-ref').value||'').trim()||null, nota:'Comisión de AK Pago por el depósito', nombre:nom, usuario_id:uid});
   const {error} = await sb.from('akpago_movs').insert(filas);
   if(error){ toast(errMsg(error), true); btn.disabled=false; btn.textContent='Guardar fondeo'; return; }
-  logEv('akpago', 'fondeo '+fmt(monto)+(com?' (comisión AK '+fmt(com)+')':''));
-  cerrarModal(); toast('Fondeo registrado ✓ · el monedero sube '+fmt(monto-com));
+  logEv('akpago', 'fondeo '+fmt(monto)+' desde '+origen+(com?' (comisión AK '+fmt(com)+')':''));
+  cerrarModal(); toast('Fondeo registrado ✓ · el monedero sube '+fmt(monto-com)+(origen==='cajon'?' · salida de '+fmt(monto)+' del cajón para el corte':''));
   pintarAkpago();
 }
 async function akCotejar(){
@@ -4153,7 +4164,7 @@ async function pintarEfectivo(cajon){
   const bancoDesde = S(dp.data,()=>true);
   const base = conteo ? +conteo.monto : 0;
   // v140: lo pagado con dinero de la caja fuerte (origen='chica') sale de la caja chica, no del cajón
-  const chica = Math.round((base + deCortes + S(mv.data,m=>m.tipo==='retiro'&&m.origen!=='chica') - S(mv.data,m=>m.tipo!=='entrada'&&m.origen==='chica') - S(mv.data,m=>m.tipo==='entrada'&&m.origen!=='akpago') - bancoDesde)*100)/100;
+  const chica = Math.round((base + deCortes + S(mv.data,m=>m.tipo==='retiro'&&m.origen!=='chica'&&m.origen!=='akpago') - S(mv.data,m=>m.tipo!=='entrada'&&m.origen==='chica') - S(mv.data,m=>m.tipo==='entrada'&&m.origen!=='akpago') - bancoDesde)*100)/100;
   window._chicaActual = chica;
   const mes = hoyMX().slice(0,7);
   const bancoMes = ((dp.data||[]).filter(d=>String(d.fecha).startsWith(mes))).reduce((s,x)=>s+ +x.monto,0);
@@ -4422,7 +4433,7 @@ async function editarMovCaja(id){
       <div class="field"><label>Monto</label><input id="em-monto" type="number" step="0.01" value="${+m.monto}"></div>
       <div class="field"><label>Fecha</label><input id="em-fecha" type="date" value="${m.fecha}"></div>
     </div>
-    <div class="field"><label>¿De dónde salió?</label><select id="em-origen"><option value="cajon" ${m.origen!=='chica'&&m.origen!=='akpago'?'selected':''}>🗄️ Del cajón (cuenta en el corte)</option><option value="chica" ${m.origen==='chica'?'selected':''}>🏠 De la caja fuerte (no toca el corte)</option><option value="akpago" ${m.origen==='akpago'?'selected':''}>📱 Cobro AK Pago (entrada al cajón)</option></select></div>
+    <div class="field"><label>¿De dónde salió?</label><select id="em-origen"><option value="cajon" ${m.origen!=='chica'&&m.origen!=='akpago'?'selected':''}>🗄️ Del cajón (cuenta en el corte)</option><option value="chica" ${m.origen==='chica'?'selected':''}>🏠 De la caja fuerte (no toca el corte)</option><option value="akpago" ${m.origen==='akpago'?'selected':''}>📱 AK Pago (cobro de cliente o fondeo del monedero)</option></select></div>
     <div class="field"><label>Concepto</label><input id="em-con" value="${esc(m.concepto||'')}"></div>
     <div class="acciones"><button class="btn sec" onclick="cerrarModal();vCaja()">Cancelar</button><button class="btn" onclick="guardarEditMovCaja(${m.id})">Guardar</button></div>`);
 }
@@ -4672,7 +4683,7 @@ async function calcularDinero(hoy){
     const desdeC = x => !conteoC || String(x.fecha) > String(conteoC.fecha);
     const SC = (a,f)=>((a||[]).filter(x=>desdeC(x)&&f(x)).reduce((s,x)=>s+ +x.monto,0));
     D.cajaChica = Math.round(((conteoC?+conteoC.monto:0) + ((ctc.data)||[]).filter(desdeC).reduce((s,x)=>s+ +(x.deposito||0),0)
-      + SC(mvc.data,m=>m.tipo==='retiro'&&m.origen!=='chica') - SC(mvc.data,m=>m.tipo!=='entrada'&&m.origen==='chica') - SC(mvc.data,m=>m.tipo==='entrada'&&m.origen!=='akpago') - SC(dpc.data,()=>true))*100)/100; // v140
+      + SC(mvc.data,m=>m.tipo==='retiro'&&m.origen!=='chica'&&m.origen!=='akpago') - SC(mvc.data,m=>m.tipo!=='entrada'&&m.origen==='chica') - SC(mvc.data,m=>m.tipo==='entrada'&&m.origen!=='akpago') - SC(dpc.data,()=>true))*100)/100; // v140
     if(!D.cap){ D.banco = 0; D.otros = 0; D.desde = null; return D; }
     D.banco = +D.cap.banco; D.otros = +D.cap.otros;
     D.desde = D.cap.fecha;
@@ -4699,9 +4710,9 @@ async function calcularDinero(hoy){
     // el efectivo que cobra la tienda por servicios AK entra al cajón (caja_movs origen 'akpago').
     D.monedero = 0; D.fondeosDesde = 0; D.akEf = 0;
     try{
-      const akm = await sb.from('akpago_movs').select('tipo,monto,creado');
+      const akm = await sb.from('akpago_movs').select('tipo,monto,creado,fondeo_origen');
       if(!akm.error){ D.monedero = Math.round((akm.data||[]).reduce((s,x)=>s+ +x.monto,0)*100)/100;
-        D.fondeosDesde = (akm.data||[]).filter(x=>x.tipo==='fondeo' && x.creado > desdeISO).reduce((s,x)=>s+ +x.monto,0); }
+        D.fondeosDesde = (akm.data||[]).filter(x=>x.tipo==='fondeo' && (x.fondeo_origen||'banco')==='banco' && x.creado > desdeISO).reduce((s,x)=>s+ +x.monto,0); }
       const ake = (mvc.data||[]).filter(m=>m.tipo==='entrada' && m.origen==='akpago' && (m.fecha||'') > String(D.cap.fecha));
       D.akEf = ake.reduce((s,x)=>s+ +x.monto,0);
     }catch(e){}
