@@ -982,6 +982,13 @@ async function vVentas(){
     (it.data||[]).forEach(i=>{ utilPor[i.venta_id] = (utilPor[i.venta_id]||0) + (+i.precio_unit/1.16 - +i.costo_unit) * +i.cantidad; });
     data.forEach(v=>{ if(utilPor[v.id]!==undefined) utilPor[v.id] = Math.round((utilPor[v.id] - +(v.descuento||0)/1.16)*100)/100; });
   }
+  // v160: desglose de las ventas mixtas (venta_pagos) para repartirlas por método en los KPIs y el renglón
+  const mixIds = data.filter(v=>v.metodo_pago==='mixto').map(v=>v.id);
+  if(mixIds.length){
+    const pg = await traerTodo(()=>sb.from('venta_pagos').select('venta_id,metodo,monto').in('venta_id', mixIds).order('id'));
+    const byV = {}; (pg||[]).forEach(p=>{ (byV[p.venta_id] = byV[p.venta_id]||[]).push(p); });
+    data.forEach(v=>{ if(v.metodo_pago==='mixto') v._pagos = byV[v.id]||[]; });
+  }
   window._vtasData = data; window._vtasUtil = utilPor;
   const vends = [...new Set(data.map(v=>v.perfiles?.nombre).filter(Boolean))].sort();
   const solicitadas = data.filter(v=>v.cancel_solicitada && !v.cancelada).length;
@@ -1034,7 +1041,9 @@ function pintarVentas(){
   const tPer = vivas.reduce((s,v)=>s+ +v.total,0);
   const uPer = vivas.reduce((s,v)=>s+ (utilPor[v.id]||0),0);
   const ticket = vivas.length ? tPer/vivas.length : 0;
-  const porPago = {}; vivas.forEach(v=>{ porPago[v.metodo_pago]=(porPago[v.metodo_pago]||0)+ +v.total; });
+  const porPago = {}; vivas.forEach(v=>{ // v160: una mixta suma cada parte en su método (efectivo $60 + tarjeta $77)
+    if(v.metodo_pago==='mixto' && v._pagos && v._pagos.length){ v._pagos.forEach(p=>{ porPago[p.metodo]=(porPago[p.metodo]||0)+ +p.monto; }); }
+    else porPago[v.metodo_pago]=(porPago[v.metodo_pago]||0)+ +v.total; });
   const nomPer = {hoy:'hoy', semana:'esta semana', mes:'este mes', mespasado:'el mes pasado', todo:'histórico', rango:'el periodo'}[window._vtPer||'mes'];
   const ICO0 = {efectivo:'💵', tarjeta:'💳', transferencia:'🏦', ak_pago:'📱', credito:'📄', apartado:'📦', mixto:'🔀'};
   const perAct = window._vtPer || 'mes';
@@ -1058,7 +1067,7 @@ function pintarVentas(){
     return `<div style="display:flex;align-items:center;gap:12px;padding:10px 4px;border-bottom:1px solid var(--linea);flex-wrap:wrap;${v.cancelada?'opacity:.45':''}">
       <div style="min-width:60px"><b>#${v.folio}</b><div class="small muted">${hora}</div></div>
       <div style="flex:1;min-width:130px">${esc(v.clientes?.nombre||'Mostrador')}<div class="small muted">${esc(v.perfiles?.nombre||'')}</div></div>
-      <div style="min-width:110px"><span class="badge b-gris" title="${v.metodo_pago==='apartado'?'Pagado por apartado: el dinero entró a caja el día del anticipo / del saldo, no como efectivo de esta venta':''}">${ICO[v.metodo_pago]||'💵'} ${esc(v.metodo_pago)}</span>
+      <div style="min-width:110px"><span class="badge b-gris" title="${v.metodo_pago==='apartado'?'Pagado por apartado: el dinero entró a caja el día del anticipo / del saldo, no como efectivo de esta venta':''}">${ICO[v.metodo_pago]||'💵'} ${esc(v.metodo_pago)}</span>${v.metodo_pago==='mixto'&&v._pagos&&v._pagos.length?`<div class="small muted">${v._pagos.map(p=>(ICO[p.metodo]||'')+' '+fmt(p.monto)).join(' + ')}</div>`:''}
         ${v.cancelada?' <span class="badge b-rojo">cancelada</span>':''}${/CONSUMO PROPIO/i.test(v.notas||'')?' <span class="badge b-ambar" title="Es consumo de la propia tienda: NO cuenta en los totales de venta">🏷️ consumo propio</span>':''}
         ${!v.cancelada && v.cancel_solicitada?` <span class="badge b-ambar" title="${esc(v.cancel_motivo||'sin motivo')}">⚠️ canc. solicitada</span>`:''}</div>
       <div style="text-align:right;min-width:110px"><b style="font-size:16px">${fmt(v.total)}</b>
