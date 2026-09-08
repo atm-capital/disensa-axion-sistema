@@ -1957,6 +1957,7 @@ function pintarCarrito(){
   window._nvTotal = Math.round((sub - desc)*100)/100;
   $('nv-total').textContent = fmt(window._nvTotal);
   if($('nv-recibido')) calcCambio();
+  if($('nv-mixto') && $('nv-metodo') && $('nv-metodo').value==='mixto') mxCalc(); // v159: el total cambió → recalcular el desglose
 }
 // v150: descuento por porcentaje de volada (botones 5/10/15 o escribir el %)
 function descPct(v){
