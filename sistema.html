@@ -1002,7 +1002,7 @@ async function vVentas(){
       <input type="search" id="vt-q" placeholder="Buscar por folio o cliente..." oninput="pintarVentas()">
       <select id="vt-pago" onchange="pintarVentas()"><option value="">Todos los pagos</option>
         <option value="efectivo">💵 Efectivo</option><option value="tarjeta">💳 Tarjeta</option>
-        <option value="transferencia">🏦 Transferencia</option><option value="ak_pago">📱 AK Pago</option><option value="credito">📄 Crédito</option><option value="apartado">📦 Apartado</option></select>
+        <option value="transferencia">🏦 Transferencia</option><option value="ak_pago">📱 AK Pago</option><option value="credito">📄 Crédito</option><option value="apartado">📦 Apartado</option><option value="mixto">🔀 Mixto</option></select>
       ${vends.length>1?`<select id="vt-vend" onchange="pintarVentas()"><option value="">Todos los vendedores</option>${vends.map(n=>`<option>${esc(n)}</option>`).join('')}</select>`:'<span id="vt-vend" style="display:none"></span>'}
       <label class="small"><input type="checkbox" id="vt-canc" onchange="pintarVentas()"> Ver canceladas</label>
       <button class="btn sec sm" onclick="exportarVentasExcel()" title="Descarga en Excel las ventas del periodo con los filtros puestos">📥 Excel</button>
@@ -1036,16 +1036,16 @@ function pintarVentas(){
   const ticket = vivas.length ? tPer/vivas.length : 0;
   const porPago = {}; vivas.forEach(v=>{ porPago[v.metodo_pago]=(porPago[v.metodo_pago]||0)+ +v.total; });
   const nomPer = {hoy:'hoy', semana:'esta semana', mes:'este mes', mespasado:'el mes pasado', todo:'histórico', rango:'el periodo'}[window._vtPer||'mes'];
-  const ICO0 = {efectivo:'💵', tarjeta:'💳', transferencia:'🏦', ak_pago:'📱', credito:'📄', apartado:'📦'};
+  const ICO0 = {efectivo:'💵', tarjeta:'💳', transferencia:'🏦', ak_pago:'📱', credito:'📄', apartado:'📦', mixto:'🔀'};
   const perAct = window._vtPer || 'mes';
-  const NPAGO = {efectivo:'💵 efectivo', tarjeta:'💳 tarjeta', transferencia:'🏦 transferencia', ak_pago:'📱 AK Pago', credito:'📄 crédito', apartado:'📦 apartado (pagado antes)'};
+  const NPAGO = {efectivo:'💵 efectivo', tarjeta:'💳 tarjeta', transferencia:'🏦 transferencia', ak_pago:'📱 AK Pago', credito:'📄 crédito', apartado:'📦 apartado (pagado antes)', mixto:'🔀 mixto'};
   const filtros = [pago?('solo '+NPAGO[pago]):'', vend?('solo '+vend):'', q?('búsqueda "'+q+'"'):''].filter(Boolean).join(' · ');
   $('vt-kpis').innerHTML = `
     <div class="kpi" style="border-top-width:5px${filtros?';background:#fffbeb':''}"><div class="l">Vendido ${nomPer}${filtros?' — '+esc(filtros):''}</div><div class="v">${fmt(tPer)}</div><div class="s">${vivas.length} venta(s) · ticket promedio ${fmt(ticket)}${filtros?' · <b>total del filtro</b>':''}</div></div>
     ${esFinanzas()?`<div class="kpi"><div class="l">Utilidad ${nomPer}</div><div class="v" style="color:${uPer>=0?'var(--verde)':'#b91c1c'}">${fmt(Math.round(uPer*100)/100)}</div><div class="s">${tPer>0?('margen '+Math.round(uPer/(tPer/1.16)*100)+'% · sin IVA'):'sin IVA'}</div></div>`:''}
     ${perAct!=='hoy'?`<div class="kpi"><div class="l">Vendido hoy</div><div class="v">${fmt(tHoy)}</div><div class="s">${nHoy} venta(s)${perAct==='mespasado'?' · fuera del periodo':''}</div></div>`:''}
     <div class="kpi"><div class="l">Cómo pagaron</div><div class="v" style="font-size:15px;line-height:1.5">${Object.keys(porPago).length?Object.entries(porPago).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${ICO0[k]||''} ${fmt(v)}`).join('<br>'):'—'}</div><div class="s">en el periodo</div></div>`;
-  const ICO = {efectivo:'💵', tarjeta:'💳', transferencia:'🏦', ak_pago:'📱', credito:'📄', apartado:'📦'};
+  const ICO = {efectivo:'💵', tarjeta:'💳', transferencia:'🏦', ak_pago:'📱', credito:'📄', apartado:'📦', mixto:'🔀'};
   const dias = {};
   rows.forEach(v=>{ const f=new Date(v.fecha); const k=f.getFullYear()+'-'+f.getMonth()+'-'+f.getDate(); (dias[k]=dias[k]||[]).push(v); });
   const nomDia = (fecha)=>{ const d=new Date(fecha); d.setHours(0,0,0,0);
@@ -1162,6 +1162,17 @@ async function verVenta(id){
   if(error){ toast(errMsg(error),true); return; }
   const utilTot = data.reduce((s,i)=>s+ (+i.precio_unit/1.16 - +(i.costo_unit||0)) * +i.cantidad, 0);
   const netoVta = data.reduce((s,i)=>s+ +i.importe, 0)/1.16;
+  // v159: desglose del pago (mixto) + botón del admin para corregir la forma de pago
+  let pagoHtml = '';
+  try{
+    const vv = await sb.from('ventas').select('id,folio,total,metodo_pago,cancelada,efectivo').eq('id', id).single();
+    if(vv.data){ const V = vv.data; let pg = [];
+      if(V.metodo_pago==='mixto'){ const r = await sb.from('venta_pagos').select('metodo,monto').eq('venta_id', id); pg = r.data||[]; }
+      const ic = {efectivo:'💵',tarjeta:'💳',transferencia:'🏦',ak_pago:'📱',credito:'📄',apartado:'📦',mixto:'🔀'};
+      pagoHtml = `<p class="small" style="margin:0 0 8px">${ic[V.metodo_pago]||''} <b>Pago:</b> ${V.metodo_pago==='mixto' ? pg.map(p=>`${ic[p.metodo]||''} ${esc(p.metodo)} ${fmt(p.monto)}`).join(' + ') : esc(V.metodo_pago)+' '+fmt(V.total)}
+        ${esAdmin() && !V.cancelada && !['credito','apartado'].includes(V.metodo_pago) ? ` <button class="btn sm sec" onclick='cambiarPagoVenta(${JSON.stringify({id:V.id,folio:V.folio,total:+V.total,metodo:V.metodo_pago,pagos:pg})})'>✏️ Cambiar forma de pago</button>` : ''}</p>`;
+    }
+  }catch(e){}
   // v157: si la venta viene de un apartado, mostrar cómo y cuándo se pagó
   let apHtml = '';
   try{
@@ -1169,7 +1180,7 @@ async function verVenta(id){
     if(ap.data){ const pg = (ap.data.apartado_pagos||[]).sort((x,y)=>String(x.fecha).localeCompare(String(y.fecha)));
       apHtml = `<p class="small" style="margin:0 0 8px;padding:8px;background:#f8fafc;border-radius:8px">📦 <b>Apartado #${ap.data.folio}</b> · ${esc(ap.data.cliente_nombre||'')} — pagos: ${pg.length?pg.map(p=>`${p.tipo} <b>${fmt(p.monto)}</b> (${esc(p.metodo)}, ${fecha(p.fecha)})`).join(' · '):'sin detalle de pagos'}. <span class="muted">El dinero entró a caja en esas fechas, no como efectivo de esta venta.</span></p>`; }
   }catch(e){}
-  abrirModal(`<h3>Detalle de venta</h3>${apHtml}
+  abrirModal(`<h3>Detalle de venta</h3>${pagoHtml}${apHtml}
     <div class="tbl-scroll"><table><thead><tr><th>Producto</th><th class="num">Cant</th><th class="num">Precio</th><th class="num">Importe</th>${esFinanzas()?'<th class="num">Costo</th><th class="num">Utilidad</th>':''}</tr></thead>
     <tbody>${data.map(i=>`<tr style="cursor:pointer" title="Ver ficha del producto: historial, stock y foto" onclick="cerrarModal();fichaProducto(${i.producto_id})"><td style="color:var(--naranja,#E8790F)">${esc(i.productos?.codigo)} · ${esc(i.productos?.descripcion)}</td>
       <td class="num">${+i.cantidad}</td><td class="num">${fmt(i.precio_unit)}</td><td class="num">${fmt(i.importe)}</td>
@@ -1227,7 +1238,17 @@ async function nuevaVenta(){
         <p id="nv-maestro" class="small" style="margin:-6px 0 8px;color:var(--verde,#15803d);font-weight:600"></p>
         <div class="field"><label>Método de pago</label>
           <select id="nv-metodo" onchange="toggleCambio()"><option value="efectivo">Efectivo</option><option value="tarjeta">Tarjeta</option>
-          <option value="transferencia">Transferencia</option><option value="ak_pago">AK Pago</option><option value="credito">Crédito</option></select></div>
+          <option value="transferencia">Transferencia</option><option value="ak_pago">AK Pago</option><option value="mixto">🔀 Mixto (efectivo + tarjeta / transferencia)</option><option value="credito">Crédito</option></select></div>
+        <div id="nv-mixto" style="display:none;margin:-4px 0 8px;padding:8px;background:#f8fafc;border-radius:8px">
+          <div class="small" style="margin-bottom:4px"><b>🔀 ¿Cómo pagó?</b> Escribe cuánto dio de cada forma; la última se llena sola.</div>
+          <div class="frow">
+            <div class="field"><label>💵 Efectivo</label><input id="mx-efectivo" inputmode="decimal" placeholder="0" oninput="mxCalc('efectivo')"></div>
+            <div class="field"><label>💳 Tarjeta</label><input id="mx-tarjeta" inputmode="decimal" placeholder="0" oninput="mxCalc('tarjeta')"></div>
+            <div class="field"><label>🏦 Transferencia</label><input id="mx-transferencia" inputmode="decimal" placeholder="0" oninput="mxCalc('transferencia')"></div>
+            <div class="field"><label>📱 AK Pago</label><input id="mx-ak_pago" inputmode="decimal" placeholder="0" oninput="mxCalc('ak_pago')"></div>
+          </div>
+          <div class="small" id="mx-info" style="margin-top:2px"></div>
+        </div>
         <label class="small" style="display:block;margin:-4px 0 8px"><input type="checkbox" id="nv-consumo"> 🏷️ Consumo propio de la tienda — NO es venta (sale del inventario como gasto al costo)</label>
         <table class="carrito" style="margin:8px 0"><tbody id="nv-carrito"></tbody></table>
         <div class="tot-line"><span>Descuento <span class="small muted" id="nv-desc-info"></span></span><span style="white-space:nowrap"><button class="btn sm sec" onclick="descPct(5)">5%</button> <button class="btn sm sec" onclick="descPct(10)">10%</button> <button class="btn sm sec" onclick="descPct(15)">15%</button> <input id="nv-descpct" inputmode="decimal" placeholder="%" title="Porcentaje de descuento" style="width:46px;padding:5px;border:1px solid var(--linea);border-radius:6px;text-align:right" oninput="descPct(this.value)"> &nbsp;$ <input id="nv-desc" value="0" style="width:80px;padding:5px;border:1px solid var(--linea);border-radius:6px;text-align:right" oninput="if($('nv-descpct'))$('nv-descpct').value='';pintarCarrito()"></span></div>
@@ -1949,7 +1970,23 @@ function toggleCambio(){
   const esEfectivo = $('nv-metodo').value==='efectivo';
   const r=$('nv-recibido-row'); if(r) r.style.display = esEfectivo?'':'none';
   if(!esEfectivo && $('nv-cambio-row')) $('nv-cambio-row').style.display='none';
+  const mx = $('nv-mixto'); if(mx){ mx.style.display = $('nv-metodo').value==='mixto' ? '' : 'none'; if($('nv-metodo').value==='mixto') mxCalc(); }
 }
+// v159: pago mixto — desglose por método; la última casilla vacía se rellena con lo que falta
+const MX_METODOS = ['efectivo','tarjeta','transferencia','ak_pago'];
+function mxLeer(){ const o = {}; MX_METODOS.forEach(m=>{ o[m] = Math.round((+(($('mx-'+m)||{}).value||0))*100)/100; }); return o; }
+function mxCalc(editado){
+  const tot = Math.round((window._nvTotal||0)*100)/100; const v = mxLeer(); const info = $('mx-info'); if(!info) return;
+  const suma = MX_METODOS.reduce((s,m)=>s+v[m],0); const falta = Math.round((tot-suma)*100)/100;
+  if(editado && falta>0){ // rellenar la última casilla vacía distinta a la editada
+    const vacias = MX_METODOS.filter(m=>m!==editado && !(v[m]>0));
+    if(vacias.length===1){ $('mx-'+vacias[0]).value = falta; return mxCalc(); }
+  }
+  info.innerHTML = Math.abs(falta)<0.005 ? '<b style="color:var(--verde,#15803d)">✅ Suma '+fmt(suma)+' = total</b>'
+    : (falta>0 ? '<b style="color:#b45309">Faltan '+fmt(falta)+'</b> por asignar (total '+fmt(tot)+')' : '<b style="color:#b91c1c">Se pasa '+fmt(-falta)+'</b> del total '+fmt(tot));
+}
+function mxPagos(){ const v = mxLeer(); return MX_METODOS.filter(m=>v[m]>0).map(m=>({metodo:m, monto:v[m]})); }
+function mxTexto(pagos){ const ic = {efectivo:'efectivo',tarjeta:'tarjeta',transferencia:'transferencia',ak_pago:'AK Pago'}; return 'mixto: '+pagos.map(p=>ic[p.metodo]+' '+fmt(p.monto)).join(' + '); }
 function calcCambio(){
   const rec = +(($('nv-recibido')?.value)||0);
   const tot = window._nvTotal||0;
@@ -1986,10 +2023,19 @@ function numALetras(n){
 async function guardarVenta(){
   if(!carrito.length){ toast('Agrega al menos un producto', true); return; }
   if($('nv-metodo').value==='credito' && !$('nv-cliente').value){ toast('Para vender a CRÉDITO elige al cliente (no puede ser Mostrador) — así sabemos quién nos debe', true); return; }
+  const esMixto = $('nv-metodo').value==='mixto'; let pagosMx = [];
+  if(esMixto){ // v159
+    pagosMx = mxPagos(); const sumaMx = pagosMx.reduce((s,p)=>s+p.monto,0);
+    if(pagosMx.length<2){ toast('Pago mixto: pon al menos dos formas de pago (si fue una sola, elígela arriba)', true); return; }
+    if(Math.abs(sumaMx-(window._nvTotal||0))>0.01){ toast('Los pagos suman '+fmt(sumaMx)+' y la venta es '+fmt(window._nvTotal||0), true); return; }
+  }
   $('nv-guardar').disabled = true;
   const items = carrito.map(c=>({producto_id:c.producto_id||null, cantidad:c.cantidad,
     precio_unit:c.precio_unit, descripcion: c.producto_id ? null : c.desc}));
-  const {data, error} = await sb.rpc('registrar_venta', {
+  const {data, error} = esMixto
+    ? await sb.rpc('registrar_venta_mixta', { p_items: items, p_cliente_id: $('nv-cliente').value ? +$('nv-cliente').value : null,
+        p_descuento: +($('nv-desc').value||0), p_notas: ($('nv-consumo') && $('nv-consumo').checked) ? 'CONSUMO PROPIO' : '', p_pagos: pagosMx })
+    : await sb.rpc('registrar_venta', {
     p_items: items,
     p_cliente_id: $('nv-cliente').value ? +$('nv-cliente').value : null,
     p_metodo: $('nv-metodo').value,
@@ -2002,7 +2048,7 @@ async function guardarVenta(){
     folio: data.folio, fecha: fechaHora(new Date().toISOString()),
     cliente: cliSel.value ? cliSel.options[cliSel.selectedIndex].text.replace(' 🔧','') : 'Mostrador',
     vendedor: (typeof perfil!=='undefined' && perfil ? (perfil.nombre||'') : ''),
-    metodo: $('nv-metodo').value,
+    metodo: esMixto ? mxTexto(pagosMx) : $('nv-metodo').value,
     items: carrito.map(c=>({desc: c.codigo+' · '+c.desc.slice(0,40), cant: c.cantidad, precio: c.precio_unit, importe: Math.round(c.cantidad*c.precio_unit*100)/100})),
     subtotal: Math.round(carrito.reduce((s,c)=>s+c.cantidad*c.precio_unit,0)*100)/100,
     descuento: +($('nv-desc').value||0), total: data.total,
@@ -2199,6 +2245,32 @@ async function elegirProdSafdi(idx, idItem, pid){
   toast('Producto vinculado ✓');
   registrarSafdi(idx);
 }
+// v159: el admin corrige cómo se pagó una venta (ej. se capturó "efectivo" y fue 60 efectivo + 77 tarjeta)
+function cambiarPagoVenta(V){
+  const ini = {efectivo:0,tarjeta:0,transferencia:0,ak_pago:0};
+  if(V.metodo==='mixto') (V.pagos||[]).forEach(p=>{ ini[p.metodo] = +p.monto; }); else if(ini.hasOwnProperty(V.metodo)) ini[V.metodo] = +V.total;
+  window._nvTotal = +V.total;
+  abrirModal(`<h3>✏️ Forma de pago · venta #${V.folio}</h3>
+    <p class="small muted" style="margin:0 0 10px">Total de la venta <b>${fmt(V.total)}</b>. Reparte cómo pagó el cliente; si fue una sola forma, deja las demás en 0. El corte de caja de ese día se recalcula solo.</p>
+    <div id="nv-mixto"><div class="frow">
+      <div class="field"><label>💵 Efectivo</label><input id="mx-efectivo" inputmode="decimal" value="${ini.efectivo||''}" oninput="mxCalc('efectivo')"></div>
+      <div class="field"><label>💳 Tarjeta</label><input id="mx-tarjeta" inputmode="decimal" value="${ini.tarjeta||''}" oninput="mxCalc('tarjeta')"></div>
+      <div class="field"><label>🏦 Transferencia</label><input id="mx-transferencia" inputmode="decimal" value="${ini.transferencia||''}" oninput="mxCalc('transferencia')"></div>
+      <div class="field"><label>📱 AK Pago</label><input id="mx-ak_pago" inputmode="decimal" value="${ini.ak_pago||''}" oninput="mxCalc('ak_pago')"></div>
+    </div><div class="small" id="mx-info"></div></div>
+    <div class="acciones"><button class="btn sec" onclick="verVenta(${V.id})">Cancelar</button><button class="btn" onclick="guardarCambioPago(${V.id})">Guardar</button></div>`);
+  setTimeout(mxCalc, 50);
+}
+async function guardarCambioPago(id){
+  const pagos = mxPagos(); const suma = pagos.reduce((s,p)=>s+p.monto,0);
+  if(!pagos.length){ toast('Pon al menos una forma de pago', true); return; }
+  if(Math.abs(suma-(window._nvTotal||0))>0.01){ toast('Los pagos suman '+fmt(suma)+' y la venta es '+fmt(window._nvTotal||0), true); return; }
+  const r = await sb.rpc('venta_cambiar_pago', {p_venta_id:id, p_pagos:pagos});
+  if(r.error){ toast(errMsg(r.error), true); return; }
+  logEv('venta', 'forma de pago corregida · venta id '+id+' → '+(pagos.length>1?mxTexto(pagos):pagos[0].metodo));
+  toast('Forma de pago actualizada ✓'); verVenta(id);
+  if(typeof pintarVentas==='function' && document.querySelector('#vt-kpis')) vVentas();
+}
 async function reimprimirTicket(id){
   const [vr, ir] = await Promise.all([
     sb.from('ventas').select('*, clientes(nombre), perfiles(nombre)').eq('id', id).single(),
@@ -2206,10 +2278,12 @@ async function reimprimirTicket(id){
   ]);
   const v = vr.data;
   if(!v){ toast('No encontré esa venta', true); return; }
+  let metTxt = v.metodo_pago;
+  if(v.metodo_pago==='mixto'){ const pg = await sb.from('venta_pagos').select('metodo,monto').eq('venta_id', id); if(pg.data && pg.data.length) metTxt = mxTexto(pg.data); } // v159
   imprimirTicket({
     folio: v.folio, fecha: fechaHora(v.fecha),
     cliente: v.clientes?.nombre || 'Mostrador', vendedor: v.perfiles?.nombre || '',
-    metodo: v.metodo_pago,
+    metodo: metTxt,
     items: (ir.data||[]).map(i=>({desc: (i.productos?.codigo||'')+' · '+(i.productos?.descripcion||'').slice(0,40), cant:+i.cantidad, precio:+i.precio_unit, importe:+i.importe})),
     subtotal: +v.subtotal, descuento: +v.descuento, total: +v.total
   });
@@ -4221,7 +4295,7 @@ async function vCaja(){
   const f = window._cajaFecha || hoyMX();
   const [cfgR, vtR, mvR, ctR, hisR] = await Promise.all([
     sb.from('caja_config').select('fondo_fijo').eq('id',1).maybeSingle(),
-    sb.from('ventas').select('folio,total,metodo_pago,fecha').gte('fecha', f+'T00:00:00-06:00').lt('fecha', f+'T23:59:59.999-06:00').eq('cancelada', false),
+    sb.from('ventas').select('folio,total,metodo_pago,fecha,efectivo').gte('fecha', f+'T00:00:00-06:00').lt('fecha', f+'T23:59:59.999-06:00').eq('cancelada', false),
     sb.from('caja_movs').select('*').eq('fecha', f).order('creado'),
     sb.from('cortes_caja').select('*').eq('fecha', f).maybeSingle(),
     sb.from('cortes_caja').select('fecha,contado,esperado,diferencia,deposito,deja_fondo,nombre').order('fecha',{ascending:false}).limit(15)
@@ -4229,8 +4303,8 @@ async function vCaja(){
   const fondoFijo = +((cfgR.data||{}).fondo_fijo||0);
   const vts = vtR.data||[], movs = mvR.data||[], corte = ctR.data, his = hisR.data||[];
   const prev = his.find(c=>c.fecha < f); // lo que dejó el corte anterior manda sobre el fondo fijo
-  const efectivo = vts.filter(v=>v.metodo_pago==='efectivo').reduce((s,v)=>s+ +v.total,0);
-  const otros = {}; vts.filter(v=>v.metodo_pago!=='efectivo').forEach(v=>{ otros[v.metodo_pago]=(otros[v.metodo_pago]||0)+ +v.total; });
+  const efectivo = Math.round(vts.reduce((s,v)=>s + (v.metodo_pago==='efectivo' ? +v.total : (v.metodo_pago==='mixto' ? +(v.efectivo||0) : 0)),0)*100)/100; // v159: mixto → solo su parte en efectivo
+  const otros = {}; vts.filter(v=>v.metodo_pago!=='efectivo').forEach(v=>{ const k = v.metodo_pago==='mixto' ? 'mixto (no efectivo)' : v.metodo_pago; const m = v.metodo_pago==='mixto' ? (+v.total - +(v.efectivo||0)) : +v.total; if(m>0) otros[k]=(otros[k]||0)+m; });
   const totOtros = Object.values(otros).reduce((s,x)=>s+x,0);
   const deChica = movs.filter(m=>m.tipo!=='entrada'&&m.origen==='chica').reduce((s,m)=>s+ +m.monto,0); // v140: pagado de la caja fuerte, no toca el cajón
   const retiros = movs.filter(m=>m.tipo!=='entrada'&&m.origen!=='chica').reduce((s,m)=>s+ +m.monto,0);
@@ -4238,13 +4312,13 @@ async function vCaja(){
   const fondoUsar = corte ? +corte.fondo : (prev ? +prev.deja_fondo : fondoFijo);
   const esperado = Math.round((fondoUsar + efectivo + entradas - retiros)*100)/100;
   window._cajaCalc = {fecha:f, fondo:fondoUsar, efectivo, otros:totOtros, retiros:retiros-entradas, esperado, primero: !prev && !corte};
-  const ico = {efectivo:'💵',tarjeta:'💳',transferencia:'🏦',ak_pago:'📱',credito:'📄',apartado:'📦'};
+  const ico = {efectivo:'💵',tarjeta:'💳',transferencia:'🏦',ak_pago:'📱',credito:'📄',apartado:'📦',mixto:'🔀','mixto (no efectivo)':'🔀'};
   $('vtools').innerHTML = `<input type="date" value="${f}" onchange="window._cajaFecha=this.value; vCaja()" style="padding:8px;border:1px solid var(--linea);border-radius:8px">
     ${puedeVender()?`<button class="btn sec" onclick="movCaja()">💸 Retiro / gasto</button> <button class="btn sec" onclick="compraLocal()">🧾 Compra a proveedor local</button>`:''}
     ${esAdmin()?`<button class="btn sec" onclick="configFondo(${fondoFijo})">⚙️ Fondo fijo</button>`:''}`;
   $('v-caja').innerHTML = `
     <div class="kpis">
-      <div class="kpi"><div class="l">Ventas en efectivo</div><div class="v">${fmt(efectivo)}</div><div class="s">${vts.filter(v=>v.metodo_pago==='efectivo').length} venta(s)</div></div>
+      <div class="kpi"><div class="l">Ventas en efectivo</div><div class="v">${fmt(efectivo)}</div><div class="s">${vts.filter(v=>v.metodo_pago==='efectivo').length} venta(s)${vts.some(v=>v.metodo_pago==='mixto')?' + parte en efectivo de '+vts.filter(v=>v.metodo_pago==='mixto').length+' mixta(s)':''}</div></div>
       <div class="kpi"><div class="l">Otros pagos</div><div class="v">${fmt(totOtros)}</div><div class="s">${Object.keys(otros).map(k=>(ico[k]||'')+' '+fmt(otros[k])).join(' · ')||'—'}</div></div>
       <div class="kpi"><div class="l">Retiros y gastos del cajón</div><div class="v">${fmt(retiros)}</div><div class="s">${movs.length} movimiento(s)${deChica?' · '+fmt(deChica)+' salieron de la caja fuerte (no cuentan aquí)':''}</div></div>
       <div class="kpi" style="outline:2px solid var(--naranja,#e8862d)"><div class="l">Efectivo que debe haber</div><div class="v">${fmt(esperado)}</div><div class="s">fondo ${fmt(fondoUsar)} + ventas − retiros</div></div>
@@ -4287,10 +4361,10 @@ async function vCaja(){
 async function acumHistorico(){
   const el = $('caja-hist'); if(!el) return;
   const [v, m] = await Promise.all([
-    traerTodo(()=>sb.from('ventas').select('total,metodo_pago').eq('cancelada',false).order('id')).then(d=>({data:d})),
+    traerTodo(()=>sb.from('ventas').select('total,metodo_pago,efectivo').eq('cancelada',false).order('id')).then(d=>({data:d})),
     traerTodo(()=>sb.from('caja_movs').select('tipo,monto').order('id')).then(d=>({data:d}))
   ]);
-  const ef = (v.data||[]).filter(x=>x.metodo_pago==='efectivo').reduce((s,x)=>s+ +x.total,0);
+  const ef = (v.data||[]).reduce((s,x)=>s + (x.metodo_pago==='efectivo' ? +x.total : (x.metodo_pago==='mixto' ? +(x.efectivo||0) : 0)),0);
   const ret = (m.data||[]).filter(x=>x.tipo!=='entrada').reduce((s,x)=>s+ +x.monto,0);
   const ent = (m.data||[]).filter(x=>x.tipo==='entrada').reduce((s,x)=>s+ +x.monto,0);
   el.innerHTML = `📌 <b>Referencia:</b> desde que abrió la tienda se han cobrado <b>${fmt(ef)}</b> en efectivo${ret?` y se han registrado ${fmt(ret)} en retiros/gastos`:''}${ent?` y ${fmt(ent)} de entradas`:''}. Si nunca has hecho corte, en el cajón debería haber aprox. <b>${fmt(ef - ret + ent)}</b> más el dinero con el que arrancaron y menos los gastos que no se registraron aquí.`;
@@ -4719,7 +4793,7 @@ async function calcularDinero(hoy){
     // v122: se compara contra el MOMENTO exacto de la captura (lo de antes ya viene dentro del saldo capturado)
     const desdeISO = D.cap.creado || new Date(D.cap.fecha+'T00:00:00').toISOString();
     // ENTRÓ: ventas no-crédito DESPUÉS de la captura
-    const vts = await traerTodo(()=>sb.from('ventas').select('total,metodo_pago,cancelada').gt('fecha', desdeISO).eq('cancelada',false).order('id'));
+    const vts = await traerTodo(()=>sb.from('ventas').select('total,metodo_pago,cancelada,efectivo').gt('fecha', desdeISO).eq('cancelada',false).order('id'));
     const vivasV = (vts||[]).filter(v=>v.metodo_pago!=='credito' && v.metodo_pago!=='apartado'); // v157: apartado → el dinero entra por sus pagos
     D.entroVentas = vivasV.reduce((s,v)=>s+ +v.total,0);
     // v157: pagos de apartados después de la captura — efectivo al cajón (caja_movs origen 'apartado'), lo demás al banco
@@ -4729,7 +4803,7 @@ async function calcularDinero(hoy){
       if(!apg.error){ D.apBanco = (apg.data||[]).filter(p=>p.metodo!=='efectivo').reduce((s,p)=>s+ +p.monto,0); }
       D.apEf = (mvc.data||[]).filter(m=>m.tipo==='entrada' && m.origen==='apartado' && (m.fecha||'') > String(D.cap.fecha)).reduce((s,x)=>s+ +x.monto,0);
     }catch(e){}
-    const ventasEf = vivasV.filter(v=>v.metodo_pago==='efectivo').reduce((s,v)=>s+ +v.total,0);
+    const ventasEf = vivasV.reduce((s,v)=>s + (v.metodo_pago==='efectivo' ? +v.total : (v.metodo_pago==='mixto' ? +(v.efectivo||0) : 0)),0); // v159
     // SALIÓ: pagos a proveedores + gastos registrados DESPUÉS de la captura
     const pg = await sb.from('pagos_cxp').select('monto').gt('creado', desdeISO);
     D.salioPagos = (pg.data||[]).reduce((s,x)=>s+ +x.monto,0);
