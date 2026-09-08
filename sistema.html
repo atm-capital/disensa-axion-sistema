@@ -4509,16 +4509,20 @@ async function guardarMovCaja(){
 }
 function hacerCorte(editando){
   const c = window._cajaCalc;
+  // v158: conteo a ciegas — el vendedor NO ve "debe haber" hasta que captura lo que contó (evita copiar el esperado)
+  window._ctCiego = !editando && !esAdmin() && !c.primero; window._ctVisto = false;
   abrirModal(`<h3>Corte de caja · ${fecha(c.fecha)}</h3>
     ${c.primero?`<div class="card" style="border-left:4px solid #d97706;margin-bottom:10px;padding:10px"><b>Primer corte:</b> escribe con cuánto efectivo <b>abrió</b> hoy el cajón (lo que ya traía acumulado). De mañana en adelante se hereda solo lo que dejes de fondo.</div>`:''}
-    <table style="width:100%;margin-bottom:10px"><tbody>
+    ${window._ctCiego?`<div class="card" style="border-left:4px solid var(--naranja,#e8862d);margin-bottom:10px;padding:10px"><b>🔒 Cuenta primero, compara después.</b> Cuenta TODO el efectivo del cajón (billetes y monedas), escríbelo tal cual y dale <b>Comparar</b>. El sistema te dice si cuadra <b>después</b> — nunca escribas lo que "debería" haber.</div>`:''}
+    <div id="ct-tabla" ${window._ctCiego?'style="display:none"':''}><table style="width:100%;margin-bottom:10px"><tbody>
       <tr><td>Efectivo con el que abrió</td><td class="num"><input type="number" id="ct-ini" step="0.01" value="${c.fondo}" oninput="recalcEsperado()" style="width:110px;padding:5px;border:1px solid var(--linea);border-radius:6px;text-align:right"></td></tr>
       <tr><td>+ Ventas en efectivo</td><td class="num">${fmt(c.efectivo)}</td></tr>
       <tr><td>− Retiros y gastos</td><td class="num">${fmt(c.retiros)}</td></tr>
       <tr><th style="border-top:2px solid var(--linea)">Debe haber en el cajón</th><th class="num" id="ct-esp" style="border-top:2px solid var(--linea);font-size:18px">${fmt(c.esperado)}</th></tr>
-    </tbody></table>
+    </tbody></table></div>
     <label>💵 Efectivo contado (todo lo que hay en el cajón)</label>
     <input type="number" id="ct-contado" step="0.01" placeholder="0.00" oninput="calcDifCorte()">
+    ${window._ctCiego?`<div style="margin:6px 0"><button class="btn sec" id="ct-comparar" onclick="verCompararCorte()">🔍 Ya conté → Comparar</button></div>`:''}
     <p id="ct-dif" class="small muted" style="margin:6px 0">Captura el conteo para ver si cuadra.</p>
     <label>¿Cuánto dejas de fondo para mañana?</label>
     <input type="number" id="ct-fondo" step="0.01" value="${c.fondo}" oninput="calcDifCorte()">
@@ -4534,10 +4538,16 @@ function recalcEsperado(){
   $('ct-esp').textContent = fmt(c.esperado);
   calcDifCorte();
 }
+function verCompararCorte(){ // v158: revela el esperado y la comparación solo después de capturar el conteo
+  if(!$('ct-contado').value || !(+$('ct-contado').value>0)){ toast('Primero escribe cuánto contaste', true); return; }
+  window._ctVisto = true; if($('ct-tabla')) $('ct-tabla').style.display=''; if($('ct-comparar')) $('ct-comparar').style.display='none';
+  calcDifCorte();
+}
 function calcDifCorte(){
   const c = window._cajaCalc, cont = +$('ct-contado').value||0, dej = +$('ct-fondo').value||0;
   const dif = Math.round((cont - c.esperado)*100)/100;
   const el = $('ct-dif');
+  if(window._ctCiego && !window._ctVisto){ el.innerHTML = $('ct-contado').value ? 'Cuando termines de contar, dale <b>Comparar</b>.' : 'Cuenta todo el efectivo del cajón y escríbelo aquí.'; $('ct-dep').innerHTML = cont>0 ? `A depositar / guardar: <b>${fmt(Math.max(0, Math.round((cont-dej)*100)/100))}</b>` : ''; return; }
   el.innerHTML = !$('ct-contado').value ? 'Captura el conteo para ver si cuadra.'
     : (Math.abs(dif)<0.5 ? '<b style="color:var(--verde,#15803d)">✅ Cuadra exacto</b>'
     : (dif>0 ? `<b style="color:#2563eb">Sobran ${fmt(dif)}</b> — revisa si falta registrar una venta`
@@ -4547,8 +4557,9 @@ function calcDifCorte(){
 async function guardarCorte(editando){
   const c = window._cajaCalc, cont = +$('ct-contado').value||0, dej = +$('ct-fondo').value||0;
   if(!$('ct-contado').value){ toast('Captura el efectivo contado', true); return; }
+  if(window._ctCiego && !window._ctVisto){ toast('Primero dale "Comparar" para ver si cuadra', true); return; } // v158
   const dif = Math.round((cont - c.esperado)*100)/100;
-  if(Math.abs(dif)>=0.5 && !confirm((dif>0?'Sobran ':'Faltan ')+fmt(Math.abs(dif))+'. ¿Guardar el corte así?')) return;
+  if(Math.abs(dif)>=0.5 && !confirm((dif>0?'Sobran ':'Faltan ')+fmt(Math.abs(dif))+'. ¿Guardar el corte así? (Está bien guardarlo con diferencia: lo importante es que sea lo que contaste de verdad.)')) return;
   const row = {fecha:c.fecha, nombre:perfil.nombre||perfil.correo, usuario_id:perfil.id, fondo:c.fondo,
     ventas_efectivo:c.efectivo, ventas_otros:c.otros, retiros:c.retiros, contado:cont, esperado:c.esperado,
     diferencia:dif, deja_fondo:dej, deposito:Math.max(0, Math.round((cont-dej)*100)/100), nota:$('ct-nota').value.trim()};
