@@ -1002,7 +1002,7 @@ async function vVentas(){
       <input type="search" id="vt-q" placeholder="Buscar por folio o cliente..." oninput="pintarVentas()">
       <select id="vt-pago" onchange="pintarVentas()"><option value="">Todos los pagos</option>
         <option value="efectivo">💵 Efectivo</option><option value="tarjeta">💳 Tarjeta</option>
-        <option value="transferencia">🏦 Transferencia</option><option value="ak_pago">📱 AK Pago</option><option value="credito">📄 Crédito</option></select>
+        <option value="transferencia">🏦 Transferencia</option><option value="ak_pago">📱 AK Pago</option><option value="credito">📄 Crédito</option><option value="apartado">📦 Apartado</option></select>
       ${vends.length>1?`<select id="vt-vend" onchange="pintarVentas()"><option value="">Todos los vendedores</option>${vends.map(n=>`<option>${esc(n)}</option>`).join('')}</select>`:'<span id="vt-vend" style="display:none"></span>'}
       <label class="small"><input type="checkbox" id="vt-canc" onchange="pintarVentas()"> Ver canceladas</label>
       <button class="btn sec sm" onclick="exportarVentasExcel()" title="Descarga en Excel las ventas del periodo con los filtros puestos">📥 Excel</button>
@@ -1036,16 +1036,16 @@ function pintarVentas(){
   const ticket = vivas.length ? tPer/vivas.length : 0;
   const porPago = {}; vivas.forEach(v=>{ porPago[v.metodo_pago]=(porPago[v.metodo_pago]||0)+ +v.total; });
   const nomPer = {hoy:'hoy', semana:'esta semana', mes:'este mes', mespasado:'el mes pasado', todo:'histórico', rango:'el periodo'}[window._vtPer||'mes'];
-  const ICO0 = {efectivo:'💵', tarjeta:'💳', transferencia:'🏦', ak_pago:'📱', credito:'📄'};
+  const ICO0 = {efectivo:'💵', tarjeta:'💳', transferencia:'🏦', ak_pago:'📱', credito:'📄', apartado:'📦'};
   const perAct = window._vtPer || 'mes';
-  const NPAGO = {efectivo:'💵 efectivo', tarjeta:'💳 tarjeta', transferencia:'🏦 transferencia', ak_pago:'📱 AK Pago', credito:'📄 crédito'};
+  const NPAGO = {efectivo:'💵 efectivo', tarjeta:'💳 tarjeta', transferencia:'🏦 transferencia', ak_pago:'📱 AK Pago', credito:'📄 crédito', apartado:'📦 apartado (pagado antes)'};
   const filtros = [pago?('solo '+NPAGO[pago]):'', vend?('solo '+vend):'', q?('búsqueda "'+q+'"'):''].filter(Boolean).join(' · ');
   $('vt-kpis').innerHTML = `
     <div class="kpi" style="border-top-width:5px${filtros?';background:#fffbeb':''}"><div class="l">Vendido ${nomPer}${filtros?' — '+esc(filtros):''}</div><div class="v">${fmt(tPer)}</div><div class="s">${vivas.length} venta(s) · ticket promedio ${fmt(ticket)}${filtros?' · <b>total del filtro</b>':''}</div></div>
     ${esFinanzas()?`<div class="kpi"><div class="l">Utilidad ${nomPer}</div><div class="v" style="color:${uPer>=0?'var(--verde)':'#b91c1c'}">${fmt(Math.round(uPer*100)/100)}</div><div class="s">${tPer>0?('margen '+Math.round(uPer/(tPer/1.16)*100)+'% · sin IVA'):'sin IVA'}</div></div>`:''}
     ${perAct!=='hoy'?`<div class="kpi"><div class="l">Vendido hoy</div><div class="v">${fmt(tHoy)}</div><div class="s">${nHoy} venta(s)${perAct==='mespasado'?' · fuera del periodo':''}</div></div>`:''}
     <div class="kpi"><div class="l">Cómo pagaron</div><div class="v" style="font-size:15px;line-height:1.5">${Object.keys(porPago).length?Object.entries(porPago).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${ICO0[k]||''} ${fmt(v)}`).join('<br>'):'—'}</div><div class="s">en el periodo</div></div>`;
-  const ICO = {efectivo:'💵', tarjeta:'💳', transferencia:'🏦', ak_pago:'📱', credito:'📄'};
+  const ICO = {efectivo:'💵', tarjeta:'💳', transferencia:'🏦', ak_pago:'📱', credito:'📄', apartado:'📦'};
   const dias = {};
   rows.forEach(v=>{ const f=new Date(v.fecha); const k=f.getFullYear()+'-'+f.getMonth()+'-'+f.getDate(); (dias[k]=dias[k]||[]).push(v); });
   const nomDia = (fecha)=>{ const d=new Date(fecha); d.setHours(0,0,0,0);
@@ -1058,7 +1058,7 @@ function pintarVentas(){
     return `<div style="display:flex;align-items:center;gap:12px;padding:10px 4px;border-bottom:1px solid var(--linea);flex-wrap:wrap;${v.cancelada?'opacity:.45':''}">
       <div style="min-width:60px"><b>#${v.folio}</b><div class="small muted">${hora}</div></div>
       <div style="flex:1;min-width:130px">${esc(v.clientes?.nombre||'Mostrador')}<div class="small muted">${esc(v.perfiles?.nombre||'')}</div></div>
-      <div style="min-width:110px"><span class="badge b-gris">${ICO[v.metodo_pago]||'💵'} ${esc(v.metodo_pago)}</span>
+      <div style="min-width:110px"><span class="badge b-gris" title="${v.metodo_pago==='apartado'?'Pagado por apartado: el dinero entró a caja el día del anticipo / del saldo, no como efectivo de esta venta':''}">${ICO[v.metodo_pago]||'💵'} ${esc(v.metodo_pago)}</span>
         ${v.cancelada?' <span class="badge b-rojo">cancelada</span>':''}${/CONSUMO PROPIO/i.test(v.notas||'')?' <span class="badge b-ambar" title="Es consumo de la propia tienda: NO cuenta en los totales de venta">🏷️ consumo propio</span>':''}
         ${!v.cancelada && v.cancel_solicitada?` <span class="badge b-ambar" title="${esc(v.cancel_motivo||'sin motivo')}">⚠️ canc. solicitada</span>`:''}</div>
       <div style="text-align:right;min-width:110px"><b style="font-size:16px">${fmt(v.total)}</b>
@@ -1071,7 +1071,7 @@ function pintarVentas(){
             : `<button class="btn sec sm" title="Cancelar venta" onclick="cancelarVenta(${v.id})">✖</button>`)
           : (v.cancel_solicitada
             ? '<span class="small muted">esperando admin ⏳</span>'
-            : (puedeVender() ? `<button class="btn sec sm" title="Cancelar venta" onclick="cancelarVenta(${v.id})">✖</button>` : ''))) : ''}
+            : (puedeVender() && !/^Apartado #/.test(v.notas||'') ? `<button class="btn sec sm" title="Cancelar venta" onclick="cancelarVenta(${v.id})">✖</button>` : (puedeVender()?'<span class="small muted" title="Viene de un apartado: el cliente ya pagó antes. Solo admin puede cancelarla.">📦</span>':'')))) : ''}
       </div></div>`;
   };
   $('vt-lista').innerHTML = Object.keys(dias).map(k=>{
@@ -1162,7 +1162,14 @@ async function verVenta(id){
   if(error){ toast(errMsg(error),true); return; }
   const utilTot = data.reduce((s,i)=>s+ (+i.precio_unit/1.16 - +(i.costo_unit||0)) * +i.cantidad, 0);
   const netoVta = data.reduce((s,i)=>s+ +i.importe, 0)/1.16;
-  abrirModal(`<h3>Detalle de venta</h3>
+  // v157: si la venta viene de un apartado, mostrar cómo y cuándo se pagó
+  let apHtml = '';
+  try{
+    const ap = await sb.from('apartados').select('id,folio,cliente_nombre,fecha,apartado_pagos(fecha,monto,metodo,tipo)').eq('venta_id', id).maybeSingle();
+    if(ap.data){ const pg = (ap.data.apartado_pagos||[]).sort((x,y)=>String(x.fecha).localeCompare(String(y.fecha)));
+      apHtml = `<p class="small" style="margin:0 0 8px;padding:8px;background:#f8fafc;border-radius:8px">📦 <b>Apartado #${ap.data.folio}</b> · ${esc(ap.data.cliente_nombre||'')} — pagos: ${pg.length?pg.map(p=>`${p.tipo} <b>${fmt(p.monto)}</b> (${esc(p.metodo)}, ${fecha(p.fecha)})`).join(' · '):'sin detalle de pagos'}. <span class="muted">El dinero entró a caja en esas fechas, no como efectivo de esta venta.</span></p>`; }
+  }catch(e){}
+  abrirModal(`<h3>Detalle de venta</h3>${apHtml}
     <div class="tbl-scroll"><table><thead><tr><th>Producto</th><th class="num">Cant</th><th class="num">Precio</th><th class="num">Importe</th>${esFinanzas()?'<th class="num">Costo</th><th class="num">Utilidad</th>':''}</tr></thead>
     <tbody>${data.map(i=>`<tr style="cursor:pointer" title="Ver ficha del producto: historial, stock y foto" onclick="cerrarModal();fichaProducto(${i.producto_id})"><td style="color:var(--naranja,#E8790F)">${esc(i.productos?.codigo)} · ${esc(i.productos?.descripcion)}</td>
       <td class="num">${+i.cantidad}</td><td class="num">${fmt(i.precio_unit)}</td><td class="num">${fmt(i.importe)}</td>
@@ -3842,11 +3849,15 @@ async function guardarApartado(){
   const its = apItems.map(i=>({apartado_id:data.id, producto_id:i.producto_id, descripcion:i.descripcion,
     cantidad:i.cantidad, precio_unit:i.precio_unit, importe:Math.round(i.cantidad*i.precio_unit*100)/100}));
   await sb.from('apartado_items').insert(its);
-  // El anticipo en efectivo entra a la caja del día
+  // v157: cada pago del apartado queda registrado el día que entra (apartado_pagos).
+  // Si es efectivo, entra al cajón con origen 'apartado' (cuenta en el corte de HOY; no se resta a la caja chica).
+  let cajaId = null;
   if(row.metodo_anticipo==='efectivo'){
-    await sb.from('caja_movs').insert({tipo:'entrada', monto:ant, concepto:'Anticipo apartado #'+data.folio+' · '+cli,
-      nombre:perfil.nombre||perfil.correo, usuario_id:perfil.id});
+    const mv = await sb.from('caja_movs').insert({tipo:'entrada', monto:ant, concepto:'Anticipo apartado #'+data.folio+' · '+cli, origen:'apartado',
+      nombre:perfil.nombre||perfil.correo, usuario_id:perfil.id}).select('id').single();
+    if(!mv.error) cajaId = mv.data.id;
   }
+  await sb.from('apartado_pagos').insert({apartado_id:data.id, monto:ant, metodo:row.metodo_anticipo, tipo:'anticipo', caja_mov_id:cajaId, nombre:perfil.nombre||perfil.correo, usuario_id:perfil.id});
   logEv('apartado', '#'+data.folio+' '+cli+' ant '+ant);
   cerrarModal(); toast('Apartado #'+data.folio+' guardado ✓'); vApartados();
   setTimeout(()=>imprimirApartado(data.id), 400);
@@ -3867,34 +3878,41 @@ async function entregarApartado(id){
     <select id="ape-met"><option value="efectivo">💵 Efectivo</option><option value="tarjeta">💳 Tarjeta</option>
       <option value="transferencia">🏦 Transferencia</option><option value="ak_pago">📱 AK Pago</option></select>`
     :`<p style="color:#15803d;margin:6px 0"><b>✅ Ya está liquidado</b> — pagó con <b>${esc(a.metodo_anticipo)}</b> al apartar. Nada que cobrar, solo entregar.</p>`}
+    <p class="small muted" style="margin:8px 0 0">📦 La venta se registra como <b>pagada por apartado</b>: el anticipo ya entró a caja el día que se apartó y hoy solo entra el saldo (si hay). Por eso <b>no</b> aparece como efectivo de hoy y <b>no hay que cancelarla</b>.</p>
     <div class="acciones"><button class="btn" onclick="confirmarEntrega(${id})">${+a.saldo>0?'Cobrar y entregar':'✅ Entregar'}</button>
       <button class="btn sec" onclick="cerrarModal()">Cancelar</button></div>`, true);
 }
 async function confirmarEntrega(id){
   const a = (await sb.from('apartados').select('*, apartado_items(*)').eq('id',id).single()).data;
   if(!a) return;
-  const met = $('ape-met') ? $('ape-met').value : (a.metodo_anticipo||'efectivo'); // liquidado: usa el método con que dejó el anticipo
+  const met = $('ape-met') ? $('ape-met').value : (a.metodo_anticipo||'efectivo'); // cómo paga el saldo (si hay)
+  const saldo = Math.round((+a.saldo||0)*100)/100;
   const items = (a.apartado_items||[]).filter(i=>i.producto_id).map(i=>({producto_id:i.producto_id, cantidad:+i.cantidad, precio_unit:+i.precio_unit}));
   if(!items.length){ toast('El apartado no tiene productos del inventario', true); return; }
+  // v157: la venta se registra con método 'apartado' — el dinero ya entró (anticipo) o entra hoy como pago del saldo; no como venta en efectivo
   const {data:vid, error} = await sb.rpc('registrar_venta', {
-    p_cliente_id: a.cliente_id, p_metodo: met, p_descuento: +(a.descuento||0), p_items: items,
-    p_notas: 'Apartado #'+a.folio+' · anticipo '+fmt(a.anticipo)+' el '+fecha(a.fecha)
+    p_cliente_id: a.cliente_id, p_metodo: 'apartado', p_descuento: +(a.descuento||0), p_items: items,
+    p_notas: 'Apartado #'+a.folio+' · anticipo '+fmt(a.anticipo)+' ('+(a.metodo_anticipo||'efectivo')+') el '+fecha(a.fecha)+(saldo>0?' · saldo '+fmt(saldo)+' ('+met+') el '+fecha(hoyMX()):'')
   });
   if(error){ toast(errMsg(error), true); return; }
   // v153: registrar_venta regresa {venta_id, folio, total}; antes se guardaba el objeto completo en venta_id,
   // el update fallaba en silencio y el apartado se quedaba "activo" (pasó con el #2: se entregó 2 veces).
   const ventaId = (vid && typeof vid==='object') ? (vid.venta_id ?? vid.id ?? null) : (vid ?? null);
-  const {error:eUp} = await sb.from('apartados').update({estado:'entregado', entregado_en:new Date().toISOString(), venta_id:ventaId}).eq('id',id);
+  const {error:eUp} = await sb.from('apartados').update({estado:'entregado', entregado_en:new Date().toISOString(), venta_id:ventaId, saldo:0}).eq('id',id);
   if(eUp){ toast('La venta #'+(vid?.folio||ventaId)+' sí se registró, pero no pude cerrar el apartado: '+errMsg(eUp)+' — avísale a Andrés', true); }
-  // El anticipo ya había entrado a caja: se descuenta del efectivo del día para no contarlo dos veces
-  if(a.metodo_anticipo==='efectivo' && met==='efectivo' && +a.anticipo>0){
-    await sb.from('caja_movs').insert({tipo:'retiro', monto:+a.anticipo,
-      concepto:'Anticipo del apartado #'+a.folio+' ya cobrado el '+fecha(a.fecha)+' (ajuste, no salió dinero)',
-      nombre:perfil.nombre||perfil.correo, usuario_id:perfil.id});
+  // v157: el saldo que paga hoy se registra como pago del apartado; si es efectivo entra al cajón (origen 'apartado') y cuenta en el corte de hoy
+  if(saldo>0){
+    let cajaId = null;
+    if(met==='efectivo'){
+      const mv = await sb.from('caja_movs').insert({tipo:'entrada', monto:saldo, concepto:'Saldo apartado #'+a.folio+' · '+(a.cliente_nombre||''), origen:'apartado',
+        nombre:perfil.nombre||perfil.correo, usuario_id:perfil.id}).select('id').single();
+      if(!mv.error) cajaId = mv.data.id;
+    }
+    await sb.from('apartado_pagos').insert({apartado_id:id, monto:saldo, metodo:met, tipo:'saldo', caja_mov_id:cajaId, nombre:perfil.nombre||perfil.correo, usuario_id:perfil.id});
   }
-  logEv('apartado_entregado', '#'+a.folio+' venta #'+(vid?.folio||ventaId));
+  logEv('apartado_entregado', '#'+a.folio+' venta #'+(vid?.folio||ventaId)+(saldo>0?' · saldo '+fmt(saldo)+' '+met:''));
 
-  cerrarModal(); toast('Entregado ✓ Venta registrada'); vApartados();
+  cerrarModal(); toast('Entregado ✓ Venta #'+(vid?.folio||ventaId)+' registrada como pagada por apartado'+(saldo>0&&met==='efectivo'?' · '+fmt(saldo)+' entran al cajón hoy':'')); vApartados();
 }
 async function cancelarApartado(id){
   const m = prompt('¿Por qué se cancela el apartado?\n(El anticipo se devuelve o se acuerda con el cliente — regístralo como retiro en caja si devuelves efectivo)');
@@ -4164,7 +4182,7 @@ async function pintarEfectivo(cajon){
   const bancoDesde = S(dp.data,()=>true);
   const base = conteo ? +conteo.monto : 0;
   // v140: lo pagado con dinero de la caja fuerte (origen='chica') sale de la caja chica, no del cajón
-  const chica = Math.round((base + deCortes + S(mv.data,m=>m.tipo==='retiro'&&m.origen!=='chica'&&m.origen!=='akpago') - S(mv.data,m=>m.tipo!=='entrada'&&m.origen==='chica') - S(mv.data,m=>m.tipo==='entrada'&&m.origen!=='akpago') - bancoDesde)*100)/100;
+  const chica = Math.round((base + deCortes + S(mv.data,m=>m.tipo==='retiro'&&m.origen!=='chica'&&m.origen!=='akpago') - S(mv.data,m=>m.tipo!=='entrada'&&m.origen==='chica') - S(mv.data,m=>m.tipo==='entrada'&&m.origen!=='akpago'&&m.origen!=='apartado') - bancoDesde)*100)/100;
   window._chicaActual = chica;
   const mes = hoyMX().slice(0,7);
   const bancoMes = ((dp.data||[]).filter(d=>String(d.fecha).startsWith(mes))).reduce((s,x)=>s+ +x.monto,0);
@@ -4220,7 +4238,7 @@ async function vCaja(){
   const fondoUsar = corte ? +corte.fondo : (prev ? +prev.deja_fondo : fondoFijo);
   const esperado = Math.round((fondoUsar + efectivo + entradas - retiros)*100)/100;
   window._cajaCalc = {fecha:f, fondo:fondoUsar, efectivo, otros:totOtros, retiros:retiros-entradas, esperado, primero: !prev && !corte};
-  const ico = {efectivo:'💵',tarjeta:'💳',transferencia:'🏦',ak_pago:'📱',credito:'📄'};
+  const ico = {efectivo:'💵',tarjeta:'💳',transferencia:'🏦',ak_pago:'📱',credito:'📄',apartado:'📦'};
   $('vtools').innerHTML = `<input type="date" value="${f}" onchange="window._cajaFecha=this.value; vCaja()" style="padding:8px;border:1px solid var(--linea);border-radius:8px">
     ${puedeVender()?`<button class="btn sec" onclick="movCaja()">💸 Retiro / gasto</button> <button class="btn sec" onclick="compraLocal()">🧾 Compra a proveedor local</button>`:''}
     ${esAdmin()?`<button class="btn sec" onclick="configFondo(${fondoFijo})">⚙️ Fondo fijo</button>`:''}`;
@@ -4249,7 +4267,7 @@ async function vCaja(){
       <thead><tr><th>Hora</th><th>Tipo</th><th>Concepto</th><th>Quién</th><th class="num">Monto</th></tr></thead>
       <tbody>${movs.map(m=>`<tr><td class="small">${(m.creado||'').slice(11,16)}</td>
         <td><span class="badge ${m.tipo==='entrada'?'b-verde':'b-ambar'}">${m.tipo}</span></td>
-        <td>${esc(m.concepto)||'—'}${m.origen==='chica'?' <span class="badge b-azul">🏠 caja fuerte</span>':''}${m.origen==='akpago'?' <span class="badge b-verde">📱 AK Pago</span>':''}</td><td class="small">${esc(m.nombre)||''}</td>
+        <td>${esc(m.concepto)||'—'}${m.origen==='chica'?' <span class="badge b-azul">🏠 caja fuerte</span>':''}${m.origen==='akpago'?' <span class="badge b-verde">📱 AK Pago</span>':''}${m.origen==='apartado'?' <span class="badge b-azul">📦 apartado</span>':''}</td><td class="small">${esc(m.nombre)||''}</td>
         <td class="num"><b>${m.tipo==='entrada'?'+':'−'}${fmt(m.monto)}</b>${m.comprobante_path?` <button class="btn sm sec" title="Ver ticket" onclick="verPdfFactura('${esc(m.comprobante_path)}')">📎</button>`:''}${esAdmin()?` <button class="btn sm sec" title="Editar" onclick="editarMovCaja(${m.id})">✏️</button> <button class="btn sm sec" title="Borrar" onclick="borrarMovCaja(${m.id})">🗑️</button>`:''}</td></tr>`).join('')}</tbody></table></div></div>`:''}
     <div class="card"><h3>🏦 Depósitos a la cuenta</h3>
       <p class="small muted" style="margin:0 0 8px">Dinero de la caja grande depositado al banco. <b>No</b> toca el corte del cajón — es puro registro con su ticket.</p>
@@ -4433,7 +4451,7 @@ async function editarMovCaja(id){
       <div class="field"><label>Monto</label><input id="em-monto" type="number" step="0.01" value="${+m.monto}"></div>
       <div class="field"><label>Fecha</label><input id="em-fecha" type="date" value="${m.fecha}"></div>
     </div>
-    <div class="field"><label>¿De dónde salió?</label><select id="em-origen"><option value="cajon" ${m.origen!=='chica'&&m.origen!=='akpago'?'selected':''}>🗄️ Del cajón (cuenta en el corte)</option><option value="chica" ${m.origen==='chica'?'selected':''}>🏠 De la caja fuerte (no toca el corte)</option><option value="akpago" ${m.origen==='akpago'?'selected':''}>📱 AK Pago (cobro de cliente o fondeo del monedero)</option></select></div>
+    <div class="field"><label>¿De dónde salió?</label><select id="em-origen"><option value="cajon" ${m.origen!=='chica'&&m.origen!=='akpago'&&m.origen!=='apartado'?'selected':''}>🗄️ Del cajón (cuenta en el corte)</option><option value="chica" ${m.origen==='chica'?'selected':''}>🏠 De la caja fuerte (no toca el corte)</option><option value="akpago" ${m.origen==='akpago'?'selected':''}>📱 AK Pago (cobro de cliente o fondeo del monedero)</option><option value="apartado" ${m.origen==='apartado'?'selected':''}>📦 Pago de apartado (anticipo o saldo)</option></select></div>
     <div class="field"><label>Concepto</label><input id="em-con" value="${esc(m.concepto||'')}"></div>
     <div class="acciones"><button class="btn sec" onclick="cerrarModal();vCaja()">Cancelar</button><button class="btn" onclick="guardarEditMovCaja(${m.id})">Guardar</button></div>`);
 }
@@ -4683,7 +4701,7 @@ async function calcularDinero(hoy){
     const desdeC = x => !conteoC || String(x.fecha) > String(conteoC.fecha);
     const SC = (a,f)=>((a||[]).filter(x=>desdeC(x)&&f(x)).reduce((s,x)=>s+ +x.monto,0));
     D.cajaChica = Math.round(((conteoC?+conteoC.monto:0) + ((ctc.data)||[]).filter(desdeC).reduce((s,x)=>s+ +(x.deposito||0),0)
-      + SC(mvc.data,m=>m.tipo==='retiro'&&m.origen!=='chica'&&m.origen!=='akpago') - SC(mvc.data,m=>m.tipo!=='entrada'&&m.origen==='chica') - SC(mvc.data,m=>m.tipo==='entrada'&&m.origen!=='akpago') - SC(dpc.data,()=>true))*100)/100; // v140
+      + SC(mvc.data,m=>m.tipo==='retiro'&&m.origen!=='chica'&&m.origen!=='akpago') - SC(mvc.data,m=>m.tipo!=='entrada'&&m.origen==='chica') - SC(mvc.data,m=>m.tipo==='entrada'&&m.origen!=='akpago'&&m.origen!=='apartado') - SC(dpc.data,()=>true))*100)/100; // v140
     if(!D.cap){ D.banco = 0; D.otros = 0; D.desde = null; return D; }
     D.banco = +D.cap.banco; D.otros = +D.cap.otros;
     D.desde = D.cap.fecha;
@@ -4691,8 +4709,15 @@ async function calcularDinero(hoy){
     const desdeISO = D.cap.creado || new Date(D.cap.fecha+'T00:00:00').toISOString();
     // ENTRÓ: ventas no-crédito DESPUÉS de la captura
     const vts = await traerTodo(()=>sb.from('ventas').select('total,metodo_pago,cancelada').gt('fecha', desdeISO).eq('cancelada',false).order('id'));
-    const vivasV = (vts||[]).filter(v=>v.metodo_pago!=='credito');
+    const vivasV = (vts||[]).filter(v=>v.metodo_pago!=='credito' && v.metodo_pago!=='apartado'); // v157: apartado → el dinero entra por sus pagos
     D.entroVentas = vivasV.reduce((s,v)=>s+ +v.total,0);
+    // v157: pagos de apartados después de la captura — efectivo al cajón (caja_movs origen 'apartado'), lo demás al banco
+    D.apBanco = 0; D.apEf = 0;
+    try{
+      const apg = await sb.from('apartado_pagos').select('monto,metodo,creado').gt('creado', desdeISO);
+      if(!apg.error){ D.apBanco = (apg.data||[]).filter(p=>p.metodo!=='efectivo').reduce((s,p)=>s+ +p.monto,0); }
+      D.apEf = (mvc.data||[]).filter(m=>m.tipo==='entrada' && m.origen==='apartado' && (m.fecha||'') > String(D.cap.fecha)).reduce((s,x)=>s+ +x.monto,0);
+    }catch(e){}
     const ventasEf = vivasV.filter(v=>v.metodo_pago==='efectivo').reduce((s,v)=>s+ +v.total,0);
     // SALIÓ: pagos a proveedores + gastos registrados DESPUÉS de la captura
     const pg = await sb.from('pagos_cxp').select('monto').gt('creado', desdeISO);
@@ -4717,8 +4742,8 @@ async function calcularDinero(hoy){
       D.akEf = ake.reduce((s,x)=>s+ +x.monto,0);
     }catch(e){}
     // v124: banco y efectivo por separado; el total es la suma
-    D.bancoHoy = Math.round((D.banco + D.otros + D.entroAportes + cobrosNoEf + (D.entroVentas - ventasEf) - D.salioPagos - (D.salioGastos - gastosEf) - (D.fondeosDesde||0))*100)/100;
-    D.efectivoHoy = Math.round((D.efectivoCaja + (D.cajaChica||0) + ventasEf - gastosEf + (D.akEf||0))*100)/100;
+    D.bancoHoy = Math.round((D.banco + D.otros + D.entroAportes + cobrosNoEf + (D.entroVentas - ventasEf) - D.salioPagos - (D.salioGastos - gastosEf) - (D.fondeosDesde||0) + (D.apBanco||0))*100)/100;
+    D.efectivoHoy = Math.round((D.efectivoCaja + (D.cajaChica||0) + ventasEf - gastosEf + (D.akEf||0) + (D.apEf||0))*100)/100;
     D.calculado = Math.round((D.bancoHoy + D.efectivoHoy + (D.monedero||0))*100)/100;
     D.capturado = Math.round((D.banco + D.otros + D.efectivoCaja)*100)/100;
     D.dias = Math.round((hoy - new Date(D.cap.fecha+'T00:00:00'))/864e5);
