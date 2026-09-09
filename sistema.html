@@ -4249,17 +4249,24 @@ async function akBorrar(id){
    VISTA: CORTE DE CAJA (v72)
 ============================================================ */
 function hoyMX(){ return new Date(Date.now() - 6*3600e3).toISOString().slice(0,10); }
+// v161: ¿este corte/movimiento/depósito va DESPUÉS del conteo físico? Por fecha; si es el mismo día, por hora de registro.
+function desdeConteo(x, conteo){
+  if(!conteo) return true;
+  const fx = String(x.fecha).slice(0,10), fc = String(conteo.fecha).slice(0,10);
+  if(fx !== fc) return fx > fc;
+  return !!(x.creado && conteo.creado && String(x.creado) > String(conteo.creado));
+}
 // ===== v117-v118: panel ¿dónde está el efectivo? con ancla de conteo físico =====
 async function pintarEfectivo(cajon){
   const el = $('efectivo-panel'); if(!el) return;
   const [ct, mv, dp, cc] = await Promise.all([
-    sb.from('cortes_caja').select('fecha,deposito'),
-    sb.from('caja_movs').select('tipo,monto,fecha,origen'),
-    sb.from('depositos_cuenta').select('monto,fecha'),
+    sb.from('cortes_caja').select('fecha,deposito,creado'),
+    sb.from('caja_movs').select('tipo,monto,fecha,origen,creado'),
+    sb.from('depositos_cuenta').select('monto,fecha,creado'),
     sb.from('caja_chica_conteos').select('*').order('id',{ascending:false}).limit(1)
   ]);
   const conteo = (cc.data||[])[0] || null;
-  const desde = x => !conteo || String(x.fecha) > String(conteo.fecha);
+  const desde = x => desdeConteo(x, conteo); // v161: mismo día cuenta si se registró después del conteo
   const S = (a,f)=>((a||[]).filter(x=>desde(x)&&f(x)).reduce((s,x)=>s+ +x.monto,0));
   const deCortes = (ct.data||[]).filter(desde).reduce((s,x)=>s+ +(x.deposito||0),0);
   const alBanco = ((dp.data||[])).reduce((s,x)=>s+ +x.monto,0);
@@ -4787,13 +4794,13 @@ async function calcularDinero(hoy){
     D.efectivoCaja = D.corte ? +(D.corte.deja_fondo || 0) : D.fondo;
     // v124: caja chica (anclada al último conteo, igual que en Corte de caja)
     const [ctc, mvc, dpc, ccc] = await Promise.all([
-      sb.from('cortes_caja').select('fecha,deposito'),
-      sb.from('caja_movs').select('tipo,monto,fecha,origen'),
-      sb.from('depositos_cuenta').select('monto,fecha'),
+      sb.from('cortes_caja').select('fecha,deposito,creado'),
+      sb.from('caja_movs').select('tipo,monto,fecha,origen,creado'),
+      sb.from('depositos_cuenta').select('monto,fecha,creado'),
       sb.from('caja_chica_conteos').select('*').order('id',{ascending:false}).limit(1)
     ]);
     const conteoC = ((ccc.data)||[])[0] || null;
-    const desdeC = x => !conteoC || String(x.fecha) > String(conteoC.fecha);
+    const desdeC = x => desdeConteo(x, conteoC); // v161
     const SC = (a,f)=>((a||[]).filter(x=>desdeC(x)&&f(x)).reduce((s,x)=>s+ +x.monto,0));
     D.cajaChica = Math.round(((conteoC?+conteoC.monto:0) + ((ctc.data)||[]).filter(desdeC).reduce((s,x)=>s+ +(x.deposito||0),0)
       + SC(mvc.data,m=>m.tipo==='retiro'&&m.origen!=='chica'&&m.origen!=='akpago') - SC(mvc.data,m=>m.tipo!=='entrada'&&m.origen==='chica') - SC(mvc.data,m=>m.tipo==='entrada'&&m.origen!=='akpago'&&m.origen!=='apartado') - SC(dpc.data,()=>true))*100)/100; // v140
