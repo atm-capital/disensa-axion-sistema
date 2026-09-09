@@ -743,7 +743,7 @@ async function vResumen(){
     const netoTot = itemsMes.data.reduce((s,i)=>s+ (+i.precio_unit/1.16) * +i.cantidad, 0);
     const descTot = ventasMes.data.reduce((s,v)=>s+ +(v.descuento||0), 0)/1.16;
     utilMes = Math.round((netoTot - costoTot - descTot)*100)/100;
-    margenPct = costoTot > 0 ? (utilMes/costoTot*100) : 0;
+    margenPct = (netoTot - descTot) > 0 ? (utilMes/(netoTot - descTot)*100) : 0; // v163: sobre venta sin IVA
   }
   // v116: ahorro por pronto pago del mes (mismo cálculo que Finanzas)
   let ahorroMesR = 0;
@@ -813,7 +813,7 @@ async function vResumen(){
     <div class="kpis">
       ${(esMesActual||esTodo)?`<div class="kpi" style="cursor:pointer" title="Ir a Ventas" onclick="irA('ventas')"><div class="l">Ventas de hoy</div><div class="v">${fmt(totHoy)}</div><div class="s">${vHoy.length} venta(s)</div></div>`:''}
       <div class="kpi" style="cursor:pointer" title="Ir a Ventas" onclick="irA('ventas')"><div class="l">Ventas de ${esc(nombreMes)}</div><div class="v">${fmt(totMes)}</div><div class="s">${ventasMes.data.length} venta(s) · ${fmt(promDia)} por día</div></div>
-      ${utilMes!==null ? `<div class="kpi" style="cursor:pointer" title="Ir a Ventas" onclick="irA('ventas')"><div class="l">Utilidad de ${esc(nombreMes)}</div><div class="v" style="color:${utilMes>=0?'#15803d':'#b91c1c'}">${fmt(utilMes)}</div><div class="s">margen <b>${margenPct.toFixed(0)}%</b> sobre costo · sin IVA</div></div>` : ''}
+      ${utilMes!==null ? `<div class="kpi" style="cursor:pointer" title="Ir a Ventas" onclick="irA('ventas')"><div class="l">Utilidad de ${esc(nombreMes)}</div><div class="v" style="color:${utilMes>=0?'#15803d':'#b91c1c'}">${fmt(utilMes)}</div><div class="s">margen <b>${margenPct.toFixed(0)}%</b> sobre venta · sin IVA</div></div>` : ''}
       ${utilMes!==null && ahorroMesR>0 ? `<div class="kpi" style="border-top-color:var(--verde)"><div class="l">💰 Utilidad REAL de ${esc(nombreMes)}</div><div class="v" style="color:#15803d">${fmt(Math.round((utilMes+ahorroMesR)*100)/100)}</div><div class="s">ventas ${fmt(utilMes)} + pronto pago ${fmt(ahorroMesR)}</div></div>` : ''}
       <div class="kpi" style="cursor:pointer" title="Ir a Inventario" onclick="irA('inventario')"><div class="l">Valor de inventario (sin IVA)</div><div class="v">${fmt(valInv)}</div><div class="s">con IVA: <b>${fmt(Math.round(valInv*116)/100)}</b> · a costo · ${prods.data.length} productos</div></div>
       <div class="kpi" style="cursor:pointer" title="Ir a Inventario" onclick="irA('inventario')"><div class="l">Stock bajo</div><div class="v">${bajos}</div><div class="s">productos en o bajo mínimo</div></div>
@@ -1518,8 +1518,8 @@ async function revisarPreciosSugeridos(){
     if(!l || !l.precio_sugerido) continue;
     const sug = redondearPrecio(l.precio_sugerido);
     if(Math.abs(sug - +p.precio) < 0.5) continue;
-    const mAct = +p.costo>0 ? (+p.precio/1.16 - +p.costo)/+p.costo*100 : 0;
-    const mSug = +p.costo>0 ? (sug/1.16 - +p.costo)/+p.costo*100 : 0;
+    const mAct = +p.precio>0 ? (+p.precio/1.16 - +p.costo)/(+p.precio/1.16)*100 : 0; // v163: margen sobre venta
+    const mSug = sug>0 ? (sug/1.16 - +p.costo)/(sug/1.16)*100 : 0;
     filas.push({id:p.id, cod:p.codigo, desc:p.descripcion, costo:+p.costo, precio:+p.precio, stock:+p.stock,
       sug, dif: Math.round((sug - +p.precio)*100)/100, mAct, mSug});
   }
@@ -2558,13 +2558,13 @@ function cotPrecio(i,v){ cotCarrito[i].precio = Math.max(0,+v||0); pintarCot(); 
 function cotPreset(i,v){
   const c = cotCarrito[i];
   if(v==='pub') c.precio = c.sugerido;
-  else if(c.costo>0){ const m = {m25:1.25, m20:1.20, m15:1.15, m10:1.10}[v]; if(m) c.precio = Math.round(c.costo*m*1.16*100)/100; }
+  else if(c.costo>0){ const m = {m25:0.25, m20:0.20, m15:0.15, m10:0.10}[v]; if(m) c.precio = Math.round(c.costo/(1-m)*1.16*100)/100; } // v163: m = margen sobre venta
   pintarCot();
 }
 function pintarCot(){
   $('ct-carrito').innerHTML = cotCarrito.map((c,i)=>{
     const costoD = c.costo>0 ? c.costo*(1-DESC_DISENSA) : 0;
-    const pct = costoD>0 ? ((c.precio/1.16 - costoD)/costoD*100) : null;
+    const pct = (costoD>0 && c.precio>0) ? ((c.precio/1.16 - costoD)/(c.precio/1.16)*100) : null; // v163: sobre venta
     const col = pct===null?'var(--gris)':(pct>=25?'var(--verde)':(pct>=12?'var(--ambar)':'var(--rojo)'));
     const pz = pzasDe(c.desc);
     return `
@@ -2572,7 +2572,7 @@ function pintarCot(){
     <td><input value="${c.cantidad}" onchange="cotCant(${i},this.value)"></td>
     <td><input value="${c.precio}" onchange="cotPrecio(${i},this.value)">
       <select onchange="cotPreset(${i},this.value);this.value=''" style="width:64px;padding:4px;border:1px solid var(--linea);border-radius:6px;font-size:11px">
-        <option value="">precio…</option><option value="pub">Público</option><option value="m25">May +25%</option><option value="m20">May +20%</option><option value="m15">May +15%</option><option value="m10">May +10%</option></select>
+        <option value="">precio…</option><option value="pub">Público</option><option value="m25">Margen 25%</option><option value="m20">Margen 20%</option><option value="m15">Margen 15%</option><option value="m10">Margen 10%</option></select>
       ${pz?`<br><span class="small" style="color:var(--azul)">≈ ${fmt(c.precio/pz)} por pieza (${pz} pzas)</span>`:''}</td>
     <td class="num">${fmt(c.cantidad*c.precio)}${esAdmin()?`<br>
       <span class="small" style="color:${col}">${costoD>0?`costo ${fmt(c.costo)} · marg ${pct.toFixed(0)}%`:'sin costo'}</span>`:''}</td>
@@ -2580,8 +2580,8 @@ function pintarCot(){
   }).join('') || '<tr><td class="muted" style="padding:12px 6px">Busca productos y da clic para agregarlos.</td></tr>';
   const tot = cotCarrito.reduce((s,c)=>s+c.cantidad*c.precio,0);
   const cost = cotCarrito.reduce((s,c)=>s+c.cantidad*(c.costo||0)*(1-DESC_DISENSA),0);
-  const mg = cost>0 ? ((tot/1.16-cost)/cost*100) : null;
-  $('ct-total').innerHTML = fmt(tot) + (esAdmin() && mg!==null?` <span class="small" style="color:var(--gris)">· margen total ${mg.toFixed(1)}% sobre costo real, sin descuentos (no se imprime)</span>`:'');
+  const mg = (cost>0 && tot>0) ? ((tot/1.16-cost)/(tot/1.16)*100) : null; // v163: sobre venta
+  $('ct-total').innerHTML = fmt(tot) + (esAdmin() && mg!==null?` <span class="small" style="color:var(--gris)">· margen total ${mg.toFixed(1)}% sobre venta (costo real Disensa, sin descuentos · no se imprime)</span>`:'');
 }
 async function guardarCot(){
   if(!cotCarrito.length){ toast('Agrega al menos una partida', true); return; }
@@ -2895,14 +2895,14 @@ function pintarInv(){
   if(orden==='vendidos') rows.sort((a,b)=>(vc[b.id]||0)-(vc[a.id]||0));
   else if(orden==='stockmax') rows.sort((a,b)=>+b.stock - +a.stock);
   else if(orden==='stockmin') rows.sort((a,b)=>+a.stock - +b.stock);
-  else if(orden==='margen') rows.sort((a,b)=>{ const m=p=>+p.costo>0?((+p.precio/1.16-+p.costo)/+p.costo):0; return m(b)-m(a); });
+  else if(orden==='margen') rows.sort((a,b)=>{ const m=p=>+p.precio>0?((+p.precio/1.16-+p.costo)/(+p.precio/1.16)):0; return m(b)-m(a); }); // v163: sobre venta
   else if(orden==='valor') rows.sort((a,b)=>(+b.costo * +b.stock)-(+a.costo * +a.stock));
   const verVend = orden==='vendidos' || est==='vendidos';
   $('inv-body').innerHTML = rows.slice(0,400).map(p=>{
     const bajo = +p.stock <= +p.stock_min;
     const neto = +p.precio/1.16, marg = neto - +p.costo;
-    const pct = +p.costo>0 ? marg/ +p.costo*100 : 0;
-    const bm = pct>=30?'b-verde':(pct>=15?'b-ambar':'b-rojo');
+    const pct = neto>0 ? marg/neto*100 : 0; // v163: margen sobre venta sin IVA
+    const bm = pct>=25?'b-verde':(pct>=15?'b-ambar':'b-rojo');
     return `<tr style="cursor:pointer;${p.activo?(+p.stock<=0?'opacity:.7':''):'opacity:.45'}" onclick="fichaProducto(${p.id})" title="Ver historial del producto">
       <td><b>${esc(p.codigo)}</b></td><td>${esc(p.descripcion)}${+p.stock<=0?' <span class="badge b-rojo">agotado</span>':''}${sinMov(p)?' <span class="badge b-gris" title="Nunca ha tenido venta ni recepción">sin movimiento</span>':''}${verVend&&(vc[p.id]||0)>0?` <span class="badge b-verde" title="Piezas vendidas">🛒 ${vc[p.id]}</span>`:''}</td>
       <td><span class="badge b-gris">${esc(p.categoria)}</span>${!/^Indar/.test(provDe(p))?` <span class="badge b-azul" title="Último proveedor que lo surtió">${esc(provDe(p))}</span>`:''}</td>
@@ -3020,8 +3020,8 @@ function calcMargen(){
   const c = +($('pr-costo')?.value||0), v = +($('pr-precio')?.value||0);
   const el = $('pr-margen'); if(!el) return;
   if(c<=0 || v<=0){ el.textContent = ''; return; }
-  const neto = v/1.16, marg = neto - c, pct = marg/c*100;
-  el.innerHTML = `Margen: <b style="color:${pct>=30?'var(--verde)':(pct>=15?'var(--ambar)':'var(--rojo)')}">${pct.toFixed(1)}%</b>
+  const neto = v/1.16, marg = neto - c, pct = marg/neto*100; // v163: sobre venta
+  el.innerHTML = `Margen sobre venta: <b style="color:${pct>=25?'var(--verde)':(pct>=15?'var(--ambar)':'var(--rojo)')}">${pct.toFixed(1)}%</b>
     — ganas ${fmt(marg)} por pieza (precio sin IVA ${fmt(neto)} − costo ${fmt(c)})`;
 }
 async function verResurtido(){
@@ -3113,11 +3113,11 @@ function calcGranelCfg(){
   const sug = precio>0 ? Math.ceil(precio/cont - 0.001) : 0;
   const costoU = costo>0 ? Math.round(costo/cont*100)/100 : 0;
   const disp = st*cont + ab;
-  const marg = (pu>0 && costoU>0) ? ((pu/1.16 - costoU)/costoU*100) : null;
+  const marg = (pu>0 && costoU>0) ? ((pu/1.16 - costoU)/(pu/1.16)*100) : null; // v163: sobre venta
   el.innerHTML = `
     1 ${esc(uc)} = <b>${cont} ${esc(uv)}</b> · disponible: <b>${st} ${esc(uc)}${st===1?'':'s'}${ab>0?` + ${ab} ${esc(uv)}`:''} = ${Math.round(disp*100)/100} ${esc(uv)}</b><br>
     Costo por ${esc(uv)}: <b>${fmt(costoU)}</b> · Precio sugerido: <b>${fmt(sug)}</b>
-    ${pu>0?` · Tu precio: <b>${fmt(pu)}</b>${marg!==null?` <span class="badge ${marg>=30?'b-verde':(marg>=15?'b-ambar':'b-rojo')}">${marg.toFixed(0)}% margen</span>`:''}`:''}
+    ${pu>0?` · Tu precio: <b>${fmt(pu)}</b>${marg!==null?` <span class="badge ${marg>=25?'b-verde':(marg>=15?'b-ambar':'b-rojo')}">${marg.toFixed(0)}% margen s/venta</span>`:''}`:''}
     ${(!pu||pu<sug)&&sug>0?`<br><button class="btn sm sec" style="margin-top:6px" onclick="$('pr-preciou').value=${sug};calcGranelCfg()">Usar el sugerido de ${fmt(sug)}</button>`:''}
     ${pu>0&&sug>0&&pu<sug?'<br><span style="color:#b91c1c">⚠️ Tu precio está por debajo del sugerido.</span>':''}`;
 }
