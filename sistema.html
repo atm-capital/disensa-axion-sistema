@@ -1053,7 +1053,7 @@ function pintarVentas(){
     <div class="kpi" style="border-top-width:5px${filtros?';background:#fffbeb':''}"><div class="l">Vendido ${nomPer}${filtros?' — '+esc(filtros):''}</div><div class="v">${fmt(tPer)}</div><div class="s">${vivas.length} venta(s) · ticket promedio ${fmt(ticket)}${filtros?' · <b>total del filtro</b>':''}</div></div>
     ${esFinanzas()?`<div class="kpi"><div class="l">Utilidad ${nomPer}</div><div class="v" style="color:${uPer>=0?'var(--verde)':'#b91c1c'}">${fmt(Math.round(uPer*100)/100)}</div><div class="s">${tPer>0?('margen '+Math.round(uPer/(tPer/1.16)*100)+'% · sin IVA'):'sin IVA'}</div></div>`:''}
     ${perAct!=='hoy'?`<div class="kpi"><div class="l">Vendido hoy</div><div class="v">${fmt(tHoy)}</div><div class="s">${nHoy} venta(s)${perAct==='mespasado'?' · fuera del periodo':''}</div></div>`:''}
-    <div class="kpi"><div class="l">Cómo pagaron</div><div class="v" style="font-size:15px;line-height:1.5">${Object.keys(porPago).length?Object.entries(porPago).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${ICO0[k]||''} ${fmt(v)}`).join('<br>'):'—'}</div><div class="s">en el periodo</div></div>`;
+    ${esFinanzas()?`<div class="kpi"><div class="l">Cómo pagaron</div><div class="v" style="font-size:15px;line-height:1.5">${Object.keys(porPago).length?Object.entries(porPago).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${ICO0[k]||''} ${fmt(v)}`).join('<br>'):'—'}</div><div class="s">en el periodo</div></div>`:''}`; // v162: el vendedor no ve el total en efectivo (conteo a ciegas)
   const ICO = {efectivo:'💵', tarjeta:'💳', transferencia:'🏦', ak_pago:'📱', credito:'📄', apartado:'📦', mixto:'🔀'};
   const dias = {};
   rows.forEach(v=>{ const f=new Date(v.fecha); const k=f.getFullYear()+'-'+f.getMonth()+'-'+f.getDate(); (dias[k]=dias[k]||[]).push(v); });
@@ -4257,7 +4257,7 @@ function desdeConteo(x, conteo){
   return !!(x.creado && conteo.creado && String(x.creado) > String(conteo.creado));
 }
 // ===== v117-v118: panel ¿dónde está el efectivo? con ancla de conteo físico =====
-async function pintarEfectivo(cajon){
+async function pintarEfectivo(cajon, ciego){ // v162: ciego → no muestra cuánto debería haber en el cajón
   const el = $('efectivo-panel'); if(!el) return;
   const [ct, mv, dp, cc] = await Promise.all([
     sb.from('cortes_caja').select('fecha,deposito,creado'),
@@ -4278,7 +4278,7 @@ async function pintarEfectivo(cajon){
   const mes = hoyMX().slice(0,7);
   const bancoMes = ((dp.data||[]).filter(d=>String(d.fecha).startsWith(mes))).reduce((s,x)=>s+ +x.monto,0);
   el.innerHTML = `<div class="kpis" style="margin-bottom:6px">
-    <div class="kpi"><div class="l">🗄️ En el cajón (hoy)</div><div class="v">${fmt(cajon)}</div><div class="s">para vender y dar cambio</div></div>
+    <div class="kpi"><div class="l">🗄️ En el cajón (hoy)</div><div class="v">${ciego?'<span title="Se muestra después de hacer el corte">🔒</span>':fmt(cajon)}</div><div class="s">${ciego?'se revela al hacer el corte':'para vender y dar cambio'}</div></div>
     <div class="kpi" style="outline:2px solid var(--naranja,#e8862d)"><div class="l">🏠 Caja chica guardada</div><div class="v" style="color:${chica<0?'#b91c1c':'inherit'}">${fmt(chica)}</div><div class="s">${conteo?'desde el conteo del '+fecha(conteo.fecha):'de los cortes, aún sin depositar'}</div></div>
     <div class="kpi"><div class="l">🏦 Ya en el banco</div><div class="v">${fmt(alBanco)}</div><div class="s">${fmt(bancoMes)} este mes · con ticket</div></div>
   </div>
@@ -4328,21 +4328,23 @@ async function vCaja(){
   const entradas = movs.filter(m=>m.tipo==='entrada').reduce((s,m)=>s+ +m.monto,0);
   const fondoUsar = corte ? +corte.fondo : (prev ? +prev.deja_fondo : fondoFijo);
   const esperado = Math.round((fondoUsar + efectivo + entradas - retiros)*100)/100;
-  window._cajaCalc = {fecha:f, fondo:fondoUsar, efectivo, otros:totOtros, retiros:retiros-entradas, esperado, primero: !prev && !corte};
+  const ciego = !esFinanzas() && !corte; // v162: vendedor sin corte del día → no ve cuánto efectivo "debería" haber
+  window._cajaCalc = {fecha:f, fondo:fondoUsar, efectivo, otros:totOtros, retiros:retiros-entradas, esperado, primero: !prev && !corte, ciego};
+  const LOCK = '<span title="Se muestra después de hacer el corte">🔒</span>';
   const ico = {efectivo:'💵',tarjeta:'💳',transferencia:'🏦',ak_pago:'📱',credito:'📄',apartado:'📦',mixto:'🔀','mixto (no efectivo)':'🔀'};
   $('vtools').innerHTML = `<input type="date" value="${f}" onchange="window._cajaFecha=this.value; vCaja()" style="padding:8px;border:1px solid var(--linea);border-radius:8px">
     ${puedeVender()?`<button class="btn sec" onclick="movCaja()">💸 Retiro / gasto</button> <button class="btn sec" onclick="compraLocal()">🧾 Compra a proveedor local</button>`:''}
     ${esAdmin()?`<button class="btn sec" onclick="configFondo(${fondoFijo})">⚙️ Fondo fijo</button>`:''}`;
   $('v-caja').innerHTML = `
     <div class="kpis">
-      <div class="kpi"><div class="l">Ventas en efectivo</div><div class="v">${fmt(efectivo)}</div><div class="s">${vts.filter(v=>v.metodo_pago==='efectivo').length} venta(s)${vts.some(v=>v.metodo_pago==='mixto')?' + parte en efectivo de '+vts.filter(v=>v.metodo_pago==='mixto').length+' mixta(s)':''}</div></div>
-      <div class="kpi"><div class="l">Otros pagos</div><div class="v">${fmt(totOtros)}</div><div class="s">${Object.keys(otros).map(k=>(ico[k]||'')+' '+fmt(otros[k])).join(' · ')||'—'}</div></div>
+      <div class="kpi"><div class="l">Ventas en efectivo</div><div class="v">${ciego?LOCK:fmt(efectivo)}</div><div class="s">${ciego?'se revela al hacer el corte':vts.filter(v=>v.metodo_pago==='efectivo').length+' venta(s)'+(vts.some(v=>v.metodo_pago==='mixto')?' + parte en efectivo de '+vts.filter(v=>v.metodo_pago==='mixto').length+' mixta(s)':'')}</div></div>
+      <div class="kpi"><div class="l">Otros pagos</div><div class="v">${ciego?LOCK:fmt(totOtros)}</div><div class="s">${ciego?'se revela al hacer el corte':(Object.keys(otros).map(k=>(ico[k]||'')+' '+fmt(otros[k])).join(' · ')||'—')}</div></div>
       <div class="kpi"><div class="l">Retiros y gastos del cajón</div><div class="v">${fmt(retiros)}</div><div class="s">${movs.length} movimiento(s)${deChica?' · '+fmt(deChica)+' salieron de la caja fuerte (no cuentan aquí)':''}</div></div>
-      <div class="kpi" style="outline:2px solid var(--naranja,#e8862d)"><div class="l">Efectivo que debe haber</div><div class="v">${fmt(esperado)}</div><div class="s">fondo ${fmt(fondoUsar)} + ventas − retiros</div></div>
+      <div class="kpi" style="outline:2px solid var(--naranja,#e8862d)"><div class="l">Efectivo que debe haber</div><div class="v">${ciego?LOCK:fmt(esperado)}</div><div class="s">${ciego?'cuenta el cajón y haz el corte: ahí se compara':'fondo '+fmt(fondoUsar)+' + ventas − retiros'}</div></div>
     </div>
     <div class="card"><h3>💵 ¿Dónde está el efectivo?</h3>
       <div id="efectivo-panel"><span class="small muted">Calculando…</span></div>
-      <span style="display:none">${setTimeout(()=>{ if(typeof pintarEfectivo==='function') pintarEfectivo(window._cajaCalc.esperado); },150)&&''}</span>
+      <span style="display:none">${setTimeout(()=>{ if(typeof pintarEfectivo==='function') pintarEfectivo(window._cajaCalc.esperado, window._cajaCalc.ciego); },150)&&''}</span>
     </div>
     <div class="card">
       <h3>${corte?'✅ Corte del '+fecha(f):'Corte de caja · '+fecha(f)}</h3>
