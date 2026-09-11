@@ -3102,7 +3102,7 @@ function togGranel(){
   const box = $('pr-granel-box'); if(box) box.style.display = on ? 'block' : 'none';
   if(on) calcGranelCfg();
 }
-const MARGEN_GRANEL = 0.55; // v164: regla de Andrés (9-sep-2026): lo suelto se vende al 55% de margen sobre venta; la pieza cerrada se queda con su margen normal (~25%)
+const MARGEN_GRANEL = 0.45; // v166 (11-sep-2026): Andrés bajó la regla de granel de 55% a 45% s/venta — los clientes sentían caro el cable por metro; la pieza cerrada conserva su margen normal (~25%)
 function calcGranelCfg(){
   const el = $('pr-granel-calc'); if(!el) return;
   const uc = ($('pr-ucompra')?.value||'pieza').trim(), uv = ($('pr-uventa')?.value||'unidad').trim();
