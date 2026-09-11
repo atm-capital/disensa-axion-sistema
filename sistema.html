@@ -4847,8 +4847,20 @@ async function calcularDinero(hoy){
       D.akEf = ake.reduce((s,x)=>s+ +x.monto,0);
     }catch(e){}
     // v124: banco y efectivo por separado; el total es la suma
-    D.bancoHoy = Math.round((D.banco + D.otros + D.entroAportes + cobrosNoEf + (D.entroVentas - ventasEf) - D.salioPagos - (D.salioGastos - gastosEf) - (D.fondeosDesde||0) + (D.apBanco||0))*100)/100;
-    D.efectivoHoy = Math.round((D.efectivoCaja + (D.cajaChica||0) + ventasEf - gastosEf + (D.akEf||0) + (D.apEf||0))*100)/100;
+    // v167: depósitos de efectivo a la cuenta después de la captura → entran al banco
+    D.depositosDesde = (dpc.data||[]).filter(d=> d.creado ? String(d.creado) > String(desdeISO) : String(d.fecha) > String(D.cap.fecha)).reduce((s,d)=>s+ +d.monto,0);
+    D.bancoHoy = Math.round((D.banco + D.otros + D.entroAportes + cobrosNoEf + (D.entroVentas - ventasEf) + (D.depositosDesde||0) - D.salioPagos - (D.salioGastos - gastosEf) - (D.fondeosDesde||0) + (D.apBanco||0))*100)/100;
+    // v167: efectivo en cajas = cajón de HOY + caja chica anclada al conteo (ya NO se vuelven a sumar las ventas desde la captura: estaban doble)
+    const hoyS = hoyMX();
+    const corteHoy = (D.corte && String(D.corte.fecha)===hoyS) ? D.corte : null;
+    let ventasEfHoy = 0;
+    try{ const vh = await sb.from('ventas').select('total,metodo_pago,efectivo').gte('fecha', hoyS+'T00:00:00-06:00').eq('cancelada',false);
+      ventasEfHoy = (vh.data||[]).reduce((s,v)=>s + (v.metodo_pago==='efectivo' ? +v.total : (v.metodo_pago==='mixto' ? +(v.efectivo||0) : 0)),0); }catch(e){}
+    const movsHoy = (mvc.data||[]).filter(m=>String(m.fecha)===hoyS);
+    const entHoy = movsHoy.filter(m=>m.tipo==='entrada').reduce((s,m)=>s+ +m.monto,0);
+    const retHoy = movsHoy.filter(m=>m.tipo!=='entrada' && m.origen!=='chica').reduce((s,m)=>s+ +m.monto,0);
+    D.cajonHoy = corteHoy ? +(corteHoy.deja_fondo||0) : Math.round((D.efectivoCaja + ventasEfHoy + entHoy - retHoy)*100)/100;
+    D.efectivoHoy = Math.round((D.cajonHoy + (D.cajaChica||0))*100)/100;
     D.calculado = Math.round((D.bancoHoy + D.efectivoHoy + (D.monedero||0))*100)/100;
     D.capturado = Math.round((D.banco + D.otros + D.efectivoCaja)*100)/100;
     D.dias = Math.round((hoy - new Date(D.cap.fecha+'T00:00:00'))/864e5);
@@ -4877,7 +4889,7 @@ function panelDinero(D){
       <div class="kpi"><div class="l">🏦 En el banco</div><div class="v">${fmt(D.bancoHoy)}</div>
         <div class="s">capturado el ${fecha(D.desde)} + movimientos</div></div>
       <div class="kpi"><div class="l">💵 Efectivo en cajas</div><div class="v">${fmt(D.efectivoHoy)}</div>
-        <div class="s">cajón ${fmt(D.efectivoCaja)} · caja chica ${fmt(D.cajaChica||0)}</div></div>
+        <div class="s">cajón hoy ${fmt(D.cajonHoy!==undefined?D.cajonHoy:D.efectivoCaja)} · caja chica ${fmt(D.cajaChica||0)}</div></div>
       <div class="kpi"><div class="l">Desde la captura</div>
         <div class="v" style="font-size:19px"><span style="color:#15803d">+${fmt(D.entroVentas + (D.entroAportes||0))}</span> · <span style="color:#b91c1c">−${fmt(D.salioPagos + D.salioGastos)}</span></div>
         <div class="s">entró: ventas${D.entroAportes?' y aportaciones':''} · salió: pagos y gastos</div></div>
@@ -4891,28 +4903,27 @@ function panelDinero(D){
 async function capturarSaldo(){
   const D = await calcularDinero(new Date());
   abrirModal(`<h3>💵 Capturar saldo real</h3>
-    <p class="small muted" style="margin:0 0 10px">Abre tu banca en línea y pon el saldo tal cual está hoy. El efectivo de la tienda se toma del corte de caja.</p>
-    ${D.cap?`<div class="card" style="padding:10px;background:#f8fafc;margin-bottom:10px"><div class="small">Según el sistema, <b>hoy deberías tener ${fmt(D.calculado)}</b> en total (banco + caja).</div></div>`:''}
+    <p class="small muted" style="margin:0 0 10px">Abre tu banca en línea y pon el saldo tal cual está hoy de <b>todas</b> las cuentas de Axion (Azteca en "banco", BBVA en "otra cuenta", o la suma en banco). El efectivo de la tienda no va aquí: se cuadra aparte con el corte y los conteos de caja chica.</p>
+    ${D.cap?`<div class="card" style="padding:10px;background:#f8fafc;margin-bottom:10px"><div class="small">Según el sistema, en el banco deberías tener <b>${fmt(D.bancoHoy||0)}</b> (captura del ${fecha(D.cap.fecha)} + ventas con tarjeta/transferencia + depósitos + aportaciones − pagos y gastos). En cajas: ${fmt(D.efectivoHoy||0)}.</div></div>`:''}
     <div class="frow">
-      <div class="field"><label>🏦 Saldo en el banco</label><input id="sd-banco" type="number" step="0.01" value="${D.cap?+D.cap.banco:''}" style="font-size:18px" oninput="cmpSaldo(${D.calculado||0}, ${D.efectivoCaja||0})"></div>
-      <div class="field"><label>Otra cuenta / caja fuerte (opcional)</label><input id="sd-otros" type="number" step="0.01" value="${D.cap?+D.cap.otros:0}" oninput="cmpSaldo(${D.calculado||0}, ${D.efectivoCaja||0})"></div>
+      <div class="field"><label>🏦 Saldo en el banco (Azteca)</label><input id="sd-banco" type="number" step="0.01" value="${D.cap?+D.cap.banco:''}" style="font-size:18px" oninput="cmpSaldo(${D.bancoHoy||0})"></div>
+      <div class="field"><label>Otra cuenta (BBVA) — opcional</label><input id="sd-otros" type="number" step="0.01" value="${D.cap?+D.cap.otros:0}" oninput="cmpSaldo(${D.bancoHoy||0})"></div>
     </div>
-    <p class="small muted" style="margin:-4px 0 8px">💵 Efectivo en caja según el último corte: <b>${fmt(D.efectivoCaja||0)}</b> (se suma solo)</p>
     <div id="sd-cmp"></div>
     <div class="field"><label>Nota (opcional)</label><input id="sd-nota" placeholder="Ej. después de pagarle a Indar"></div>
     <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cancelar</button>
       <button class="btn" onclick="guardarSaldo()">Guardar saldo</button></div>`);
   setTimeout(()=>$('sd-banco')?.focus(), 100);
 }
-function cmpSaldo(esperado, efectivo){
-  const el = $('sd-cmp'); if(!el || !esperado) return;
-  const real = (+($('sd-banco').value||0)) + (+($('sd-otros').value||0)) + efectivo;
-  const dif = Math.round((real - esperado)*100)/100;
+function cmpSaldo(esperadoBanco){ // v167: se compara banco contra banco
+  const el = $('sd-cmp'); if(!el || !esperadoBanco) return;
+  const real = (+($('sd-banco').value||0)) + (+($('sd-otros').value||0));
+  const dif = Math.round((real - esperadoBanco)*100)/100;
   if(!$('sd-banco').value){ el.innerHTML=''; return; }
   const ok = Math.abs(dif) < 50;
   el.innerHTML = `<div class="card" style="padding:11px;margin-bottom:10px;background:${ok?'#f0fdf4':'#fef2f2'};border:1px solid ${ok?'var(--verde)':'#b91c1c'}">
-    <b>${ok?'✅ Cuadra':(dif>0?'⚠️ Hay '+fmt(dif)+' de MÁS':'⚠️ Faltan '+fmt(-dif))}</b>
-    <div class="small muted">Sistema calcula ${fmt(esperado)} · tú tienes ${fmt(real)}${ok?'':'. Puede ser una venta no registrada, un gasto sin capturar o un pago que no se anotó.'}</div></div>`;
+    <b>${ok?'✅ El banco cuadra':(dif>0?'⚠️ En el banco hay '+fmt(dif)+' de MÁS':'⚠️ En el banco faltan '+fmt(-dif))}</b>
+    <div class="small muted">Sistema calcula ${fmt(esperadoBanco)} · tú tienes ${fmt(real)}${ok?'':'. Puede ser una venta con tarjeta no registrada, un depósito o pago sin capturar, o una cuenta que no estaba en la captura anterior.'}</div></div>`;
 }
 async function guardarSaldo(){
   const banco = +($('sd-banco').value||0);
