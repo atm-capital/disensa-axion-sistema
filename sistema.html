@@ -6251,31 +6251,90 @@ async function vImportar(){
   if(ex.error){ toast(errMsg(ex.error), true); return; }
   const existentes = new Map((ex.data||[]).map(p=>[p.codigo, p]));
   const yaImportado = (ped.data||[]).length > 0;
-  const nuevos = impData.items.filter(i=>!existentes.has(i.c));
+  // v168: marcar nuevo/existente en cada partida y proponer el precio de los NUEVOS con la regla de márgenes (40/35/30 s/venta)
+  impData.items.forEach(i=>{ const e = existentes.get(i.c); i.nuevo = !e; i.pa = e ? (+e.precio||0) : 0;
+    if(i.nuevo && !(i.pf>0)) i.pf = impPrecioRegla(i); });
   const sub = impData.items.reduce((s,i)=>s + i.q * (i.l||0), 0);
+  const R = impRegla();
+  const inpR = k => `<input type="number" id="imp-m${k}" value="${R[k-1]}" min="0" max="89" style="width:60px;padding:4px 6px;border:1px solid #bfdbfe;border-radius:6px;font-size:14px;text-align:right" onchange="impGuardarRegla()">%`;
   $('v-importar').innerHTML = `
     <div class="card">
       <h3>📥 Pedido Indar #${esc(impData.folio)} · ${impData.items.length} partidas</h3>
       ${yaImportado ? `<div class="error-box">⚠️ Este folio YA está registrado en el sistema. Si lo importas de nuevo se duplicará.</div>` : ''}
       <div class="kpis">
-        <div class="kpi"><div class="l">Partidas</div><div class="v">${impData.items.length}</div><div class="s">${nuevos.length} producto(s) nuevo(s)</div></div>
+        <div class="kpi"><div class="l">Partidas</div><div class="v">${impData.items.length}</div><div class="s" id="imp-kpi-nuevos"></div></div>
         <div class="kpi"><div class="l">Subtotal (precio lista)</div><div class="v">${fmt(sub)}</div><div class="s">+ IVA ${fmt(sub*0.16)} = ${fmt(sub*1.16)}</div></div>
         <div class="kpi"><div class="l">Partes del portal</div><div class="v">${(impData.sos||[]).length}</div><div class="s">serie /${impData.serie||'?'}</div></div>
       </div>
-      <div class="field"><label><input type="checkbox" id="imp-precios" checked> Actualizar el precio de venta de productos existentes al sugerido de Indar</label></div>
+      <div style="background:#f0f6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px 12px;margin-bottom:12px;line-height:2">
+        <b>📈 Regla de margen para productos NUEVOS</b> (% sobre venta, por rango del precio sugerido de Indar): &nbsp;
+        hasta $200 → ${inpR(1)} &nbsp;·&nbsp; $200 a $500 → ${inpR(2)} &nbsp;·&nbsp; más de $500 → ${inpR(3)}
+        <div class="small muted" style="line-height:1.4">El sugerido de Indar deja ~24.6%. Abajo puedes cambiar el precio o el % de cada renglón (los editados a mano ✏️ ya no se mueven al cambiar la regla). Los existentes muestran su precio actual: solo cambian si tú lo escribes.</div>
+      </div>
+      <div class="field"><label><input type="checkbox" id="imp-precios" checked> Actualizar el <b>COSTO</b> de los productos existentes al precio de lista de este pedido (su precio de venta NO se toca, salvo que lo cambies en la tabla)</label></div>
       <div class="field"><label><input type="checkbox" id="imp-cxp" checked> Crear cuenta por pagar (plazo 30 días) — todo pedido se factura; desmárcala solo en casos especiales</label></div>
-      <div style="display:flex;gap:10px;margin:8px 0 16px">
+      <div style="display:flex;gap:10px;margin:8px 0 16px;align-items:center;flex-wrap:wrap">
         <button class="btn" id="imp-btn" onclick="ejecutarImport()" ${yaImportado?'disabled':''}>Importar al sistema</button>
         <button class="btn sec" onclick="localStorage.removeItem('ax_import'); vImportar();">Descartar</button>
+        <span id="imp-aviso-precios"></span>
       </div>
-      <div class="tbl-scroll" style="max-height:400px;overflow-y:auto"><table>
-        <thead><tr><th>Código</th><th>Descripción</th><th class="num">Cant</th><th class="num">Costo lista</th><th class="num">Precio sug.</th><th></th></tr></thead>
-        <tbody>${impData.items.map(i=>`<tr>
-          <td><b>${esc(i.c)}</b>${i.so?`<br><span class="badge b-gris" title="Parte / sales order">${esc(i.so)}</span>`:''}</td><td>${esc((i.d||'').slice(0,55))}</td>
-          <td class="num">${i.q}</td><td class="num">${fmt(i.l)}</td><td class="num">${fmt(i.s)}</td>
-          <td>${existentes.has(i.c) ? '<span class="badge b-gris">existente</span>' : '<span class="badge b-azul">nuevo</span>'}</td>
-        </tr>`).join('')}</tbody></table></div>
+      <div class="tbl-scroll" style="max-height:480px;overflow-y:auto"><table>
+        <thead><tr><th>Código</th><th>Descripción</th><th class="num">Cant</th><th class="num">Costo lista</th><th class="num">Sug. Indar</th><th class="num">Precio venta</th><th class="num">Margen s/venta</th><th></th></tr></thead>
+        <tbody id="imp-tbody"></tbody></table></div>
+      <p class="small muted" style="margin-top:8px">Margen = (precio sin IVA − costo) ÷ precio sin IVA. 🟢 cumple la regla · 🟡 entre 25% y la regla · 🔴 abajo de 25%. Todo precio se redondea hacia arriba al peso. Los nuevos y los existentes que cambien de precio salen en 🏷️ Etiquetas.</p>
     </div>`;
+  impPintar();
+}
+/* ===== v168: regla de márgenes por rango + precio editable al importar (14-sep-2026) ===== */
+function impRegla(){ try{ const r = JSON.parse(localStorage.getItem('ax_regla_margen')||'null'); if(Array.isArray(r) && r.length===3 && r.every(x=>+x>=0 && +x<90)) return r.map(Number); }catch(e){} return [40,35,30]; }
+function impMargenRegla(ref){ const r = impRegla(); return (ref<=200 ? r[0] : (ref<=500 ? r[1] : r[2]))/100; }
+function impRef(i){ return +i.s>0 ? +i.s : (+i.l||0)*1.16/0.754; } // rango según el precio sugerido de Indar (o su equivalente al 24.6%)
+function precioPorMargen(costo, m){ costo=+costo||0; m=+m||0; if(costo<=0 || m>=1) return 0; return Math.ceil(costo/(1-m)*1.16 - 0.001); } // precio con IVA para un % s/venta, redondeado ARRIBA al peso
+function margenSV(precio, costo){ precio=+precio||0; costo=+costo||0; if(precio<=0) return null; return (precio/1.16 - costo)/(precio/1.16); }
+function impPrecioRegla(i){ return precioPorMargen(i.l, impMargenRegla(impRef(i))) || redondearPrecio(i.s||i.l||0); }
+function impGuardarDatos(){ try{ localStorage.setItem('ax_import', btoa(unescape(encodeURIComponent(JSON.stringify(impData)))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')); }catch(e){} }
+function impGuardarRegla(){
+  const r = [1,2,3].map(k=>Math.min(89, Math.max(0, Math.round(+$('imp-m'+k).value||0))));
+  localStorage.setItem('ax_regla_margen', JSON.stringify(r));
+  [1,2,3].forEach((k,x)=>{ $('imp-m'+k).value = r[x]; });
+  impData.items.forEach(i=>{ if(i.nuevo && !i.manual) i.pf = impPrecioRegla(i); });
+  impGuardarDatos(); impPintar();
+}
+function impBadgeM(m, i){
+  if(m===null) return '<span class="badge b-gris">—</span>';
+  const meta = impMargenRegla(impRef(i));
+  const b = m >= meta-0.005 ? 'b-verde' : (m >= 0.25 ? 'b-ambar' : 'b-rojo');
+  return `<span class="badge ${b}">${(m*100).toFixed(1)}%</span>`;
+}
+function impPintar(){
+  if(!impData || !$('imp-tbody')) return;
+  const inp = 'padding:4px 6px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;text-align:right';
+  const vistos = new Set(); let nN=0, sumM=0, nCambios=0;
+  $('imp-tbody').innerHTML = impData.items.map((i,idx)=>{
+    const precio = i.nuevo ? (+i.pf||0) : (+i.pe>0 ? +i.pe : +i.pa);
+    const m = margenSV(precio, i.l);
+    const cambia = !i.nuevo && +i.pe>0 && +i.pe !== +i.pa;
+    if(!vistos.has(i.c)){ vistos.add(i.c); if(i.nuevo && m!==null){ nN++; sumM+=m; } if(cambia) nCambios++; }
+    return `<tr${cambia?' style="background:#fffbeb"':''}>
+      <td><b>${esc(i.c)}</b>${i.so?`<br><span class="badge b-gris" title="Parte / sales order">${esc(i.so)}</span>`:''}</td><td>${esc((i.d||'').slice(0,55))}</td>
+      <td class="num">${i.q}</td><td class="num">${fmt(i.l)}</td><td class="num muted">${fmt(i.s)}</td>
+      <td class="num"><input type="number" step="1" min="0" value="${precio||''}" style="width:80px;${inp}${cambia?';font-weight:bold':''}" onchange="impEditar(${idx},'precio',this.value)" title="${i.nuevo?'Precio de venta con el que se dará de alta':'Precio actual: '+fmt(i.pa)+' — cámbialo solo si quieres moverlo'}"></td>
+      <td class="num"><input type="number" step="1" min="0" max="89" value="${m===null?'':Math.round(m*100)}" style="width:54px;${inp}" onchange="impEditar(${idx},'margen',this.value)">% ${impBadgeM(m,i)}</td>
+      <td style="white-space:nowrap">${i.nuevo ? '<span class="badge b-azul">nuevo</span>' : '<span class="badge b-gris">existente</span>'}${cambia?' <span class="badge b-ambar">cambia precio</span>':''}${i.manual?' <span title="Editado a mano">✏️</span>':''}</td>
+    </tr>`; }).join('');
+  const k = $('imp-kpi-nuevos'); if(k) k.textContent = nN ? `${nN} producto(s) nuevo(s) · margen prom. ${(sumM/nN*100).toFixed(1)}% s/venta` : 'sin productos nuevos';
+  const a = $('imp-aviso-precios'); if(a) a.innerHTML = nCambios ? `<span class="badge b-ambar">⚠️ ${nCambios} producto(s) existente(s) cambiarán de precio</span>` : '';
+}
+function impEditar(idx, campo, val){
+  const i = impData.items[idx]; if(!i) return;
+  let precio;
+  if(campo==='margen'){ const m = Math.min(89, Math.max(0, +val||0))/100; precio = precioPorMargen(i.l, m); }
+  else { precio = redondearPrecio(val); }
+  impData.items.forEach(x=>{ if(x.c!==i.c) return;
+    if(x.nuevo){ x.pf = precio; x.manual = true; }
+    else { x.pe = precio; }
+  });
+  impGuardarDatos(); impPintar();
 }
 let reqParsed = [];
 let plRows = [], plPick = {c:null, d:null}, plSig = '';
@@ -6801,8 +6860,10 @@ async function ejecutarImport(){
     // 1. productos nuevos (por código único)
     const nuevos = codigos.filter(c=>!mapa.has(c)).map(c=>{
       const i = impData.items.find(x=>x.c===c);
+      // v168: precio del nuevo = el capturado/propuesto en la tabla (regla de márgenes 40/35/30 s/venta); si no hay, sugerido de Indar
+      const precio = +i.pf>0 ? redondearPrecio(i.pf) : (precioPorMargen(i.l, impMargenRegla(impRef(i))) || redondearPrecio(i.s||i.l||0));
       return { codigo:c, descripcion:i.d||c, categoria:'General',
-        costo:i.l||0, precio:redondearPrecio(i.s||i.l||0), stock:0, stock_min:3 };
+        costo:i.l||0, precio, stock:0, stock_min:3 };
     });
     if(nuevos.length){
       const {error} = await sb.from('productos').insert(nuevos);
@@ -6810,12 +6871,16 @@ async function ejecutarImport(){
       const {data:re} = await sb.from('productos').select('id,codigo').in('codigo', codigos);
       (re||[]).forEach(p=>mapa.set(p.codigo, p.id));
     }
-    // 2. v100: actualizar SOLO el costo de los existentes. El precio de venta no se toca.
-    if($('imp-precios').checked){
-      for(const c of codigos){
-        const i = impData.items.find(x=>x.c===c);
-        if(mapa.has(c) && i.l) await sb.from('productos').update({costo:i.l}).eq('id', mapa.get(c));
-      }
+    // 2. v100: actualizar SOLO el costo de los existentes. El precio de venta no se toca...
+    //    v168: ...salvo que el admin lo haya escrito a mano en la tabla (i.pe distinto del actual): entonces sí cambia y va a Etiquetas.
+    let nPrecios = 0;
+    for(const c of codigos){
+      const i = impData.items.find(x=>x.c===c);
+      if(!mapa.has(c)) continue;
+      const upd = {};
+      if($('imp-precios').checked && i.l) upd.costo = i.l;
+      if(+i.pe>0 && +i.pe !== +i.pa){ upd.precio = redondearPrecio(i.pe); upd.etiqueta_at = null; nPrecios++; }
+      if(Object.keys(upd).length){ const {error:eu} = await sb.from('productos').update(upd).eq('id', mapa.get(c)); if(eu) throw eu; }
     }
     // 3. pedido + partidas
     const sub = Math.round(impData.items.reduce((s,i)=>s + i.q*(i.l||0),0)*100)/100;
@@ -6843,7 +6908,7 @@ async function ejecutarImport(){
         monto: tot, saldo: tot });
     }
     localStorage.removeItem('ax_import');
-    toast('Pedido #'+impData.folio+' importado: '+items.length+' partidas'+(nuevos.length?', '+nuevos.length+' productos nuevos':''));
+    toast('Pedido #'+impData.folio+' importado: '+items.length+' partidas'+(nuevos.length?', '+nuevos.length+' productos nuevos':'')+(nPrecios?', '+nPrecios+' precio(s) cambiado(s)':''));
     irA('pedidos');
   }catch(e){ toast(errMsg(e), true); $('imp-btn').disabled = false; }
 }
