@@ -1511,6 +1511,8 @@ async function atenderSolicitudRes(id){
    del anaquel: te debe dar más margen ese lote.
 ============================================================ */
 async function revisarPreciosSugeridos(){
+  // v170 (15-sep-2026): editor de precios en bloque — Andrés escribe el precio o el % que quiera por renglón,
+  // o llena en bloque con el sugerido de Indar o con la regla 40/35/30; nada cambia hasta "Aplicar los palomeados".
   toast('Comparando contra la lista de Indar...');
   const prods = await traerTodo(()=>sb.from('productos').select('id,codigo,descripcion,costo,precio,stock').eq('activo',true).order('descripcion'));
   const li = await traerTodo(()=>sb.from('lista_indar').select('codigo,precio_lista,promo_pct,precio_sugerido').order('codigo'));
@@ -1518,72 +1520,130 @@ async function revisarPreciosSugeridos(){
   const filas = [];
   for(const p of prods){
     const l = L.get(p.codigo);
-    if(!l || !l.precio_sugerido) continue;
-    const sug = redondearPrecio(l.precio_sugerido);
-    if(Math.abs(sug - +p.precio) < 0.5) continue;
-    const mAct = +p.precio>0 ? (+p.precio/1.16 - +p.costo)/(+p.precio/1.16)*100 : 0; // v163: margen sobre venta
-    const mSug = sug>0 ? (sug/1.16 - +p.costo)/(sug/1.16)*100 : 0;
-    filas.push({id:p.id, cod:p.codigo, desc:p.descripcion, costo:+p.costo, precio:+p.precio, stock:+p.stock,
-      sug, dif: Math.round((sug - +p.precio)*100)/100, mAct, mSug});
+    const costo = +p.costo||0, precio = +p.precio||0;
+    if(costo<=0 && !(l && +l.precio_sugerido>0)) continue; // sin costo ni referencia no hay qué calcular
+    const sug = (l && +l.precio_sugerido>0) ? redondearPrecio(l.precio_sugerido) : 0;
+    const f = {id:p.id, cod:p.codigo, desc:p.descripcion||'', costo, precio, stock:+p.stock||0, sug, nuevo:precio, sel:false};
+    psCalc(f); filas.push(f);
   }
-  filas.sort((a,b)=>Math.abs(b.dif)-Math.abs(a.dif));
-  window._psFilas = filas;
-  const suben = filas.filter(f=>f.dif>0), bajan = filas.filter(f=>f.dif<0);
-  const grandes = filas.filter(f=>Math.abs(f.dif) >= 2);
-  if(!filas.length){ abrirModal(`<h3>💲 Revisar precios</h3><p class="muted">Todos tus precios coinciden con lo que sugiere Indar. Nada que revisar 🎉</p>
-    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`); return; }
-  abrirModal(`<h3>💲 Precios que Indar sugiere distinto</h3>
-    <p class="small muted" style="margin:0 0 8px">Tus precios <b>ya no cambian solos</b>. Esto es solo una sugerencia: palomea los que quieras aplicar.
-    Ojo — si compraste con promoción, tu costo bajó pero <b>no tienes que bajar el precio de venta</b>: ese lote simplemente te deja más.</p>
-    <div class="kpis" style="margin-bottom:10px">
-      <div class="kpi"><div class="l">Diferentes</div><div class="v">${filas.length}</div><div class="s">de ${prods.length} productos</div></div>
-      <div class="kpi" style="border-top-color:var(--verde)"><div class="l">Indar sugiere más caro</div><div class="v">${suben.length}</div><div class="s">podrías ganar más</div></div>
-      <div class="kpi" style="border-top-color:var(--ambar)"><div class="l">Indar sugiere más barato</div><div class="v">${bajan.length}</div><div class="s">casi todos por $1 de redondeo</div></div>
-      <div class="kpi"><div class="l">Diferencia de $2 o más</div><div class="v">${grandes.length}</div><div class="s">los que de verdad importan</div></div>
+  window._psFilas = filas; window._psModo = 'indar'; window._psQ = ''; window._psStock = false;
+  const R = impRegla();
+  const inpR = k => `<input type="number" id="ps-m${k}" value="${R[k-1]}" min="0" max="89" style="width:54px;padding:3px 5px;border:1px solid #bfdbfe;border-radius:6px;text-align:right;font-size:13px" onchange="psGuardarRegla()">%`;
+  abrirModal(`<h3>💲 Revisar precios</h3>
+    <p class="small muted" style="margin:0 0 8px">Tus precios <b>ya no cambian solos</b>. Escribe el <b>precio nuevo</b> (o el <b>% de margen</b>) que tú quieras en cada renglón, o llena en bloque con Indar o con la regla; los que cambian se palomean solos. Ojo — si compraste con promoción, tu costo bajó pero <b>no tienes que bajar el precio de venta</b>: ese lote simplemente te deja más.</p>
+    <div class="kpis" style="margin-bottom:10px" id="ps-kpis"></div>
+    <div style="background:#f0f6ff;border:1px solid #bfdbfe;border-radius:8px;padding:6px 10px;margin-bottom:8px;line-height:2">
+      <b>📈 Regla</b> (% sobre venta, por rango del sugerido de Indar): hasta $200 → ${inpR(1)} &nbsp;·&nbsp; $200 a $500 → ${inpR(2)} &nbsp;·&nbsp; más de $500 → ${inpR(3)}
+      <span class="small muted">· es la misma regla que usa Importar para los productos nuevos</span>
     </div>
-    <div class="toolbar" style="margin-bottom:8px">
-      <button class="btn sec sm" onclick="psSel('suben')">Palomear los que suben (${suben.length})</button>
-      <button class="btn sec sm" onclick="psSel('grandes')">Solo diferencias de $2+ (${grandes.length})</button>
-      <button class="btn sec sm" onclick="psSel('conStock')">Solo los que tengo en tienda</button>
-      <button class="btn sec sm" onclick="psSel('none')">Quitar todo</button>
-      <span class="small muted" id="ps-cuenta" style="margin-left:auto"></span>
+    <div class="toolbar" style="margin-bottom:6px;gap:8px">
+      <select id="ps-modo" onchange="psFiltro()">
+        <option value="indar">Indar sugiere distinto</option><option value="regla">Abajo de la regla</option><option value="todos">Todos los productos</option></select>
+      <label class="small" style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="ps-stock" onchange="psFiltro()"> solo con stock</label>
+      <input type="search" id="ps-q" placeholder="Buscar código o descripción" oninput="psFiltro()">
+      <span class="small muted" id="ps-cuenta"></span>
     </div>
-    <div class="tbl-scroll" style="max-height:340px"><table>
-      <thead><tr><th style="width:26px"></th><th>Producto</th><th class="num">Costo</th><th class="num">Tu precio</th><th class="num">Indar</th><th class="num">Dif.</th><th class="num">Margen</th><th class="num">Stock</th></tr></thead>
-      <tbody>${filas.map((f,i)=>`<tr>
-        <td><input type="checkbox" class="ps-sel" data-i="${i}" onclick="psCuenta()"></td>
-        <td><b>${esc(f.cod)}</b><div class="small muted">${esc(f.desc.slice(0,42))}</div></td>
-        <td class="num small">${fmt(f.costo)}</td><td class="num"><b>${fmt(f.precio)}</b></td><td class="num">${fmt(f.sug)}</td>
-        <td class="num"><span class="badge ${f.dif>0?'b-verde':'b-ambar'}">${f.dif>0?'+':''}${fmt(f.dif)}</span></td>
-        <td class="num small">${f.mAct.toFixed(0)}% → <b>${f.mSug.toFixed(0)}%</b></td>
-        <td class="num small">${f.stock}</td></tr>`).join('')}</tbody></table></div>
+    <div class="toolbar" style="margin-bottom:8px;gap:6px">
+      <button class="btn sec sm" onclick="psLlenar('indar')">Llenar visibles con Indar</button>
+      <button class="btn sec sm" onclick="psLlenar('regla')">Llenar visibles con la regla</button>
+      <button class="btn sec sm" onclick="psLlenar('nada')">Dejar visibles como están</button>
+      <button class="btn sec sm" onclick="psSel(true)">Palomear visibles</button>
+      <button class="btn sec sm" onclick="psSel(false)">Quitar todo</button>
+    </div>
+    <div class="tbl-scroll" style="max-height:380px"><table>
+      <thead><tr><th style="width:26px"></th><th>Producto</th><th class="num">Costo</th><th class="num">Tu precio</th><th class="num">Indar</th><th class="num">Regla</th><th class="num">Nuevo precio</th><th class="num">Margen</th><th class="num">Stock</th></tr></thead>
+      <tbody id="ps-tbody"></tbody></table></div>
+    <p class="small muted" id="ps-nota" style="margin:6px 0 0"></p>
     <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar sin cambiar nada</button>
       <button class="btn" onclick="aplicarPreciosSug()">Aplicar los palomeados</button></div>`, true);
+  psFiltro();
+}
+function psCalc(f){ // margen actual, precio por regla y margen del nuevo (todo s/venta)
+  f.ref = f.sug>0 ? f.sug : f.precio;
+  f.mReg = impMargenRegla(f.ref);
+  f.regla = f.costo>0 ? precioPorMargen(f.costo, f.mReg) : 0;
+  f.mAct = margenSV(f.precio, f.costo); f.mNuevo = margenSV(f.nuevo, f.costo);
+  f.dif = Math.round((f.nuevo - f.precio)*100)/100;
+}
+function psBajoRegla(f){ return f.regla>0 && f.mAct!==null && f.mAct < f.mReg-0.005; }
+function psDistintoIndar(f){ return f.sug>0 && Math.abs(f.sug-f.precio)>=0.5; }
+function psVisibles(){
+  const all = window._psFilas||[], modo = window._psModo, q = String(window._psQ||'').toLowerCase().trim(), soloStock = !!window._psStock;
+  return all.filter(f => (!soloStock || f.stock>0)
+    && (modo==='todos' || f.sel || f.dif!==0 || (modo==='indar' ? psDistintoIndar(f) : psBajoRegla(f)))
+    && (!q || codMatch(f.cod, q) || f.desc.toLowerCase().includes(q)));
+}
+function psFiltro(){
+  const m = $('ps-modo'), q = $('ps-q'), s = $('ps-stock');
+  window._psModo = m ? m.value : 'indar'; window._psQ = q ? q.value : ''; window._psStock = !!(s && s.checked);
+  psPintar();
+}
+function psPintar(){
+  const all = window._psFilas||[]; const vis = psVisibles(); const MAX = 400;
+  const nIndar = all.filter(psDistintoIndar).length, nSuben = all.filter(f=>f.sug>0 && f.sug-f.precio>=0.5).length;
+  const nRegla = all.filter(psBajoRegla).length, nReglaStock = all.filter(f=>psBajoRegla(f) && f.stock>0).length;
+  const k = $('ps-kpis'); if(k) k.innerHTML = `
+    <div class="kpi"><div class="l">Indar sugiere distinto</div><div class="v">${nIndar}</div><div class="s">${nSuben} más caro · ${nIndar-nSuben} más barato</div></div>
+    <div class="kpi" style="border-top-color:var(--ambar)"><div class="l">Abajo de la regla</div><div class="v">${nRegla}</div><div class="s">${nReglaStock} con stock en tienda</div></div>
+    <div class="kpi"><div class="l">Productos activos</div><div class="v">${all.length}</div><div class="s">con costo o referencia Indar</div></div>`;
+  const inp = 'padding:3px 5px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;text-align:right';
+  const tb = $('ps-tbody'); if(!tb) return;
+  tb.innerHTML = vis.slice(0,MAX).map(f=>{ const i = all.indexOf(f); const cambia = f.dif!==0 && f.nuevo>0;
+    const bm = f.mNuevo===null ? 'b-gris' : (f.mNuevo >= f.mReg-0.005 ? 'b-verde' : (f.mNuevo>=0.25 ? 'b-ambar' : 'b-rojo'));
+    return `<tr${cambia?' style="background:#fffbeb"':''}>
+      <td><input type="checkbox" class="ps-sel" ${f.sel?'checked':''} onclick="psToggle(${i},this.checked)"></td>
+      <td><b>${esc(f.cod)}</b><div class="small muted">${esc(f.desc.slice(0,42))}</div></td>
+      <td class="num small">${fmt(f.costo)}</td><td class="num"><b>${fmt(f.precio)}</b></td>
+      <td class="num small muted" title="Sugerido de Indar (~24.6% s/venta)">${f.sug>0?fmt(f.sug):'—'}</td>
+      <td class="num small muted" title="Precio con la regla (${Math.round(f.mReg*100)}% s/venta)">${f.regla>0?fmt(f.regla):'—'}</td>
+      <td class="num"><input type="number" step="1" min="0" value="${f.nuevo||''}" style="width:80px;${inp}${cambia?';font-weight:bold':''}" onchange="psEdit(${i},'precio',this.value)">${cambia?`<div class="small" style="color:${f.dif>0?'#15803d':'#b45309'}">${f.dif>0?'+':''}${fmt(f.dif)}</div>`:''}</td>
+      <td class="num small" style="white-space:nowrap">${f.mAct===null?'—':Math.round(f.mAct*100)+'%'} → <input type="number" step="1" min="0" max="89" value="${f.mNuevo===null?'':Math.round(f.mNuevo*100)}" style="width:48px;${inp}" onchange="psEdit(${i},'margen',this.value)">% <span class="badge ${bm}">${f.mNuevo===null?'—':(f.mNuevo*100).toFixed(0)+'%'}</span></td>
+      <td class="num small">${f.stock}</td></tr>`; }).join('');
+  const n = $('ps-nota'); if(n) n.textContent = (vis.length>MAX ? `Mostrando ${MAX} de ${vis.length} — busca por código o descripción para ver el resto. ` : (vis.length ? '' : 'Nada que mostrar con este filtro. ')) + 'Margen = (precio sin IVA − costo) ÷ precio sin IVA · 🟢 cumple la regla · 🟡 ≥25% · 🔴 <25%. Todo precio se redondea hacia arriba al peso. Los que apliques salen en 🏷️ Etiquetas.';
   psCuenta();
 }
-function psSel(modo){
-  const f = window._psFilas||[];
-  document.querySelectorAll('.ps-sel').forEach(ch=>{ const x = f[+ch.dataset.i];
-    ch.checked = modo==='suben' ? x.dif>0 : modo==='grandes' ? Math.abs(x.dif)>=2 : modo==='conStock' ? x.stock>0 : false; });
-  psCuenta();
+function psToggle(i, on){ const f = (window._psFilas||[])[i]; if(f) f.sel = !!on; psCuenta(); }
+function psEdit(i, campo, val){
+  const f = (window._psFilas||[])[i]; if(!f) return;
+  let nuevo;
+  if(campo==='margen'){ const m = Math.min(89, Math.max(0, +val||0))/100; nuevo = precioPorMargen(f.costo, m); }
+  else nuevo = redondearPrecio(val);
+  if(!(nuevo>0)) nuevo = f.precio;
+  f.nuevo = nuevo; psCalc(f); f.sel = f.dif!==0;
+  psPintar();
 }
+function psLlenar(modo){
+  psVisibles().forEach(f=>{
+    if(modo==='indar'){ if(f.sug>0) f.nuevo = f.sug; }
+    else if(modo==='regla'){ if(f.regla>0) f.nuevo = f.regla; }
+    else f.nuevo = f.precio;
+    psCalc(f); f.sel = f.dif!==0; });
+  psPintar();
+}
+function psSel(on){ (on ? psVisibles() : (window._psFilas||[])).forEach(f=>{ f.sel = !!on && f.dif!==0; }); psPintar(); }
 function psCuenta(){
-  const n = document.querySelectorAll('.ps-sel:checked').length;
-  const el = $('ps-cuenta'); if(el) el.textContent = n ? n+' palomeado(s)' : 'ninguno palomeado';
+  const all = window._psFilas||[]; const c = all.filter(f=>f.sel && f.dif!==0 && f.nuevo>0);
+  const el = $('ps-cuenta'); if(el) el.textContent = c.length ? `${c.length} cambio(s) palomeado(s) · ${c.filter(f=>f.dif>0).length} suben, ${c.filter(f=>f.dif<0).length} bajan` : 'ningún cambio palomeado';
+}
+function psGuardarRegla(){
+  const r = [1,2,3].map(k=>Math.min(89, Math.max(0, Math.round(+$('ps-m'+k).value||0))));
+  localStorage.setItem('ax_regla_margen', JSON.stringify(r));
+  [1,2,3].forEach((k,x)=>{ $('ps-m'+k).value = r[x]; });
+  (window._psFilas||[]).forEach(psCalc); psPintar();
 }
 async function aplicarPreciosSug(){
-  const f = window._psFilas||[];
-  const sel = [...document.querySelectorAll('.ps-sel:checked')].map(ch=>f[+ch.dataset.i]);
-  if(!sel.length){ toast('No palomeaste ninguno', true); return; }
-  if(!confirm('Vas a cambiar el precio de venta de '+sel.length+' producto(s).\n\nSe van a marcar para reimprimir etiqueta. ¿Continuo?')) return;
-  let ok=0;
+  const sel = (window._psFilas||[]).filter(f=>f.sel && f.dif!==0 && f.nuevo>0);
+  if(!sel.length){ toast('No hay ningún cambio palomeado', true); return; }
+  const sube = sel.filter(f=>f.dif>0).length, baja = sel.length-sube;
+  if(!confirm('Vas a cambiar el precio de venta de '+sel.length+' producto(s): '+sube+' suben y '+baja+' bajan.\n\nSe van a marcar para reimprimir etiqueta. ¿Continuo?')) return;
+  let ok=0, err=0;
   for(const x of sel){
-    const {error} = await sb.from('productos').update({precio:x.sug, etiqueta_at:null}).eq('id', x.id);
-    if(!error) ok++;
+    const {error} = await sb.from('productos').update({precio:x.nuevo, etiqueta_at:null}).eq('id', x.id);
+    if(!error){ ok++; x.precio = x.nuevo; x.sel = false; psCalc(x); } else err++;
   }
   cerrarModal();
   logEv('inventario','precios actualizados a mano: '+ok+' producto(s)');
-  toast('✅ '+ok+' precio(s) actualizados · imprime las etiquetas nuevas en 🏷️ Etiquetas');
+  toast('✅ '+ok+' precio(s) actualizados'+(err?' · '+err+' con error':'')+' · imprime las etiquetas nuevas en 🏷️ Etiquetas', !!err);
   if(typeof vInventario==='function') vInventario();
 }
 // v130: exportar SOLO los productos palomeados de una solicitud
