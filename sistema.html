@@ -898,16 +898,19 @@ function imprimirTarjetas(){
     return `<div class="tj"><div class="hd">AXION TOOLS · Disensa</div><div class="ds">${esc(p.descripcion||'')}</div><div class="pr">${fmt(x.despues)}</div>${suelto}<div class="cd">${esc(p.codigo||'')} · ${fecha(String(x.creado).slice(0,10))}</div></div>`; };
   const w = window.open('', '_blank');
   w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Tarjetas de precio</title><style>
-    body{font-family:Arial,Helvetica,sans-serif;margin:8mm}
-    .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:6mm}
-    .tj{border:1.5px solid #333;border-radius:6px;padding:5mm 6mm;height:52mm;box-sizing:border-box;display:flex;flex-direction:column;justify-content:space-between;page-break-inside:avoid}
-    .hd{font-size:9pt;color:#E1251B;font-weight:bold;letter-spacing:.5px}
-    .ds{font-size:12pt;font-weight:bold;line-height:1.2;max-height:2.5em;overflow:hidden}
-    .pr{font-size:30pt;font-weight:900;text-align:right}
-    .su{font-size:11pt;text-align:right;color:#1d4ed8}
-    .cd{font-size:8pt;color:#666}
-    @media print{ body{margin:6mm} }
-  </style></head><body><div class="grid">${d.map(card).join('')}</div><script>setTimeout(function(){window.print();},300);<\/script></body></html>`);
+    /* v169 (15-sep-2026): 24 tarjetas por hoja carta (3 columnas × 8 filas de 31 mm); la tienda pidió más chicas */
+    @page{size:letter;margin:5mm}
+    body{font-family:Arial,Helvetica,sans-serif;margin:0;color:#111}
+    .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:2mm 2.5mm}
+    .tj{border:1px solid #333;border-radius:4px;padding:2mm 3mm;height:31mm;box-sizing:border-box;display:flex;flex-direction:column;justify-content:space-between;page-break-inside:avoid;break-inside:avoid;overflow:hidden}
+    .hd{font-size:6.5pt;color:#E1251B;font-weight:bold;letter-spacing:.4px}
+    .ds{font-size:8.5pt;font-weight:bold;line-height:1.15;max-height:2.3em;overflow:hidden}
+    .pr{font-size:19pt;font-weight:900;text-align:right;line-height:1.05}
+    .su{font-size:8pt;text-align:right;color:#1d4ed8;line-height:1.1}
+    .cd{font-size:6pt;color:#666}
+    .noprint{margin:0 0 3mm;font-size:12px;color:#555}
+    @media print{ .noprint{display:none} }
+  </style></head><body><p class="noprint"><button onclick="window.print()" style="padding:8px 14px;background:#E8790F;color:#fff;border:none;border-radius:6px;font-size:13px;cursor:pointer">🖨 Imprimir</button> ${d.length} tarjeta(s) · 24 por hoja carta · en el diálogo de impresión quita "Encabezados y pies de página" y pon márgenes "Predeterminados" o "Ninguno"</p><div class="grid">${d.map(card).join('')}</div><script>setTimeout(function(){window.print();},300);<\/script></body></html>`);
   w.document.close();
 }
 async function verTarjetas(pids, aviso){
@@ -3232,14 +3235,14 @@ function pintarEtiquetas(rows){
   const w = window.open('','_blank');
   if(!w){ toast('Permite las ventanas emergentes para imprimir', true); return; }
   w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Precios tienda · Axion Tools</title>
-  <style>body{font-family:'Segoe UI',sans-serif;margin:8mm;color:#26292b}
-  .grid{display:grid;grid-template-columns:repeat(3,1fr)}
-  .tag{border:1px dashed #bbb;padding:7px 10px;height:33mm;box-sizing:border-box;display:flex;flex-direction:column;justify-content:space-between;page-break-inside:avoid;overflow:hidden}
+  <style>@page{size:letter;margin:5mm} body{font-family:'Segoe UI',sans-serif;margin:0;color:#26292b}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:2mm 0}
+  .tag{border:1px dashed #bbb;padding:6px 10px;height:31mm;box-sizing:border-box;display:flex;flex-direction:column;justify-content:space-between;page-break-inside:avoid;break-inside:avoid;overflow:hidden}
   .cod{font-size:9.5px;color:#888}.desc{font-size:12px;font-weight:600;line-height:1.25;max-height:31px;overflow:hidden}
   .pre{font-size:24px;font-weight:800}.pre small{font-size:9px;font-weight:400;color:#888;display:block}
   .marca{font-size:9px;color:#E8790F;font-weight:700;text-align:right}
   @media print{.noprint{display:none}}</style></head><body>
-  <p class="noprint" style="margin:0 0 10px"><button onclick="window.print()" style="padding:10px 18px;background:#E8790F;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer">🖨 Imprimir</button> <span style="font-size:12px;color:#777">${rows.length} etiquetas (recorta por la línea punteada)</span></p>
+  <p class="noprint" style="margin:0 0 10px"><button onclick="window.print()" style="padding:10px 18px;background:#E8790F;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer">🖨 Imprimir</button> <span style="font-size:12px;color:#777">${rows.length} etiquetas · 24 por hoja carta (recorta por la línea punteada)</span></p>
   <div class="grid">${rows.map(p=>`<div class="tag">
     <div><div class="cod">${esc(p.codigo)} · ${esc(p.categoria)}</div><div class="desc">${esc(p.descripcion)}</div></div>
     <div class="pre">${fmt(p.precio)}<small>IVA incluido · por ${esc(p.unidad||'pza')}</small></div>
