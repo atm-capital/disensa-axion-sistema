@@ -181,6 +181,7 @@ tr.oculto,tr.plegado{display:none}
       <div id="v-cotizaciones" class="view"></div>
       <div id="v-catalogo" class="view"></div>
       <div id="v-inventario" class="view"></div>
+      <div id="v-estrella" class="view"></div>
       <div id="v-clientes" class="view"></div>
       <div id="v-pedidos" class="view"></div>
       <div id="v-apartados" class="view"></div>
@@ -336,6 +337,7 @@ const VISTAS = [
   {id:'cotizaciones', icono:'📋', titulo:'Cotizaciones', roles:['admin','vendedor','consulta']},
   {id:'catalogo',   icono:'🗂', titulo:'Catálogo',   roles:['admin','vendedor','consulta']},
   {id:'inventario', icono:'📦', titulo:'Inventario', roles:['admin','vendedor','consulta','contador']},
+  {id:'estrella',   icono:'⭐', titulo:'Productos estrella', roles:['admin','vendedor','consulta','contador']}, // v172
   {id:'clientes',   icono:'👥', titulo:'Clientes',   roles:['admin','vendedor','consulta']},
   {id:'pedidos',    icono:'🚚', titulo:'Pedidos a proveedor', roles:['admin','vendedor','consulta','contador']},
   {id:'apartados',  icono:'🔖', titulo:'Apartados',  roles:['admin','vendedor','consulta','contador']},
@@ -363,7 +365,7 @@ async function irA(id){
   $('sidebar').classList.remove('open');
   try{ localStorage.setItem('ax_vista', id); }catch(e){}
   logEv('vista', id);
-  try { await ({resumen:vResumen, ventas:vVentas, cotizaciones:vCotizaciones, catalogo:vCatalogo, inventario:vInventario, clientes:vClientes,
+  try { await ({resumen:vResumen, ventas:vVentas, cotizaciones:vCotizaciones, catalogo:vCatalogo, inventario:vInventario, estrella:vEstrella, clientes:vClientes,
     pedidos:vPedidos, apartados:vApartados, devoluciones:vDevoluciones, caja:vCaja, finanzas:vFinanzas, usuarios:vUsuarios, importar:vImportar, actividad:vActividad})[id](); }
   catch(e){ toast(errMsg(e), true); }
 }
@@ -1538,7 +1540,7 @@ async function revisarPreciosSugeridos(){
     </div>
     <div class="toolbar" style="margin-bottom:6px;gap:8px">
       <select id="ps-modo" onchange="psFiltro()">
-        <option value="indar2">Indar difiere $2 o más</option><option value="indar">Indar sugiere distinto (todos, incluye $1 de redondeo)</option><option value="regla">Abajo de la regla</option><option value="todos">Todos los productos</option></select>
+        <option value="indar2">Indar difiere $2 o más</option><option value="indarSube">Indar sugiere MÁS CARO que mi precio</option><option value="indar">Indar sugiere distinto (todos, incluye $1 de redondeo)</option><option value="regla">Abajo de la regla</option><option value="todos">Todos los productos</option></select>
       <label class="small" style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="ps-stock" onchange="psFiltro()"> solo con stock</label>
       <input type="search" id="ps-q" placeholder="Buscar código o descripción" oninput="psFiltro()">
       <span class="small muted" id="ps-cuenta"></span>
@@ -1546,6 +1548,7 @@ async function revisarPreciosSugeridos(){
     <div class="toolbar" style="margin-bottom:8px;gap:6px">
       <button class="btn sec sm" onclick="psLlenar('indar')">Llenar visibles con Indar</button>
       <button class="btn sec sm" onclick="psLlenar('regla')">Llenar visibles con la regla</button>
+      <label class="small" style="display:flex;align-items:center;gap:4px;cursor:pointer" title="Por default la regla es un PISO: solo sube los que están abajo. Marca esto si también quieres bajar los que están arriba de la regla."><input type="checkbox" id="ps-bajar"> la regla también baja los que están arriba</label>
       <button class="btn sec sm" onclick="psLlenar('nada')">Dejar visibles como están</button>
       <button class="btn sec sm" onclick="psSel(true)">Palomear visibles</button>
       <button class="btn sec sm" onclick="psSel(false)">Quitar todo</button>
@@ -1568,10 +1571,11 @@ function psCalc(f){ // margen actual, precio por regla y margen del nuevo (todo 
 function psBajoRegla(f){ return f.regla>0 && f.mAct!==null && f.mAct < f.mReg-0.005; }
 function psDistintoIndar(f){ return f.sug>0 && Math.abs(f.sug-f.precio)>=0.5; }
 function psDifIndar2(f){ return f.sug>0 && Math.abs(f.sug-f.precio)>=2; } // v171: los de $1 son puro redondeo, no están mal
+function psIndarSube(f){ return f.sug>0 && f.sug-f.precio>=1; } // v172: Indar sugiere más caro de lo que lo vendemos
 function psVisibles(){
   const all = window._psFilas||[], modo = window._psModo, q = String(window._psQ||'').toLowerCase().trim(), soloStock = !!window._psStock;
   const vis = all.filter(f => (!soloStock || f.stock>0)
-    && (modo==='todos' || f.sel || f.dif!==0 || (modo==='indar2' ? psDifIndar2(f) : modo==='indar' ? psDistintoIndar(f) : psBajoRegla(f)))
+    && (modo==='todos' || f.sel || f.dif!==0 || (modo==='indar2' ? psDifIndar2(f) : modo==='indarSube' ? psIndarSube(f) : modo==='indar' ? psDistintoIndar(f) : psBajoRegla(f)))
     && (!q || codMatch(f.cod, q) || f.desc.toLowerCase().includes(q)));
   // v171: orden útil — en modos Indar la diferencia más grande primero; abajo de la regla, lo que más dinero deja (brecha × stock)
   const key = modo==='regla' ? (f=>(f.regla-f.precio)*Math.max(f.stock,1)) : modo==='todos' ? null : (f=>Math.abs((f.sug||f.precio)-f.precio));
@@ -1620,7 +1624,7 @@ function psEdit(i, campo, val){
 function psLlenar(modo){
   psVisibles().forEach(f=>{
     if(modo==='indar'){ if(f.sug>0) f.nuevo = f.sug; }
-    else if(modo==='regla'){ if(f.regla>0) f.nuevo = f.regla; }
+    else if(modo==='regla'){ const bajar = !!($('ps-bajar') && $('ps-bajar').checked); if(f.regla>0 && (f.regla > f.precio || bajar)) f.nuevo = f.regla; } // v172: la regla es piso, no techo
     else f.nuevo = f.precio;
     psCalc(f); f.sel = f.dif!==0; });
   psPintar();
@@ -6979,6 +6983,124 @@ async function ejecutarImport(){
     toast('Pedido #'+impData.folio+' importado: '+items.length+' partidas'+(nuevos.length?', '+nuevos.length+' productos nuevos':'')+(nPrecios?', '+nPrecios+' precio(s) cambiado(s)':''));
     irA('pedidos');
   }catch(e){ toast(errMsg(e), true); $('imp-btn').disabled = false; }
+}
+
+/* ============================================================
+   VISTA: ⭐ PRODUCTOS ESTRELLA (v172, 15-sep-2026)
+   Los más vendidos por periodo: unidades, tickets, importe, % de la venta,
+   clase ABC (A = los que juntan el 80% de la venta), utilidad y margen (solo finanzas),
+   stock actual y en cuántos días se acaba al ritmo actual.
+   ============================================================ */
+let estData = null;
+async function vEstrella(){
+  const per = window._estPer || '60';
+  $('v-estrella').innerHTML = `<div class="card">
+    <div class="toolbar" style="margin-bottom:10px">
+      <select id="est-per" onchange="window._estPer=this.value; vEstrella();">
+        <option value="30"${per==='30'?' selected':''}>Últimos 30 días</option>
+        <option value="60"${per==='60'?' selected':''}>Últimos 60 días</option>
+        <option value="90"${per==='90'?' selected':''}>Últimos 90 días</option>
+        <option value="mes"${per==='mes'?' selected':''}>Este mes</option>
+        <option value="todo"${per==='todo'?' selected':''}>Desde el inicio</option>
+      </select>
+      <select id="est-orden" onchange="estPintar()">
+        <option value="importe">Ordenar: más dinero vendido</option>
+        <option value="unidades">Ordenar: más piezas</option>
+        <option value="tickets">Ordenar: en más tickets</option>
+        ${esFinanzas()?'<option value="utilidad">Ordenar: más utilidad</option>':''}
+        <option value="dias">Ordenar: se acaban primero</option>
+      </select>
+      <select id="est-cat" onchange="estPintar()"><option value="">Todas las categorías</option></select>
+      <select id="est-top" onchange="estPintar()"><option value="50">Top 50</option><option value="100">Top 100</option><option value="0">Todos</option></select>
+      <input type="search" id="est-q" placeholder="Buscar código o descripción" oninput="estPintar()">
+      <button class="btn sec sm" onclick="estExcel()">📥 Excel</button>
+    </div>
+    <div class="kpis" id="est-kpis"></div>
+    <p class="small muted" id="est-nota" style="margin:0 0 8px">Cargando ventas...</p>
+    <div class="tbl-scroll"><table><thead><tr>
+      <th>#</th><th>Producto</th><th class="num">Piezas</th><th class="num">Tickets</th><th class="num">Vendido</th><th class="num">% venta</th><th>Clase</th>
+      ${esFinanzas()?'<th class="num">Utilidad</th><th class="num">Margen</th>':''}
+      <th class="num">Stock</th><th class="num">Se acaba en</th><th>Última venta</th></tr></thead>
+      <tbody id="est-tbody"></tbody></table></div>
+  </div>`;
+  // periodo
+  const hoy = new Date(); let desde = null, dias = 0;
+  if(per==='mes'){ desde = new Date(hoy.getFullYear(), hoy.getMonth(), 1); dias = Math.max(1, Math.ceil((hoy - desde)/864e5)); }
+  else if(per!=='todo'){ dias = +per; desde = new Date(Date.now() - dias*864e5); }
+  const mk = () => { let q = sb.from('venta_items').select('producto_id,cantidad,precio_unit,costo_unit,importe,venta_id,ventas!inner(fecha,cancelada,notas,total,descuento)').eq('ventas.cancelada', false);
+    if(desde) q = q.gte('ventas.fecha', desde.toISOString()); return q.order('id'); }; // builder nuevo por página (traerTodo pagina)
+  const [items, prods] = await Promise.all([
+    traerTodo(mk),
+    traerTodo(()=>sb.from('productos').select('id,codigo,descripcion,categoria,stock,precio,costo,granel,unidad_venta').order('id')),
+  ]);
+  if(per==='todo'){ const f = (items||[]).reduce((m,x)=>{ const d = new Date(x.ventas.fecha); return (!m || d<m) ? d : m; }, null); dias = f ? Math.max(1, Math.ceil((hoy - f)/864e5)) : 1; }
+  const P = new Map((prods||[]).map(p=>[p.id, p]));
+  const agg = new Map();
+  let totVenta = 0, totUtil = 0;
+  for(const x of (items||[])){
+    if(!x.producto_id) continue; // renglones libres
+    const v = x.ventas||{}; if(/CONSUMO PROPIO/i.test(v.notas||'')) continue;
+    const bruto = (+v.total||0) + (+v.descuento||0); const f = bruto>0 ? (+v.total||0)/bruto : 1; // descuento del ticket prorrateado
+    const cant = +x.cantidad||0, imp = (+x.importe || cant*(+x.precio_unit||0)) * f, costo = (+x.costo_unit||0)*cant;
+    const a = agg.get(x.producto_id) || {id:x.producto_id, unidades:0, importe:0, costo:0, tickets:new Set(), ultima:null};
+    a.unidades += cant; a.importe += imp; a.costo += costo; a.tickets.add(x.venta_id);
+    if(!a.ultima || v.fecha > a.ultima) a.ultima = v.fecha;
+    agg.set(x.producto_id, a);
+  }
+  const filas = [...agg.values()].map(a=>{ const p = P.get(a.id)||{}; const neto = a.importe/1.16; const util = neto - a.costo;
+    const ritmo = a.unidades/dias; const diasStock = ritmo>0 ? (+p.stock||0)/ritmo : null;
+    totVenta += a.importe; totUtil += util;
+    return {id:a.id, cod:p.codigo||'?', desc:p.descripcion||'(producto borrado)', cat:p.categoria||'', unidades:a.unidades, tickets:a.tickets.size, importe:a.importe,
+      utilidad:util, margen: neto>0 ? util/neto : null, stock:+p.stock||0, granel:!!p.granel, u:p.unidad_venta||'pza', dias:diasStock, ultima:a.ultima, precio:+p.precio||0}; });
+  // clase ABC por importe acumulado
+  filas.sort((a,b)=>b.importe-a.importe);
+  let acum = 0; filas.forEach(f=>{ acum += f.importe; f.pct = totVenta>0 ? f.importe/totVenta : 0; f.acum = totVenta>0 ? acum/totVenta : 0; f.clase = f.acum<=0.80 ? 'A' : (f.acum<=0.95 ? 'B' : 'C'); });
+  const nA = filas.filter(f=>f.clase==='A').length;
+  estData = {filas, totVenta, totUtil, dias, nProd: filas.length, nA, nVentas: new Set((items||[]).map(x=>x.venta_id)).size};
+  const cats = [...new Set(filas.map(f=>f.cat).filter(Boolean))].sort();
+  $('est-cat').innerHTML = '<option value="">Todas las categorías</option>' + cats.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('');
+  estPintar();
+}
+function estPintar(){
+  if(!estData) return;
+  const D = estData, orden = $('est-orden').value, cat = $('est-cat').value, top = +$('est-top').value, q = String($('est-q').value||'').toLowerCase().trim();
+  let vis = D.filas.filter(f => (!cat || f.cat===cat) && (!q || codMatch(f.cod, q) || f.desc.toLowerCase().includes(q)));
+  const key = {importe:f=>f.importe, unidades:f=>f.unidades, tickets:f=>f.tickets, utilidad:f=>f.utilidad, dias:f=>-(f.dias===null?1e9:f.dias)}[orden] || (f=>f.importe);
+  vis.sort((a,b)=>key(b)-key(a));
+  const total = vis.length; if(top>0) vis = vis.slice(0, top);
+  const kA = D.filas.filter(f=>f.clase==='A');
+  $('est-kpis').innerHTML = `
+    <div class="kpi"><div class="l">Vendido en el periodo</div><div class="v">${fmt(D.totVenta)}</div><div class="s">${D.nVentas} tickets · ${D.dias} días · ${fmt(D.totVenta/D.dias)}/día</div></div>
+    <div class="kpi" style="border-top-color:#d97706"><div class="l">⭐ Productos clase A</div><div class="v">${D.nA}</div><div class="s">de ${D.nProd} vendidos · juntan el 80% de la venta</div></div>
+    ${esFinanzas()?`<div class="kpi" style="border-top-color:var(--verde)"><div class="l">Utilidad del periodo</div><div class="v">${fmt(D.totUtil)}</div><div class="s">${D.totVenta>0?Math.round(D.totUtil/(D.totVenta/1.16)*100):0}% s/venta sin IVA</div></div>`:''}
+    <div class="kpi" style="border-top-color:var(--rojo)"><div class="l">Estrella por acabarse</div><div class="v">${kA.filter(f=>f.dias!==null && f.dias<14).length}</div><div class="s">clase A con menos de 14 días de stock</div></div>`;
+  $('est-nota').textContent = `${total} producto(s)${top>0 && total>top?` · mostrando los primeros ${top}`:''} · Clase A = los que juntan el 80% de lo vendido, B = el siguiente 15%, C = el 5% restante · "Se acaba en" = stock actual ÷ ritmo de venta del periodo · no cuenta canceladas ni consumo propio.`;
+  const bC = {A:'b-verde', B:'b-ambar', C:'b-gris'};
+  $('est-tbody').innerHTML = vis.map((f,i)=>{
+    const dias = f.dias===null ? '—' : (f.dias>365 ? '+1 año' : Math.round(f.dias)+' d');
+    const bd = f.dias===null ? '' : (f.dias<7 ? 'b-rojo' : (f.dias<14 ? 'b-ambar' : ''));
+    return `<tr>
+      <td class="small muted">${i+1}</td>
+      <td><b>${esc(f.cod)}</b><div class="small muted">${esc(f.desc.slice(0,48))}${f.cat?' · '+esc(f.cat):''}</div></td>
+      <td class="num">${Math.round(f.unidades*100)/100}${f.granel?' <span class="small muted">'+esc(f.u)+'</span>':''}</td>
+      <td class="num">${f.tickets}</td>
+      <td class="num"><b>${fmt(f.importe)}</b></td>
+      <td class="num small">${(f.pct*100).toFixed(1)}%</td>
+      <td><span class="badge ${bC[f.clase]}">${f.clase}</span></td>
+      ${esFinanzas()?`<td class="num">${fmt(f.utilidad)}</td><td class="num"><span class="badge ${f.margen===null?'b-gris':(f.margen>=0.35?'b-verde':(f.margen>=0.25?'b-ambar':'b-rojo'))}">${f.margen===null?'—':Math.round(f.margen*100)+'%'}</span></td>`:''}
+      <td class="num">${f.stock}${f.stock<=0?' <span class="badge b-rojo">agotado</span>':''}</td>
+      <td class="num">${bd?`<span class="badge ${bd}">${dias}</span>`:dias}</td>
+      <td class="small">${f.ultima?fecha(String(f.ultima).slice(0,10)):'—'}</td></tr>`; }).join('') || '<tr><td colspan="12" class="muted">Sin ventas en este periodo.</td></tr>';
+}
+function estExcel(){
+  if(!estData || !estData.filas.length){ toast('No hay datos que exportar', true); return; }
+  const fin = esFinanzas();
+  const rows = estData.filas.map((f,i)=>{ const r = {'#':i+1, 'Código':f.cod, 'Producto':f.desc, 'Categoría':f.cat, 'Piezas':Math.round(f.unidades*100)/100, 'Tickets':f.tickets,
+    'Vendido (c/IVA)':Math.round(f.importe*100)/100, '% de la venta':Math.round(f.pct*1000)/10, '% acumulado':Math.round(f.acum*1000)/10, 'Clase':f.clase};
+    if(fin){ r['Utilidad']=Math.round(f.utilidad*100)/100; r['Margen % s/venta']=f.margen===null?'':Math.round(f.margen*1000)/10; }
+    r['Stock']=f.stock; r['Se acaba en (días)']=f.dias===null?'':Math.round(f.dias); r['Última venta']=f.ultima?String(f.ultima).slice(0,10):''; r['Precio actual']=f.precio; return r; });
+  const ws = XLSX.utils.json_to_sheet(rows); const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Productos estrella');
+  XLSX.writeFile(wb, 'Productos_estrella_'+(window._estPer||'60')+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
 }
 
 /* ============================================================
