@@ -1526,7 +1526,7 @@ async function revisarPreciosSugeridos(){
     const f = {id:p.id, cod:p.codigo, desc:p.descripcion||'', costo, precio, stock:+p.stock||0, sug, nuevo:precio, sel:false};
     psCalc(f); filas.push(f);
   }
-  window._psFilas = filas; window._psModo = 'indar'; window._psQ = ''; window._psStock = false;
+  window._psFilas = filas; window._psModo = 'indar2'; window._psQ = ''; window._psStock = false;
   const R = impRegla();
   const inpR = k => `<input type="number" id="ps-m${k}" value="${R[k-1]}" min="0" max="89" style="width:54px;padding:3px 5px;border:1px solid #bfdbfe;border-radius:6px;text-align:right;font-size:13px" onchange="psGuardarRegla()">%`;
   abrirModal(`<h3>💲 Revisar precios</h3>
@@ -1538,7 +1538,7 @@ async function revisarPreciosSugeridos(){
     </div>
     <div class="toolbar" style="margin-bottom:6px;gap:8px">
       <select id="ps-modo" onchange="psFiltro()">
-        <option value="indar">Indar sugiere distinto</option><option value="regla">Abajo de la regla</option><option value="todos">Todos los productos</option></select>
+        <option value="indar2">Indar difiere $2 o más</option><option value="indar">Indar sugiere distinto (todos, incluye $1 de redondeo)</option><option value="regla">Abajo de la regla</option><option value="todos">Todos los productos</option></select>
       <label class="small" style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="ps-stock" onchange="psFiltro()"> solo con stock</label>
       <input type="search" id="ps-q" placeholder="Buscar código o descripción" oninput="psFiltro()">
       <span class="small muted" id="ps-cuenta"></span>
@@ -1567,11 +1567,16 @@ function psCalc(f){ // margen actual, precio por regla y margen del nuevo (todo 
 }
 function psBajoRegla(f){ return f.regla>0 && f.mAct!==null && f.mAct < f.mReg-0.005; }
 function psDistintoIndar(f){ return f.sug>0 && Math.abs(f.sug-f.precio)>=0.5; }
+function psDifIndar2(f){ return f.sug>0 && Math.abs(f.sug-f.precio)>=2; } // v171: los de $1 son puro redondeo, no están mal
 function psVisibles(){
   const all = window._psFilas||[], modo = window._psModo, q = String(window._psQ||'').toLowerCase().trim(), soloStock = !!window._psStock;
-  return all.filter(f => (!soloStock || f.stock>0)
-    && (modo==='todos' || f.sel || f.dif!==0 || (modo==='indar' ? psDistintoIndar(f) : psBajoRegla(f)))
+  const vis = all.filter(f => (!soloStock || f.stock>0)
+    && (modo==='todos' || f.sel || f.dif!==0 || (modo==='indar2' ? psDifIndar2(f) : modo==='indar' ? psDistintoIndar(f) : psBajoRegla(f)))
     && (!q || codMatch(f.cod, q) || f.desc.toLowerCase().includes(q)));
+  // v171: orden útil — en modos Indar la diferencia más grande primero; abajo de la regla, lo que más dinero deja (brecha × stock)
+  const key = modo==='regla' ? (f=>(f.regla-f.precio)*Math.max(f.stock,1)) : modo==='todos' ? null : (f=>Math.abs((f.sug||f.precio)-f.precio));
+  if(key) vis.sort((a,b)=>key(b)-key(a));
+  return vis;
 }
 function psFiltro(){
   const m = $('ps-modo'), q = $('ps-q'), s = $('ps-stock');
@@ -1580,10 +1585,10 @@ function psFiltro(){
 }
 function psPintar(){
   const all = window._psFilas||[]; const vis = psVisibles(); const MAX = 400;
-  const nIndar = all.filter(psDistintoIndar).length, nSuben = all.filter(f=>f.sug>0 && f.sug-f.precio>=0.5).length;
+  const nIndar = all.filter(psDistintoIndar).length, nIndar2 = all.filter(psDifIndar2).length, nSuben2 = all.filter(f=>f.sug>0 && f.sug-f.precio>=2).length;
   const nRegla = all.filter(psBajoRegla).length, nReglaStock = all.filter(f=>psBajoRegla(f) && f.stock>0).length;
   const k = $('ps-kpis'); if(k) k.innerHTML = `
-    <div class="kpi"><div class="l">Indar sugiere distinto</div><div class="v">${nIndar}</div><div class="s">${nSuben} más caro · ${nIndar-nSuben} más barato</div></div>
+    <div class="kpi"><div class="l">Indar difiere $2 o más</div><div class="v">${nIndar2}</div><div class="s">${nSuben2} más caro · ${nIndar2-nSuben2} más barato · ${nIndar-nIndar2} más solo por $1 de redondeo</div></div>
     <div class="kpi" style="border-top-color:var(--ambar)"><div class="l">Abajo de la regla</div><div class="v">${nRegla}</div><div class="s">${nReglaStock} con stock en tienda</div></div>
     <div class="kpi"><div class="l">Productos activos</div><div class="v">${all.length}</div><div class="s">con costo o referencia Indar</div></div>`;
   const inp = 'padding:3px 5px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;text-align:right';
