@@ -2785,19 +2785,23 @@ async function pintarCatalogo(agregar){
   const {data, error} = await con.range(desde, desde+47);
   if(error){ toast(errMsg(error), true); return; }
   window._catData = window._catData || {}; (data||[]).forEach(p=>{ window._catData[p.codigo] = p; });
+  // v173: si ya lo vendemos se muestra NUESTRO precio (el sugerido de Indar confundía a la tienda: "está muy caro")
+  const mios = {};
+  try{ const cods = (data||[]).map(p=>p.codigo); if(cods.length){ const rm = await sb.from('productos').select('id,codigo,precio,costo,stock,granel,precio_unidad,unidad_venta').in('codigo', cods).eq('activo', true); (rm.data||[]).forEach(m=>{ mios[m.codigo] = m; }); } }catch(e){}
+  window._catMios = Object.assign(window._catMios||{}, mios);
   if(q.length>=2 && !catPagina){ clearTimeout(window._evT); window._evT=setTimeout(function(){ logEv('busqueda', q); }, 1500); }
   const html = (data||[]).map(p=>{
     const costoD = Math.round(+p.precio_lista*(1-(+p.promo_pct||0))*100)/100; // v141: costo al 100%
     const sel = catSel.has(p.codigo);
     const pz = pzasDe(p.descripcion);
+    const mio = mios[p.codigo] || (window._catMios||{})[p.codigo];
     return `<div class="card" style="margin:0;padding:12px;${sel?'outline:2px solid var(--rojo)':''}">
       <img src="https://storage.googleapis.com/indararticulos/${encodeURIComponent(p.codigo.replace(/[^A-Za-z0-9]/g,'_'))}_MD.webp"
         style="width:100%;height:110px;object-fit:contain;cursor:zoom-in" onclick='fichaCat(${JSON.stringify(p.codigo).replace(/'/g,"&#39;")})' onerror="this.style.display='none'" loading="lazy">
       <div class="small" style="min-height:48px;cursor:pointer" onclick='fichaCat(${JSON.stringify(p.codigo).replace(/'/g,"&#39;")})'><b>${esc(p.codigo)}</b> <span class="badge b-gris">${esc(p.marca||'')}</span> <a href="https://indar.mx/portal/detallesProducto/${encodeURIComponent(p.codigo.replace(/ /g,'_'))}" target="_blank" class="link" title="Ver producto y ficha técnica en Indar (con tu sesión iniciada)" onclick="event.stopPropagation()">📎ficha</a><br>${esc((p.descripcion||'').slice(0,60))}</div>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">
-        <div><b>${fmt(p.precio_sugerido)}</b>${pz?`<br><span class="small muted">${fmt(p.precio_sugerido/pz)}/pza</span>`:''}
-          ${esAdmin()?`<br><span class="small muted">costo: ${fmt(costoD)}</span>`:''}</div>
-        <button class="btn sm ${sel?'':'sec'}" onclick='toggleCat(${JSON.stringify({c:p.codigo,d:p.descripcion,pr:+p.precio_sugerido,co:Math.round(+p.precio_lista*(1-(+p.promo_pct||0))*100)/100,su:+p.precio_sugerido}).replace(/'/g,"&#39;")})'>${sel?'✓':'+'}</button>
+        <div>${catPrecioHtml(p, mio, pz, costoD)}</div>
+        <button class="btn sm ${sel?'':'sec'}" onclick='toggleCat(${JSON.stringify(catSelObj(p, mio)).replace(/'/g,"&#39;")})'>${sel?'✓':'+'}</button>
       </div></div>`;
   }).join('');
   if(agregar) $('cat-grid').insertAdjacentHTML('beforeend', html);
@@ -2809,18 +2813,32 @@ function toggleCat(p){
   if(catSel.has(p.c)) catSel.delete(p.c); else catSel.set(p.c, p);
   pintarCatalogo(false);
 }
+// v173: precio que ve la tienda en el catálogo: el NUESTRO si ya lo vendemos; si no, el sugerido de Indar.
+// El sugerido de Indar de un producto que ya vendemos solo lo ven admin/contador.
+function catPrecioHtml(p, mio, pz, costoD){
+  if(mio && +mio.precio>0){
+    return `<b>${fmt(mio.precio)}</b> <span class="badge b-verde" title="Ya lo vendemos en la tienda: este es nuestro precio">🏪 nuestro</span>${mio.granel&&+mio.precio_unidad>0?`<br><span class="small muted">${fmt(mio.precio_unidad)}/${esc(mio.unidad_venta||'u')}</span>`:''}<br><span class="small muted">stock ${+mio.stock||0}${esFinanzas()?` · Indar sugiere ${fmt(p.precio_sugerido)} · costo ${fmt(costoD)}`:''}</span>`;
+  }
+  return `<b>${fmt(p.precio_sugerido)}</b>${pz?`<br><span class="small muted">${fmt(p.precio_sugerido/pz)}/pza</span>`:''}<br><span class="small muted">sugerido Indar${esAdmin()?` · costo: ${fmt(costoD)}`:''}</span>`;
+}
+function catSelObj(p, mio){
+  const co = Math.round(+p.precio_lista*(1-(+p.promo_pct||0))*100)/100;
+  if(mio && +mio.precio>0) return {c:p.codigo, d:p.descripcion, pr:+mio.precio, co:(+mio.costo>0?+mio.costo:co), su:+mio.precio, pid:mio.id};
+  return {c:p.codigo, d:p.descripcion, pr:+p.precio_sugerido, co, su:+p.precio_sugerido};
+}
 function fichaCat(cod){
   const p = (window._catData||{})[cod]; if(!p) return;
   const pz = pzasDe(p.descripcion);
+  const mio = (window._catMios||{})[cod]; // v173
   const costoD = Math.round(+p.precio_lista*(1-(+p.promo_pct||0))*100)/100; // v141: costo al 100%
   abrirModal(`<div style="text-align:center"><img src="https://storage.googleapis.com/indararticulos/${encodeURIComponent(p.codigo.replace(/[^A-Za-z0-9]/g,'_'))}_MD.webp" style="width:100%;max-width:380px;height:280px;object-fit:contain" onerror="this.style.display='none'"></div>
     <p class="small" style="margin:8px 0 2px"><span class="badge b-gris">${esc(p.marca||'sin marca')}</span> · <b>${esc(p.codigo)}</b> · <a href="https://indar.mx/portal/detallesProducto/${encodeURIComponent(p.codigo.replace(/ /g,'_'))}" target="_blank" class="link">📎 ficha técnica en Indar</a></p>
     <h3 style="margin:6px 0;line-height:1.4">${esc(p.descripcion)}</h3>
-    <p style="font-size:19px;margin:8px 0"><b>${fmt(p.precio_sugerido)}</b> <span class="small muted">sugerido con IVA${pz?` · ${fmt(p.precio_sugerido/pz)}/pza`:''}</span>
+    <p style="font-size:19px;margin:8px 0">${mio&&+mio.precio>0 ? `<b>${fmt(mio.precio)}</b> <span class="small muted">🏪 nuestro precio · stock ${+mio.stock||0}</span>${esFinanzas()?`<br><span class="small muted">Indar sugiere ${fmt(p.precio_sugerido)}</span>`:''}` : `<b>${fmt(p.precio_sugerido)}</b> <span class="small muted">sugerido Indar con IVA${pz?` · ${fmt(p.precio_sugerido/pz)}/pza`:''}</span>`}
     ${esAdmin()?`<br><span class="small muted">costo: ${fmt(costoD)} · lista: ${fmt(p.precio_lista)}${+p.promo_pct?` · promo ${Math.round(+p.promo_pct*100)}%`:''}</span>`:''}</p>
     <p class="small" id="fcat-inv" style="margin:4px 0 8px"><span class="muted">⏳ checando inventario y pedidos...</span></p>
     <div class="acciones">
-      <button class="btn" onclick='toggleCat(${JSON.stringify({c:p.codigo,d:p.descripcion,pr:+p.precio_sugerido,co:Math.round(+p.precio_lista*(1-(+p.promo_pct||0))*100)/100,su:+p.precio_sugerido}).replace(/'/g,"&#39;")}); cerrarModal();'>➕ Seleccionar para cotizar</button>
+      <button class="btn" onclick='toggleCat(${JSON.stringify(catSelObj(p, mio)).replace(/'/g,"&#39;")}); cerrarModal();'>➕ Seleccionar para cotizar</button>
       ${puedeVender()?`<button class="btn sec" onclick='catAResurtido(${JSON.stringify({c:p.codigo,d:p.descripcion}).replace(/'/g,"&#39;")})'>🛒 Pedir resurtido</button>`:''}
       <button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
   fcatInv(p.codigo);
@@ -2851,7 +2869,7 @@ function pintarSelBar(){
     <button class="btn sec sm" onclick="catSel.clear();pintarCatalogo(false)">Limpiar</button></span></div>`;
 }
 function cotizarSeleccion(){
-  window._preCot = [...catSel.values()].map(p=>({codigo:p.c, desc:p.d, cantidad:1, precio:p.pr, costo:p.co, sugerido:p.su, producto_id:null}));
+  window._preCot = [...catSel.values()].map(p=>({codigo:p.c, desc:p.d, cantidad:1, precio:p.pr, costo:p.co, sugerido:p.su, producto_id:p.pid||null}));
   catSel.clear();
   irA('cotizaciones').then(()=>nuevaCot());
 }
@@ -4818,6 +4836,244 @@ async function guardarAportacion(){
   logEv('finanzas','aportación socio: '+$('sa-socio').value+' '+fmt(monto));
   vFinanzas();
 }
+// ===== v173: gastos fijos / recurrentes (renta, Totalplay, luz, nómina...) =====
+// Catálogo en la tabla gastos_fijos (53_gastos_fijos.sql). Cada pago entra a `gastos` como siempre,
+// ligado al fijo (gasto_fijo_id) y al mes del recibo (periodo 'YYYY-MM'). El panel muestra qué
+// fijos ya se pagaron este mes, cuáles faltan, el equivalente mensual y el punto de equilibrio.
+const GF_MESES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+const GF_DIAS = ['dom','lun','mar','mié','jue','vie','sáb'];
+function gfMes(){ return window._gfMes || hoyMX().slice(0,7); }
+function gfMesNombre(ym){ const [y,m] = ym.split('-').map(Number); return GF_MESES[m-1]+' '+y; }
+function gfMoverMes(n){ const [y,m] = gfMes().split('-').map(Number); const d = new Date(y, m-1+n, 1); window._gfMes = d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); pintarGastosFijos(); }
+function gfDiasMes(ym){ const [y,m] = ym.split('-').map(Number); return new Date(y, m, 0).getDate(); }
+// Fechas en que toca pagar el fijo dentro del mes ym (array de 'YYYY-MM-DD'; vacío si ese mes no toca)
+function gfFechas(f, ym){
+  const [y,m] = ym.split('-').map(Number); const nd = gfDiasMes(ym); const fr = f.frecuencia||'mensual';
+  const dia = d => ym+'-'+String(Math.min(Math.max(1,+d||1), nd)).padStart(2,'0');
+  if(fr==='semanal'){ const out = []; for(let d=1; d<=nd; d++){ if(new Date(y, m-1, d).getDay() === (+f.dia_pago||0)) out.push(dia(d)); } return out; }
+  if(fr==='bimestral'){ const par = (f.meses||'').toLowerCase()==='pares'; if((m%2===0) !== par) return []; return [dia(f.dia_pago)]; }
+  if(fr==='anual'){ if(+(f.meses||0) !== m) return []; return [dia(f.dia_pago)]; }
+  return [dia(f.dia_pago)];
+}
+// Cuánto representa al mes (para sumar fijos y punto de equilibrio)
+function gfEquivMensual(f){ const mo = +f.monto||0; return {mensual:mo, semanal:mo*52/12, bimestral:mo/2, anual:mo/12}[f.frecuencia||'mensual'] ?? mo; }
+function gfCuando(f){
+  const fr = f.frecuencia||'mensual';
+  if(fr==='semanal') return 'cada '+(GF_DIAS[+f.dia_pago||0]||'semana');
+  if(fr==='bimestral') return 'el '+f.dia_pago+' de meses '+((f.meses||'').toLowerCase()==='pares'?'pares':'nones');
+  if(fr==='anual') return 'el '+f.dia_pago+' de '+(GF_MESES[+(f.meses||1)-1]||'');
+  return 'el '+f.dia_pago+' de cada mes';
+}
+// Estado del fijo en el mes: pagos = gastos ligados con periodo=ym
+function gfEstado(f, pagos, ym, hoy){
+  const fechas = gfFechas(f, ym); const n = fechas.length, np = pagos.length;
+  const suma = pagos.reduce((s,g)=>s+ +g.monto,0);
+  let estado = 'no-toca', prox = null;
+  if(n){
+    if(np>=n) estado = 'pagado';
+    else { prox = fechas[Math.min(np, n-1)]; estado = prox < hoy ? 'vencido' : 'pendiente'; if(np>0 && estado!=='pagado') estado = 'parcial'; }
+  } else if(np>0) estado = 'pagado';
+  return {estado, esperadas:n, pagadas:np, suma, prox, fechas, falta: Math.max(0, n-np)*(+f.monto||0)};
+}
+// Margen real de la tienda (últimos 60 días) y venta promedio diaria (últimos 30) — se cachea 10 min
+async function gfMargen(){
+  const c = window._gfM; if(c && Date.now()-c.t < 600e3) return c;
+  const out = {t:Date.now(), margen:null, ventaDia:0, dias:30};
+  try{
+    const d60 = new Date(Date.now()-60*864e5), d30 = Date.now()-30*864e5;
+    const items = await traerTodo(()=>sb.from('venta_items').select('cantidad,precio_unit,costo_unit,importe,ventas!inner(fecha,cancelada,notas)').eq('ventas.cancelada', false).gte('ventas.fecha', d60.toISOString()).order('id'));
+    let neto = 0, costo = 0, v30 = 0;
+    for(const x of (items||[])){ const v = x.ventas||{}; if(/CONSUMO PROPIO/i.test(v.notas||'')) continue;
+      const cant = +x.cantidad||0, imp = +x.importe || cant*(+x.precio_unit||0);
+      neto += imp/1.16; costo += (+x.costo_unit||0)*cant; if(new Date(v.fecha).getTime() >= d30) v30 += imp; }
+    out.margen = neto>0 ? (neto-costo)/neto : null; out.ventaDia = v30/30;
+  }catch(e){}
+  window._gfM = out; return out;
+}
+async function pintarGastosFijos(){
+  const el = $('fijos-panel'); if(!el) return;
+  const ym = gfMes(), hoy = hoyMX();
+  const r = await sb.from('gastos_fijos').select('*').order('dia_pago').order('concepto');
+  if(r.error){ el.innerHTML = '<p class="small muted">Para activar los gastos fijos corre <b>53_gastos_fijos.sql</b> en Supabase (SQL Editor).</p>'; return; }
+  const fijos = r.data||[]; window._gfFijos = fijos;
+  const [y,m] = ym.split('-').map(Number); const ini = ym+'-01', fin = ym+'-'+String(gfDiasMes(ym)).padStart(2,'0');
+  // pagos del mes (ligados por periodo) + gastos del mes sin ligar (candidatos)
+  const [rp, rg, M] = await Promise.all([
+    sb.from('gastos').select('id,fecha,concepto,monto,metodo,gasto_fijo_id,periodo').eq('periodo', ym),
+    sb.from('gastos').select('id,fecha,concepto,monto,metodo,gasto_fijo_id').is('gasto_fijo_id', null).gte('fecha', ini).lte('fecha', fin).or('tipo.is.null,tipo.neq.retiro'),
+    gfMargen(),
+  ]);
+  const pagosPor = {}; (rp.data||[]).forEach(g=>{ if(g.gasto_fijo_id){ (pagosPor[g.gasto_fijo_id] = pagosPor[g.gasto_fijo_id]||[]).push(g); } });
+  const sueltos = rg.data||[];
+  const activos = fijos.filter(f=>f.activo), inactivos = fijos.filter(f=>!f.activo);
+  const filas = activos.map(f=>Object.assign({f}, gfEstado(f, pagosPor[f.id]||[], ym, hoy)));
+  // candidatos: gasto suelto del mes cuyo concepto se parece al fijo (proveedor o primera palabra del concepto)
+  filas.forEach(x=>{ const claves = [x.f.proveedor, (x.f.concepto||'').split(/\s+/)[0]].map(s=>normTxt(s).trim()).filter(s=>s.length>=4);
+    x.cand = claves.length ? sueltos.filter(g=>{ const c = normTxt(g.concepto); return claves.some(k=>c.includes(k)); }) : []; });
+  const equivMes = activos.filter(f=>(f.tipo||'gasto')==='gasto').reduce((s,f)=>s+gfEquivMensual(f),0);
+  const equivInv = activos.filter(f=>(f.tipo||'gasto')!=='gasto').reduce((s,f)=>s+gfEquivMensual(f),0);
+  const tocan = filas.filter(x=>x.esperadas>0);
+  const esperadoMes = tocan.reduce((s,x)=>s+x.esperadas*(+x.f.monto||0),0);
+  const pagadoMes = filas.reduce((s,x)=>s+x.suma,0);
+  const faltaMes = tocan.reduce((s,x)=>s+x.falta,0);
+  const vencidos = filas.filter(x=>x.estado==='vencido'), pendientes = filas.filter(x=>x.estado==='pendiente'||x.estado==='parcial');
+  const prox = pendientes.map(x=>x.prox).filter(Boolean).sort()[0];
+  // punto de equilibrio: fijos ÷ margen real = venta neta necesaria; ×1.16 = con IVA; ÷ días del mes = por día
+  const mg = M.margen, ndias = gfDiasMes(ym);
+  const ventaNec = (mg && mg>0.02) ? equivMes/mg*1.16 : null;
+  const pctVas = (ventaNec && M.ventaDia>0) ? M.ventaDia*ndias/ventaNec : null;
+  const esHoyMes = ym === hoy.slice(0,7);
+  const B = {pagado:'<span class="badge b-verde">✓ pagado</span>', pendiente:'<span class="badge b-ambar">⏳ pendiente</span>', parcial:'<span class="badge b-ambar">½ parcial</span>',
+    vencido:'<span class="badge b-rojo">⚠️ vencido</span>', 'no-toca':'<span class="badge b-gris">no toca este mes</span>'};
+  el.innerHTML = `
+    <div class="kpis" style="margin-bottom:10px">
+      <div class="kpi"><div class="l">Fijos al mes</div><div class="v">${fmt(equivMes)}</div><div class="s">${activos.length} fijo(s) · ${fmt(equivMes/ndias)}/día${equivInv?' · + '+fmt(equivInv)+' de mensualidades':''}</div></div>
+      <div class="kpi" style="border-top-color:${vencidos.length?'var(--rojo)':(faltaMes>0?'var(--ambar)':'var(--verde)')}"><div class="l">${esc(gfMesNombre(ym))}: falta por pagar</div><div class="v">${fmt(faltaMes)}</div>
+        <div class="s">pagado ${fmt(pagadoMes)} de ${fmt(esperadoMes)}${vencidos.length?' · <b style="color:#b91c1c">'+vencidos.length+' vencido(s)</b>':''}${prox?' · próximo: '+fecha(prox):''}</div></div>
+      <div class="kpi" style="border-top-color:var(--azul)"><div class="l">🎯 Punto de equilibrio</div><div class="v">${ventaNec?fmt(ventaNec):'—'}</div>
+        <div class="s">${ventaNec ? `vender ${fmt(ventaNec/ndias)}/día (con IVA) para cubrir los fijos · margen real ${Math.round(mg*100)}% s/venta` : 'aún no hay ventas suficientes para calcular el margen'}</div></div>
+      <div class="kpi" style="border-top-color:${pctVas===null?'var(--gris)':(pctVas>=1?'var(--verde)':(pctVas>=0.7?'var(--ambar)':'var(--rojo)'))}"><div class="l">Vas en</div><div class="v">${pctVas===null?'—':Math.round(pctVas*100)+'%'}</div>
+        <div class="s">${M.ventaDia>0 ? `vendiendo ${fmt(M.ventaDia)}/día (promedio últimos 30 días)${pctVas!==null && pctVas<1 ? ' · te faltan '+fmt(ventaNec/ndias - M.ventaDia)+'/día' : ''}` : 'sin ventas en los últimos 30 días'}</div></div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+      <button class="btn sm sec" onclick="gfMoverMes(-1)">◀</button><b>${esc(gfMesNombre(ym))}</b><button class="btn sm sec" onclick="gfMoverMes(1)">▶</button>
+      ${esHoyMes?'':`<button class="btn sm sec" onclick="window._gfMes=null;pintarGastosFijos()">Hoy</button>`}
+      <span style="flex:1"></span>
+      ${esAdmin()?`<button class="btn sm" onclick="nuevoGastoFijo()">➕ Gasto fijo</button>`:''}
+    </div>
+    ${activos.length ? `<div class="tbl-scroll"><table>
+      <thead><tr><th>Fijo</th><th>Toca</th><th class="num">Monto</th><th>Estado</th><th>Pagado</th><th></th></tr></thead>
+      <tbody>${filas.map(x=>{ const f = x.f; const pg = pagosPor[f.id]||[];
+        return `<tr>
+          <td><b>${esc(f.concepto)}</b>${f.proveedor?' <span class="small muted">· '+esc(f.proveedor)+'</span>':''}<div class="small muted"><span class="badge b-gris">${esc(f.categoria||'General')}</span> ${gfCuando(f)}${f.variable?' · monto aprox.':''}${(f.tipo||'gasto')!=='gasto'?' · <span class="badge b-azul">inversión</span>':''}</div></td>
+          <td class="small">${x.fechas.length ? x.fechas.map(d=>fecha(d).replace(/ de \d{4}| \d{4}/,'')).join(', ') : '—'}</td>
+          <td class="num"><b>${fmt(f.monto)}</b>${x.esperadas>1?'<div class="small muted">×'+x.esperadas+' = '+fmt(x.esperadas*(+f.monto||0))+'</div>':''}</td>
+          <td>${B[x.estado]}${x.estado==='vencido'&&x.prox?'<div class="small" style="color:#b91c1c">desde '+fecha(x.prox)+'</div>':''}</td>
+          <td class="small">${pg.map(g=>`${fecha(g.fecha)} · ${fmt(g.monto)} <span class="muted">${esc(g.metodo||'')}</span>`).join('<br>') || '<span class="muted">—</span>'}
+            ${x.cand.length && x.estado!=='pagado' ? x.cand.map(g=>`<div style="margin-top:3px">¿Es este? <span class="muted">${fecha(g.fecha)} · ${esc((g.concepto||'').slice(0,40))} · ${fmt(g.monto)}</span> ${esAdmin()?`<button class="btn sm sec" onclick="ligarGastoFijo(${g.id},${f.id},'${ym}')">🔗 Ligar</button>`:''}</div>`).join('') : ''}</td>
+          <td style="white-space:nowrap">${esAdmin()?`${x.estado!=='pagado'?`<button class="btn sm" onclick="pagarFijo(${f.id})">💸 Pagar</button> `:''}<button class="btn sm sec" title="Editar" onclick="nuevoGastoFijo(${f.id})">✏️</button> <button class="btn sm sec" title="Dar de baja (ya no se paga)" onclick="bajaGastoFijo(${f.id})">⏸</button>`:''}</td></tr>`; }).join('')}
+      <tr style="border-top:2px solid var(--linea);background:#f8fafc"><td><b>TOTAL del mes</b></td><td></td><td class="num"><b>${fmt(esperadoMes)}</b></td><td>${faltaMes>0?'<b style="color:#b91c1c">faltan '+fmt(faltaMes)+'</b>':'<span class="badge b-verde">✓ todo pagado</span>'}</td><td class="small"><b>${fmt(pagadoMes)}</b> pagado</td><td></td></tr>
+      </tbody></table></div>` : `<p class="small muted">Todavía no hay gastos fijos dados de alta. ${esAdmin()?'Usa <b>➕ Gasto fijo</b> para registrar renta, internet, luz, nómina, limpieza…':''}</p>`}
+    <p class="small muted" style="margin:6px 0 0">El punto de equilibrio = fijos del mes ÷ margen real (utilidad ÷ venta sin IVA de los últimos 60 días) · con IVA. No incluye el costo de la mercancía (ya va en el margen) ni las mensualidades de inversión.</p>
+    ${inactivos.length?`<details style="margin-top:6px"><summary class="small muted">Dados de baja (${inactivos.length})</summary><table style="margin-top:4px">${inactivos.map(f=>`<tr><td>${esc(f.concepto)}</td><td class="num">${fmt(f.monto)}</td><td class="small muted">${gfCuando(f)}</td><td>${esAdmin()?`<button class="btn sm sec" onclick="reactivarGastoFijo(${f.id})">▶ Reactivar</button>`:''}</td></tr>`).join('')}</table></details>`:''}`;
+}
+function nuevoGastoFijo(id){
+  const f = id ? (window._gfFijos||[]).find(x=>x.id===id) : null;
+  const v = k => f ? esc(f[k]??'') : '';
+  const sel = (k, val) => (f ? String(f[k]??'') : String(val)) ;
+  abrirModal(`<h3>${f?'✏️ Editar gasto fijo':'➕ Nuevo gasto fijo'}</h3>
+    <div class="frow">
+      <div class="field" style="flex:2"><label>Concepto</label><input id="gf-concepto" value="${v('concepto')}" placeholder="Ej. Renta del local, Totalplay internet, Luz CFE"></div>
+      <div class="field"><label>Proveedor</label><input id="gf-prov" value="${v('proveedor')}" placeholder="Ej. Totalplay"></div>
+    </div>
+    <div class="frow">
+      <div class="field"><label>Monto por pago</label><input id="gf-monto" type="number" step="0.01" style="font-size:19px" value="${f?+f.monto:''}" placeholder="0.00"></div>
+      <div class="field"><label>¿Cada cuándo?</label><select id="gf-frec" onchange="gfFormFrec()">
+        ${[['mensual','Cada mes'],['semanal','Cada semana'],['bimestral','Cada 2 meses'],['anual','Una vez al año']].map(([k,t])=>`<option value="${k}"${sel('frecuencia','mensual')===k?' selected':''}>${t}</option>`).join('')}</select></div>
+    </div>
+    <div class="frow">
+      <div class="field" id="gf-f-dia"><label id="gf-l-dia">Día del mes en que se paga</label><input id="gf-dia" type="number" min="0" max="31" value="${f?+f.dia_pago:1}"></div>
+      <div class="field" id="gf-f-diasem" style="display:none"><label>Día de la semana</label><select id="gf-diasem">${GF_DIAS.map((d,i)=>`<option value="${i}"${f&&f.frecuencia==='semanal'&&+f.dia_pago===i?' selected':''}>${d}</option>`).join('')}</select></div>
+      <div class="field" id="gf-f-meses" style="display:none"><label id="gf-l-meses">Meses</label><select id="gf-meses"></select></div>
+    </div>
+    <div class="frow">
+      <div class="field"><label>Categoría</label><select id="gf-cat">${['Servicios','Renta','Nómina','Mantenimiento','Publicidad','Transporte','Comisiones bancarias','Licencias y permisos','Seguros','Equipo','General','Otro'].map(c=>`<option${sel('categoria','Servicios')===c?' selected':''}>${c}</option>`).join('')}</select></div>
+      <div class="field"><label>Normalmente sale de</label><select id="gf-metodo">${[['transferencia','🏦 Transferencia'],['tarjeta','💳 Tarjeta'],['efectivo','💵 Efectivo de caja'],['aportación directa','🤝 Lo paga un socio de su bolsa']].map(([k,t])=>`<option value="${k}"${sel('metodo','transferencia')===k?' selected':''}>${t}</option>`).join('')}</select></div>
+    </div>
+    <div class="frow">
+      <div class="field"><label>Tipo</label><select id="gf-tipo"><option value="gasto"${sel('tipo','gasto')==='gasto'?' selected':''}>💸 Gasto (baja la utilidad)</option><option value="inversion"${sel('tipo','gasto')==='inversion'?' selected':''}>🏗️ Mensualidad de inversión</option></select></div>
+      <div class="field"><label>&nbsp;</label><label class="small"><input type="checkbox" id="gf-var"${f&&f.variable?' checked':''}> El monto varía (luz, agua): es aproximado</label></div>
+    </div>
+    <div class="field"><label>Nota (opcional)</label><input id="gf-nota" value="${v('nota')}" placeholder="Ej. número de contrato, a qué cuenta se paga"></div>
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cancelar</button><button class="btn" onclick="guardarGastoFijo(${id||0})">Guardar</button></div>`);
+  window._gfEdit = f; gfFormFrec();
+  setTimeout(()=>$('gf-concepto')?.focus(),100);
+}
+function gfFormFrec(){
+  const fr = $('gf-frec')?.value, f = window._gfEdit;
+  const dia = $('gf-f-dia'), sem = $('gf-f-diasem'), mes = $('gf-f-meses'); if(!dia) return;
+  dia.style.display = fr==='semanal' ? 'none' : ''; sem.style.display = fr==='semanal' ? '' : 'none'; mes.style.display = (fr==='bimestral'||fr==='anual') ? '' : 'none';
+  if(fr==='bimestral'){ $('gf-l-meses').textContent = '¿En qué meses?'; $('gf-meses').innerHTML = `<option value="nones"${f&&f.meses==='nones'?' selected':''}>Nones (ene, mar, may, jul, sep, nov)</option><option value="pares"${f&&f.meses==='pares'?' selected':''}>Pares (feb, abr, jun, ago, oct, dic)</option>`; }
+  if(fr==='anual'){ $('gf-l-meses').textContent = 'Mes'; $('gf-meses').innerHTML = GF_MESES.map((mn,i)=>`<option value="${i+1}"${f&&+f.meses===i+1?' selected':''}>${mn}</option>`).join(''); }
+}
+async function guardarGastoFijo(id){
+  const concepto = ($('gf-concepto').value||'').trim(), monto = +($('gf-monto').value||0), fr = $('gf-frec').value;
+  if(!concepto){ toast('Pon el concepto', true); return; }
+  if(monto<=0){ toast('Pon el monto', true); return; }
+  const dia = fr==='semanal' ? +$('gf-diasem').value : Math.min(31, Math.max(1, +$('gf-dia').value||1));
+  const fila = {concepto, proveedor:($('gf-prov').value||'').trim(), monto, frecuencia:fr, dia_pago:dia,
+    meses: (fr==='bimestral'||fr==='anual') ? $('gf-meses').value : '', categoria:$('gf-cat').value, metodo:$('gf-metodo').value,
+    tipo:$('gf-tipo').value, variable:$('gf-var').checked, nota:($('gf-nota').value||'').trim()};
+  let r;
+  if(id) r = await sb.from('gastos_fijos').update(fila).eq('id', id);
+  else r = await sb.from('gastos_fijos').insert(Object.assign(fila, {activo:true, usuario_id: sesion.user.id}));
+  if(r.error){ toast(errMsg(r.error), true); return; }
+  cerrarModal(); toast(id?'Gasto fijo actualizado ✓':'Gasto fijo dado de alta ✓');
+  logEv('finanzas', (id?'gasto fijo editado: ':'gasto fijo nuevo: ')+concepto+' '+fmt(monto)+' '+fr);
+  pintarGastosFijos();
+}
+async function bajaGastoFijo(id){
+  const f = (window._gfFijos||[]).find(x=>x.id===id); if(!f) return;
+  if(!confirm('¿Dar de baja "'+f.concepto+'"?\n\nYa no aparecerá como pendiente cada mes. Los pagos que ya se registraron se quedan en gastos. Lo puedes reactivar después.')) return;
+  const r = await sb.from('gastos_fijos').update({activo:false}).eq('id', id);
+  if(r.error){ toast(errMsg(r.error), true); return; }
+  toast('Dado de baja'); logEv('finanzas','gasto fijo baja: '+f.concepto); pintarGastosFijos();
+}
+async function reactivarGastoFijo(id){
+  const r = await sb.from('gastos_fijos').update({activo:true}).eq('id', id);
+  if(r.error){ toast(errMsg(r.error), true); return; }
+  toast('Reactivado ✓'); pintarGastosFijos();
+}
+async function ligarGastoFijo(gastoId, fijoId, ym){
+  const r = await sb.from('gastos').update({gasto_fijo_id:fijoId, periodo:ym}).eq('id', gastoId);
+  if(r.error){ toast(errMsg(r.error), true); return; }
+  toast('Ligado ✓ ya cuenta como pagado en '+gfMesNombre(ym)); pintarGastosFijos();
+}
+function pagarFijo(id){
+  const f = (window._gfFijos||[]).find(x=>x.id===id); if(!f) return;
+  const ym = gfMes(); const [y,m] = ym.split('-').map(Number);
+  const opc = [-1,0,1].map(n=>{ const d = new Date(y, m-1+n, 1); const k = d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); return `<option value="${k}"${n===0?' selected':''}>${gfMesNombre(k)}</option>`; }).join('');
+  const met = f.metodo||'transferencia';
+  abrirModal(`<h3>💸 Pagar: ${esc(f.concepto)}</h3>
+    <p class="small muted" style="margin:0 0 8px">${esc(f.proveedor||'')} · ${gfCuando(f)}${f.variable?' · el monto varía, ajústalo al recibo':''}</p>
+    <div class="frow">
+      <div class="field"><label>Monto pagado</label><input id="pf-monto" type="number" step="0.01" style="font-size:19px" value="${+f.monto}"></div>
+      <div class="field"><label>Fecha del pago</label><input id="pf-fecha" type="date" value="${hoyMX()}"></div>
+    </div>
+    <div class="frow">
+      <div class="field"><label>Recibo / mes que cubre</label><select id="pf-periodo">${opc}</select></div>
+      <div class="field"><label>¿De dónde salió?</label><select id="pf-metodo" onchange="$('pf-socio-f').style.display=this.value==='aportación directa'?'':'none'">
+        ${[['transferencia','🏦 Transferencia'],['tarjeta','💳 Tarjeta'],['efectivo','💵 Efectivo de caja'],['aportación directa','🤝 Lo pagó un socio de su bolsa']].map(([k,t])=>`<option value="${k}"${met===k?' selected':''}>${t}</option>`).join('')}</select></div>
+    </div>
+    <div class="field" id="pf-socio-f" style="display:${met==='aportación directa'?'':'none'}"><label>¿Qué socio lo pagó?</label><select id="pf-socio"><option>Hans S.</option><option>Ignacio G.</option><option>Andrés T.</option></select>
+      <div class="small muted">Se registra como aportación del socio Y como gasto (en el panel de dinero se cancelan solos, como en 🤝 Aportaciones).</div></div>
+    <div class="field"><label>Nota (opcional)</label><input id="pf-nota" placeholder="Ej. referencia del pago"></div>
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cancelar</button><button class="btn" onclick="guardarPagoFijo(${id})">Registrar pago</button></div>`);
+  setTimeout(()=>$('pf-monto')?.select(),100);
+}
+async function guardarPagoFijo(id){
+  const f = (window._gfFijos||[]).find(x=>x.id===id); if(!f) return;
+  const monto = +($('pf-monto').value||0), fechaP = $('pf-fecha').value||hoyMX(), ym = $('pf-periodo').value, metodo = $('pf-metodo').value, nota = ($('pf-nota').value||'').trim();
+  if(monto<=0){ toast('Pon el monto', true); return; }
+  const mesN = gfMesNombre(ym); let concepto = f.concepto+' — recibo '+mesN;
+  const nombre = (typeof perfil!=='undefined'&&perfil?perfil.nombre:'');
+  if(metodo==='aportación directa'){
+    const socio = $('pf-socio').value;
+    const a = await sb.from('socios_aportaciones').insert({socio, monto, fecha:fechaP, via:'pago directo a '+(f.proveedor||f.concepto)+' (de su bolsa)', nota:concepto, nombre, usuario_id: sesion.user.id});
+    if(a.error){ toast('No se pudo registrar la aportación: '+errMsg(a.error), true); return; }
+    concepto += ' (aportación directa de '+socio+')';
+  }
+  const fila = {concepto, categoria:f.categoria||'General', monto, metodo, tipo:f.tipo||'gasto', fecha:fechaP, usuario_id: sesion.user.id, gasto_fijo_id:f.id, periodo:ym};
+  if(nota) fila.nota = nota;
+  const g = await sb.from('gastos').insert(fila);
+  if(g.error){ toast((metodo==='aportación directa'?'Aportación ✓ pero el gasto NO se registró: ':'No se pudo registrar el gasto: ')+errMsg(g.error), true); return; }
+  if(metodo==='efectivo'){ // igual que en + Gasto: también sale del corte de caja del día
+    try{ await sb.from('caja_movs').insert({tipo:'gasto', monto, concepto:concepto+' (desde Finanzas)', fecha:fechaP, usuario_id:sesion.user.id, nombre}); }catch(e){}
+  }
+  cerrarModal(); toast('Pago registrado ✓ '+f.concepto+' '+mesN);
+  logEv('finanzas','gasto fijo pagado: '+f.concepto+' '+mesN+' '+fmt(monto)+' ('+metodo+')');
+  vFinanzas();
+}
 // v135: cobranza de ventas a crédito
 async function pintarCobranza(){
   const el = $('cobrar-panel'); if(!el) return;
@@ -5093,6 +5349,10 @@ async function vFinanzas(){
     ${esFinanzas()?`<div class="card" style="margin-bottom:14px"><h3>🤝 Aportaciones de socios</h3>
       <div id="aportes-panel"><span class="small muted">Cargando…</span></div>
       <span style="display:none">${setTimeout(()=>{ if(typeof pintarAportaciones==='function') pintarAportaciones(); },250)&&''}</span>
+    </div>`:''}
+    ${esFinanzas()?`<div class="card" style="margin-bottom:14px" id="fin-fijos"><h3>📆 Gastos fijos <span class="small muted" style="font-weight:normal">renta, internet, luz, nómina… lo que se paga cada mes</span></h3>
+      <div id="fijos-panel"><span class="small muted">Cargando…</span></div>
+      <span style="display:none">${setTimeout(()=>{ if(typeof pintarGastosFijos==='function') pintarGastosFijos(); },280)&&''}</span>
     </div>`:''}
     <div class="card" style="margin-bottom:14px" id="fin-cobrar"><h3>📄 Por cobrar (ventas a crédito)</h3>
       <div id="cobrar-panel"><span class="small muted">Cargando…</span></div>
@@ -6255,7 +6515,7 @@ async function vImportar(){
         <p class="small muted" style="margin-bottom:10px">1) En el portal Indar → Catálogo → <b>descarga la ListaPrecios.xlsx</b>. 2) Súbela aquí.
         Se actualizan precios, promociones y vigencias de TODA la lista (lo que usa el cotizador), y opcionalmente los costos/precios de tus productos.</p>
         <div class="field"><input type="file" id="lp-file" accept=".xlsx,.xls"></div>
-        <div class="field"><label><input type="checkbox" id="lp-mios" checked> También actualizar costo y precio de venta de MIS productos que aparezcan en la lista</label></div>
+        <div class="field"><label><input type="checkbox" id="lp-mios" checked> También actualizar el COSTO de MIS productos que aparezcan en la lista (el precio de venta NO se toca)</label></div>
         <button class="btn" id="lp-btn" onclick="subirListaPrecios()">Actualizar lista de precios</button>
         <p class="small muted" id="lp-status" style="margin-top:8px"></p>
       </div>
@@ -6816,7 +7076,7 @@ async function subirListaPrecios(){
     }
     let actualizados = 0;
     if($('lp-mios').checked){
-      st('Actualizando costos y precios de tus productos...');
+      st('Actualizando costos de tus productos...');
       const mios = await traerTodo(()=>sb.from('productos').select('id,codigo,precio').order('id'));
       const mapa = new Map(regs.map(r=>[r.codigo, r]));
       for(const p of (mios||[])){
