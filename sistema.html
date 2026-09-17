@@ -418,14 +418,17 @@ async function traerTodo(armar){
 }
 async function pedPartesStats(ids){
   const filas = await traerTodo(()=>sb.from('pedido_compra_items')
-    .select('pedido_id,parte,cantidad,cantidad_recibida,cantidad_facturada').in('pedido_id', ids).order('id'));
+    .select('*').in('pedido_id', ids).order('id'));
   const m = {};
-  for(const i of filas){ const k=i.pedido_id, pt=i.parte||''; if(!m[k]) m[k]={}; if(!m[k][pt]) m[k][pt]={ped:0,rec:0,fac:0}; m[k][pt].ped+=+i.cantidad; m[k][pt].rec+=+(i.cantidad_recibida||0); m[k][pt].fac+=+(i.cantidad_facturada||0); }
+  for(const i of filas){ const k=i.pedido_id, pt=i.parte||''; if(!m[k]) m[k]={}; if(!m[k][pt]) m[k][pt]={ped:0,rec:0,fac:0,canc:0,n:0}; m[k][pt].n++;
+    if(i.cancelada){ m[k][pt].canc++; continue; } // v177: canceladas por Indar no cuentan
+    m[k][pt].ped+=+i.cantidad; m[k][pt].rec+=+(i.cantidad_recibida||0); m[k][pt].fac+=+(i.cantidad_facturada||0); }
   return m;
 }
 function resParteHTML(g, pind){
   if(!g) return '<span class="muted small">sin partidas</span>';
-  const vs = Object.values(g); const n = vs.length;
+  const vsAll = Object.values(g); const c = vsAll.filter(function(x){ return x.n>0 && x.canc>=x.n; }).length; // v177: partes canceladas completas
+  const vs = vsAll.filter(function(x){ return !(x.n>0 && x.canc>=x.n); }); const n = vs.length;
   const r = vs.filter(function(x){ return x.ped>0 && x.rec>=x.ped; }).length;
   const pa = vs.filter(function(x){ return x.rec>0 && x.rec<x.ped; }).length;
   const f = vs.filter(function(x){ return x.fac>0; }).length;
@@ -435,6 +438,7 @@ function resParteHTML(g, pind){
     let env = 0, faltaXml = 0;
     for(const k2 in pind){
       const z = pind[k2];
+      if(String(z.estatus||'').toUpperCase()==='CANCELADO'){ const gz = g[k2]; if(gz && !(gz.n>0 && gz.canc>=gz.n)) extra += ' <span class="badge b-rojo" title="Indar la canceló: ábrelo y márcala cancelada">✖ '+esc(k2)+' cancelada en Indar</span>'; continue; }
       if(+z.cant_empacada>0 && +z.cant_facturada<=0) env++;
       const gg = g[k2];
       if(+z.cant_facturada>0 && (!gg || !(gg.fac>0))) faltaXml++;
@@ -443,6 +447,7 @@ function resParteHTML(g, pind){
     if(faltaXml) extra += ' <span class="badge b-rojo">⚠️ '+faltaXml+' sin XML</span>';
   }
   return '<b>'+n+'</b> parte'+(n>1?'s':'')+' &nbsp;'
+    +(c?'<span class="badge b-rojo">✖ '+c+' cancelada'+(c>1?'s':'')+'</span> ':'')
     +(r?'<span class="badge b-verde">'+r+' recibida'+(r>1?'s':'')+'</span> ':'')
     +(pa?'<span class="badge b-ambar">'+pa+' parcial'+(pa>1?'es':'')+'</span> ':'')
     +(pend?'<span class="badge b-gris">'+pend+' pendiente'+(pend>1?'s':'')+'</span> ':'')
@@ -468,17 +473,22 @@ function resumenPartes(grupos, facturas, data, pindar){
   for(const z of (pindar||[])){ pim[String(z.parte)] = z; }
   const filas = [...grupos.entries()].map(function(par){
     const p = par[0], its = par[1];
-    const ped = its.reduce(function(s,i){return s+ +i.cantidad;},0), rec = its.reduce(function(s,i){return s+ +(i.cantidad_recibida||0);},0);
-    const tot = its.reduce(function(s,i){return s+ +i.importe;},0);
-    const est = rec>=ped ? '<span class="badge b-verde">recibida ✓</span>' : (rec>0 ? '<span class="badge b-ambar">parcial '+rec+'/'+ped+'</span>' : '<span class="badge b-gris">pendiente</span>');
+    const vivasIt = its.filter(function(i){ return !i.cancelada; }); // v177: las canceladas por Indar no cuentan
+    const ped = vivasIt.reduce(function(s,i){return s+ +i.cantidad;},0), rec = vivasIt.reduce(function(s,i){return s+ +(i.cantidad_recibida||0);},0);
+    const tot = vivasIt.reduce(function(s,i){return s+ +i.importe;},0);
+    const est = !vivasIt.length ? '<span class="badge b-rojo">✖ cancelada</span>' : (rec>=ped ? '<span class="badge b-verde">recibida ✓</span>' : (rec>0 ? '<span class="badge b-ambar">parcial '+rec+'/'+ped+'</span>' : '<span class="badge b-gris">pendiente</span>'));
     const fs = facParte.get(p)||[];
     const pi = pim[String(p)];
     let vivo = '<span class="muted small">sin dato</span>';
     if(pi){
-      if(+pi.cant_facturada>0) vivo = '<span class="badge b-azul">🧾 facturada en Indar</span>';
+      const st = String(pi.estatus||'').toUpperCase();
+      if(st==='CANCELADO') vivo = '<span class="badge b-rojo">✖ cancelada en Indar</span>'+(pi.tipo==='BO'?' <span class="badge b-gris" title="Backorder: lo que faltó del pedido original">BO</span>':'');
+      else if(+pi.cant_facturada>0 || st==='FACTURADO') vivo = '<span class="badge b-azul">🧾 facturada en Indar</span>'+(pi.num_factura?' <span class="muted small">'+esc(pi.num_factura)+'</span>':'');
       else if(+pi.cant_empacada>0) vivo = '<span class="badge b-ambar">🚚 en proceso de entrega</span>';
+      else if(st==='EN PROCESO') vivo = '<span class="badge b-ambar">⏳ en proceso en Indar</span>';
       else vivo = '<span class="badge b-gris">⏳ confirmada, sin surtir</span>';
-      if(+pi.cant_facturada>0 && !fs.length) vivo += '<br><span class="badge b-rojo">⚠️ falta subir XML</span>';
+      if((+pi.cant_facturada>0 || st==='FACTURADO') && !fs.length) vivo += '<br><span class="badge b-rojo">⚠️ falta subir XML</span>';
+      if(st==='CANCELADO' && vivasIt.length && puedeVender() && window._pedAct) vivo += '<br><button class="btn sm sec" onclick="event.stopPropagation(); cancelarParteIndar('+(+window._pedAct.id)+', \''+esc(String(p))+'\', this)">✖ Cancelar sus partidas en Axion</button>';
       vivo += '<br><span class="muted small">'+tiempoRel(pi.actualizado)+'</span>';
     }
     const fh = fs.length ? fs.map(function(f){ return '🧾 <b>'+esc(f.folio)+'</b>'+((esFinanzas()||puedeVender())?' ('+fmt(f.total)+')'+(f.pdf_path?' <button class="btn sm sec" onclick="verPdfFactura(\''+esc(f.pdf_path)+'\')">📄 Ver</button>':btnPdfFactura(f)):''); }).join('<br>') : '<span class="muted small">sin factura aún</span>';
@@ -513,19 +523,35 @@ async function procesarEstatusIndar(){
     if(h.indexOf('#indarst=') !== 0) return;
     history.replaceState(null, '', location.pathname + location.search);
     const data = JSON.parse(deB64(h.slice(9)));
-    const filas = (data.partes||[]).map(function(x){ return {pedido_id:+x.p, parte:String(x.so), cant_pedida:+x.ped||0, cant_empacada:+x.emp||0, cant_facturada:+x.fac||0, actualizado:new Date().toISOString()}; }).filter(function(f){ return f.pedido_id && f.parte; });
+    const filas = (data.partes||[]).map(function(x){ return {pedido_id:+x.p, parte:String(x.so), cant_pedida:+x.ped||0, cant_empacada:+x.emp||0, cant_facturada:+x.fac||0, actualizado:new Date().toISOString(),
+      estatus:(x.st?String(x.st).toUpperCase():null), tipo:(x.tp||null), num_factura:(x.nf||null), importe:(+x.imp||null)}; }).filter(function(f){ return f.pedido_id && f.parte; });
     if(!filas.length){ toast('Indar no regresó estatus', true); return; }
-    const r = await sb.from('partes_indar').upsert(filas, {onConflict:'pedido_id,parte'});
+    let r = await sb.from('partes_indar').upsert(filas, {onConflict:'pedido_id,parte'});
+    let sinSql54 = false;
+    if(r.error && /estatus|num_factura|importe|tipo|column/i.test(r.error.message||'')){ // v177: todavía no corren 54_estatus_indar_cancelados.sql
+      sinSql54 = true;
+      r = await sb.from('partes_indar').upsert(filas.map(function(f){ return {pedido_id:f.pedido_id, parte:f.parte, cant_pedida:f.cant_pedida, cant_empacada:f.cant_empacada, cant_facturada:f.cant_facturada, actualizado:f.actualizado}; }), {onConflict:'pedido_id,parte'});
+    }
     if(r.error){ toast(errMsg(r.error), true); return; }
     logEv('vista', 'estatus Indar actualizado: '+filas.length+' partes');
     // v125: detectar pedidos que Indar ya no reporta (posibles CANCELADOS) y partidas facturadas incompletas
     const conDato = new Set(filas.map(function(f){ return f.pedido_id; }));
     const abiertos = (await sb.from('pedidos_compra').select('id,folio_externo').in('estado',['enviado','parcial'])).data||[];
     const sinDato = abiertos.filter(function(p){ return !conDato.has(p.id); });
-    const cortas = filas.filter(function(f){ return f.cant_facturada < f.cant_pedida; });
+    const cortas = filas.filter(function(f){ return f.estatus!=='CANCELADO' && f.cant_pedida>0 && f.cant_facturada < f.cant_pedida; });
     const F = {}; abiertos.forEach(function(p){ F[p.id]=p.folio_externo; });
-    if(sinDato.length || cortas.length){
+    // v177: partes que Indar CANCELÓ (casi siempre backorders que ya no va a surtir) y que en Axion siguen vivas
+    let canceladas = filas.filter(function(f){ return f.estatus==='CANCELADO'; });
+    if(canceladas.length && !sinSql54){
+      const vivas = (await sb.from('pedido_compra_items').select('pedido_id,parte,importe').in('pedido_id', canceladas.map(function(f){ return f.pedido_id; })).eq('cancelada', false)).data||[];
+      const viva = {}; vivas.forEach(function(i){ const k = i.pedido_id+'|'+(i.parte||''); viva[k] = (viva[k]||0) + 1; });
+      canceladas = canceladas.map(function(f){ return Object.assign({}, f, {vivas: viva[f.pedido_id+'|'+f.parte]||0}); }).filter(function(f){ return f.vivas>0; });
+    }
+    if(sinDato.length || cortas.length || canceladas.length){
       abrirModal(`<h3>🔄 Estatus Indar: ${filas.length} parte(s) actualizadas</h3>
+        ${sinSql54?`<p class="small" style="color:#b91c1c">Para que Axion guarde el estatus (cancelado / en proceso / facturado) corre <b>54_estatus_indar_cancelados.sql</b> en Supabase.</p>`:''}
+        ${canceladas.length?`<div class="card" style="border-left:4px solid #b91c1c;background:#fef2f2;margin-bottom:8px"><b>✖ Indar CANCELÓ ${canceladas.length} parte(s)</b> — normalmente son los backorders (BO) que ya no va a surtir. Márcalas canceladas aquí para que dejen de contar como pendientes, "Recibir todo" no las meta al inventario y el pedido se cierre cuando llegue lo demás:
+          ${canceladas.map(f=>`<div style="margin-top:6px">#${esc(F[f.pedido_id]||f.pedido_id)} · parte <b>${esc(f.parte)}</b>${f.tipo==='BO'?' <span class="badge b-gris">BO</span>':''} · ${f.importe?fmt(f.importe):''} · ${f.vivas} partida(s) <button class="btn sm" style="margin-left:6px" onclick="cancelarParteIndar(${f.pedido_id}, '${esc(f.parte)}', this)">✖ Cancelar sus partidas</button></div>`).join('')}</div>`:''}
         ${sinDato.length?`<div class="card" style="border-left:4px solid var(--rojo);margin-bottom:8px"><b>⚠️ Indar ya no reporta ${sinDato.length} pedido(s) abiertos</b> — probablemente los CANCELÓ (confírmalo en el portal):
           ${sinDato.map(p=>`<div style="margin-top:6px">#${esc(p.folio_externo)} <button class="btn sm sec" onclick="marcarPedidoCancelado(${p.id})">✖ Marcar cancelado</button></div>`).join('')}</div>`:''}
         ${cortas.length?`<div class="card" style="border-left:4px solid var(--ambar);margin-bottom:8px"><b>📉 ${cortas.length} parte(s) facturadas incompletas</b> — si el pedido ya llegó, esas piezas Indar las canceló (no hay backorder: hay que repedirlas):
@@ -536,6 +562,18 @@ async function procesarEstatusIndar(){
       irA('pedidos');
     }
   }catch(e){ toast('No pude leer el estatus que regresó Indar', true); }
+}
+// v177: Indar canceló una parte → sus partidas quedan canceladas en Axion (RPC cancelar_parte_indar, SQL 54)
+async function cancelarParteIndar(pedidoId, parte, btn){
+  if(!confirm('¿Marcar canceladas las partidas de la parte '+parte+'?\n\nSolo se cancela lo que NO se ha recibido. Ya no contarán como pendientes ni entrarán al inventario. Si Indar la vuelve a surtir, se importa como pedido nuevo.')) return;
+  const r = await sb.rpc('cancelar_parte_indar', {p_pedido_id:+pedidoId, p_parte:String(parte)});
+  if(r.error){ toast(/function|cancelar_parte_indar/i.test(r.error.message||'') ? 'Falta correr 54_estatus_indar_cancelados.sql en Supabase' : errMsg(r.error), true); return; }
+  const d = r.data||{};
+  toast(`Parte ${parte}: ${d.partidas||0} partida(s) canceladas (${fmt(d.importe_cancelado||0)} sin IVA)${d.pendientes===0?' · el pedido quedó completo ✓':''}`);
+  logEv('pedido', 'parte cancelada por Indar: '+parte+' ('+(d.partidas||0)+' partidas, '+fmt(d.importe_cancelado||0)+')');
+  if(btn){ btn.outerHTML = '<span class="badge b-verde">✓ canceladas</span>'; }
+  if(window._pedAct && +window._pedAct.id===+pedidoId){ verPedido(+pedidoId, d.pendientes===0 ? 'recibido' : window._pedAct.estado); }
+  else if(typeof vPedidos==='function' && $('v-pedidos') && $('v-pedidos').classList.contains('activa')) vPedidos();
 }
 async function marcarPedidoCancelado(id){
   const r = await sb.from('pedidos_compra').update({estado:'cancelado'}).eq('id',id).select('folio_externo');
@@ -3585,7 +3623,8 @@ async function verPedido(id, estado){
   window._pedFolioAct = pedFolio; window._recOk = false; window._pedAct = {id:id, estado:estado}; // v154: para refrescar tras adjuntar un PDF
   window._pindPed = {}; pindar.forEach(z=>{ window._pindPed[String(z.parte)] = z; });
   pedItems = data;
-  const tot = data.reduce((s,i)=>s+ +i.importe,0);
+  const tot = data.filter(i=>!i.cancelada).reduce((s,i)=>s+ +i.importe,0); // v177: sin las canceladas por Indar
+  const nCanc = data.filter(i=>i.cancelada).length;
   const recibiendo = puedeVender() && ['enviado','parcial'].includes(estado);
   const editando = esAdmin() && ['enviado','parcial'].includes(estado); // editar cantidades/quitar: solo admin
   const verCostos = esFinanzas(); // columnas de costo/importe: solo admin/contador
@@ -3596,6 +3635,8 @@ async function verPedido(id, estado){
   for(const i of data){ const p = i.parte || ''; if(!grupos.has(p)) grupos.set(p, []); grupos.get(p).push(i); }
   const fila = i => {
     const rec = +(i.cantidad_recibida||0), pend = +i.cantidad - rec;
+    if(i.cancelada) return `<tr style="opacity:.6"><td><s>${esc(i.productos?.codigo)} · ${esc((i.productos?.descripcion||'').slice(0,45))}</s> <span class="badge b-rojo">✖ cancelada por Indar</span></td>
+      <td class="num"><s>${+i.cantidad}</s></td><td class="num">—</td>${recibiendo?'<td class="num">—</td>':''}${verCostos?`<td class="num muted">${fmt(i.costo_unit)}</td><td class="num muted"><s>${fmt(i.importe)}</s></td>`:''}${editando?'<td></td>':''}${puedeVender()?'<td></td>':''}</tr>`;
     return `<tr><td>${esc(i.productos?.codigo)} · ${esc((i.productos?.descripcion||'').slice(0,45))}</td>
       <td class="num">${editando?`<input id="ped-cant-${i.id}" type="number" min="${Math.max(rec,1)}" value="${+i.cantidad}" style="width:64px;padding:5px;border:1px solid var(--linea);border-radius:6px;text-align:right">`:(+i.cantidad)}</td>
       <td class="num"><span class="badge ${pend<=0?'b-verde':(rec>0?'b-ambar':'b-gris')}">${rec}</span></td>
@@ -3605,16 +3646,18 @@ async function verPedido(id, estado){
       ${puedeVender()?`<td style="text-align:center;white-space:nowrap">${(devPorProd[i.producto_id]||[]).map(d=>`<span class="badge ${['nota_credito','repuesto'].includes(d.estado)?'b-verde':'b-ambar'}" title="${esc(d.detalle||'')}">↩️ ${+d.cantidad} ${nomDev[d.estado]||d.estado}</span>`).join(' ')}
         <button class="btn sec sm" title="Llegó dañado o equivocado" onclick='reportarDevolucion(${JSON.stringify({id:i.id,pid:i.producto_id,ped:id,parte:i.parte||'',d:(i.productos?i.productos.codigo+' · '+i.productos.descripcion:''),c:+i.costo_unit,q:+i.cantidad}).replace(/'/g,"&#39;")})'>⚠️</button></td>`:''}</tr>`;
   };
-  const badgesParte = its => {
+  const badgesParte = itsAll => {
+    const its = itsAll.filter(i=>!i.cancelada); // v177
+    if(!its.length) return '<span class="badge b-rojo">✖ cancelada por Indar</span>';
     const ped = its.reduce((s,i)=>s+ +i.cantidad,0), rec = its.reduce((s,i)=>s+ +(i.cantidad_recibida||0),0), fac = its.reduce((s,i)=>s+ +(i.cantidad_facturada||0),0);
     return (rec>=ped ? '<span class="badge b-verde">recibida ✓</span>' : (rec>0 ? `<span class="badge b-ambar">parcial ${rec}/${ped}</span>` : '<span class="badge b-gris">pendiente</span>'))
       + (fac>0 ? ' <span class="badge b-azul">🧾 facturada</span>' : ' <span class="badge b-gris" title="Aún no llega su factura XML">sin factura</span>');
   };
   const cuerpo = [...grupos.entries()].map(([p, its])=>`
     <tr id="pt-${esc(p)}" style="background:#eef1f5"><td colspan="${nCols}" style="padding:9px 8px"><b>${p ? 'Parte '+esc(p) : (grupos.size>1 ? 'Sin parte' : 'Pedido completo')}</b> · ${its.length} partida(s) · ${badgesParte(its)}
-      ${recibiendo && its.some(i=>+i.cantidad>+(i.cantidad_recibida||0)) ? `<button class="btn sm" style="margin-left:8px" onclick="llenarParte('${esc(p)}')">📦 Recibir esta parte</button>` : ''}</td></tr>
+      ${recibiendo && its.some(i=>!i.cancelada && +i.cantidad>+(i.cantidad_recibida||0)) ? `<button class="btn sm" style="margin-left:8px" onclick="llenarParte('${esc(p)}')">📦 Recibir esta parte</button>` : ''}</td></tr>
     ${its.map(fila).join('')}`).join('');
-  abrirModal(`<h3>Partidas del pedido (${data.length}${grupos.size>1?` · ${grupos.size} partes`:''})</h3>
+  abrirModal(`<h3>Partidas del pedido (${data.length}${grupos.size>1?` · ${grupos.size} partes`:''}${nCanc?` · <span style="color:#b91c1c">${nCanc} cancelada${nCanc>1?'s':''} por Indar</span>`:''})</h3>
     ${resumenPartes(grupos, facturas, data, pindar)}
     ${devs.length?`<div class="card" style="border-left:4px solid ${devs.some(d=>['pendiente','recogido'].includes(d.estado))?'#d97706':'#15803d'};padding:10px;margin-bottom:10px">
       <b>↩️ Este pedido tiene ${devs.length} devolución(es) con Indar:</b>
@@ -3677,7 +3720,7 @@ async function verEvidencia(path){
   window.open(data.signedUrl, '_blank');
 }
 function llenarParte(p){
-  pedItems.forEach(i=>{ if((i.parte||'')===p){ const el=$('rec-'+i.id); if(el) el.value = Math.max(0, +i.cantidad - +(i.cantidad_recibida||0)); } });
+  pedItems.forEach(i=>{ if((i.parte||'')===p && !i.cancelada){ const el=$('rec-'+i.id); if(el) el.value = Math.max(0, +i.cantidad - +(i.cantidad_recibida||0)); } });
   toast('Cantidades de la parte llenadas — coteja contra la factura y registra la recepción');
 }
 async function guardarCambiosPedido(pedidoId){
@@ -3693,16 +3736,16 @@ async function guardarCambiosPedido(pedidoId){
       }
     }
     if(!cambios){ toast('No hay cambios que guardar'); return; }
-    const {data:items, error:e2} = await sb.from('pedido_compra_items').select('importe').eq('pedido_id', pedidoId);
+    const {data:items, error:e2} = await sb.from('pedido_compra_items').select('*').eq('pedido_id', pedidoId);
     if(e2) throw e2;
-    const sub = Math.round(items.reduce((s,i)=>s+ +i.importe,0)*100)/100;
+    const sub = Math.round(items.filter(i=>!i.cancelada).reduce((s,i)=>s+ +i.importe,0)*100)/100; // v177: sin canceladas
     const iva = Math.round(sub*16)/100;
     await sb.from('pedidos_compra').update({subtotal:sub, iva, total: Math.round((sub+iva)*100)/100}).eq('id', pedidoId);
     cerrarModal(); toast(cambios+' cambio(s) guardados; totales recalculados'); vPedidos();
   }catch(e){ toast(errMsg(e), true); }
 }
 function llenarPendiente(){
-  pedItems.forEach(i=>{ const el=$('rec-'+i.id); if(el) el.value = +i.cantidad - +(i.cantidad_recibida||0); });
+  pedItems.forEach(i=>{ if(i.cancelada) return; const el=$('rec-'+i.id); if(el) el.value = +i.cantidad - +(i.cantidad_recibida||0); });
 }
 async function registrarRecepcion(pedidoId){
   const items = pedItems.map(i=>({item_id:i.id, cantidad:+($('rec-'+i.id)?.value||0)})).filter(x=>x.cantidad>0);
@@ -6291,16 +6334,28 @@ async function axBM(){
     if(location.hash.indexOf('\x23axq=')===0){
       var MQ=function(t){var e=document.getElementById('axmsg');if(!e){e=document.createElement('div');e.id='axmsg';e.style.cssText='position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:99999;background:#26292b;color:#fff;padding:12px 22px;border-radius:10px;font:14px sans-serif;border-left:5px solid #E8790F';document.body.appendChild(e);}e.textContent='Axion: '+t;};
       var q0=JSON.parse(decodeURIComponent(escape(atob(location.hash.slice(5).replace(/-/g,'+').replace(/_/g,'/')))));
+      var stM={};
+      try{
+        MQ('leyendo estatus de tus pedidos...');
+        var cidQel=document.getElementById('codCustomer');
+        var cidQ=(cidQel&&cidQel.innerText.trim())||((document.body.innerText.match(/C0\d{5,}/)||[])[0])||'C027242';
+        var rq=await fetch('/pedidosAnteriores/getOrdersCompanyId',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','X-CSRF-TOKEN':T,'X-Requested-With':'XMLHttpRequest'},body:'companyId='+encodeURIComponent(cidQ)});
+        var jq=await rq.json();
+        if(Array.isArray(jq)){for(var k0=0;k0<jq.length;k0++){stM[String(jq[k0].numPedido)]=jq[k0];}}
+      }catch(e8){}
       var out0=[];
       for(var q1=0;q1<q0.length;q1++){
         MQ('consultando estatus '+(q1+1)+'/'+q0.length+'...');
+        var so0=String(q0[q1].so),r9=stM[so0]||{},st0=String(r9.status||'').toUpperCase();
         try{
-          var r0=await fetch('/pedidosAnteriores/getDetalleFacturado',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','X-CSRF-TOKEN':T,'X-Requested-With':'XMLHttpRequest'},body:'id='+q0[q1].so});
-          var j0=await r0.json();
-          var a0=Array.isArray(j0)?j0:((j0&&j0.items)||[]);
           var s1=0,s2=0,s3=0;
-          for(var q2=0;q2<a0.length;q2++){s1+=+a0[q2].cantPedido||0;s2+=+a0[q2].cantEmpacada||0;s3+=+a0[q2].cantFacturada||0;}
-          out0.push({p:q0[q1].p,so:String(q0[q1].so),ped:s1,emp:s2,fac:s3});
+          if(st0!=='CANCELADO'){
+            var r0=await fetch('/pedidosAnteriores/getDetalleFacturado',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','X-CSRF-TOKEN':T,'X-Requested-With':'XMLHttpRequest'},body:'id='+so0});
+            var j0=await r0.json();
+            var a0=Array.isArray(j0)?j0:((j0&&j0.items)||[]);
+            for(var q2=0;q2<a0.length;q2++){s1+=+a0[q2].cantPedido||0;s2+=+a0[q2].cantEmpacada||0;s3+=+a0[q2].cantFacturada||0;}
+          }
+          out0.push({p:q0[q1].p,so:so0,ped:s1,emp:s2,fac:s3,st:st0,tp:String(r9.tipo||''),nf:(r9.numFactura==null?'':String(r9.numFactura)),imp:+r9.importePedido||0});
         }catch(e9){}
       }
       MQ('listo: '+out0.length+' partes, regresando a Axion...');
