@@ -2714,6 +2714,7 @@ async function imprimirCot(id){
   const q = c.data, items = it.data;
   const cliente = q.clientes?.nombre || q.cliente_texto || 'Público en general';
   const vence = new Date(q.fecha); vence.setDate(vence.getDate()+q.vigencia_dias);
+  const subSinIva = Math.round(+q.total/1.16*100)/100, ivaCot = Math.round((+q.total-subSinIva)*100)/100; // v176: desglose al pie
   const w = window.open('','_blank');
   if(!w){ toast('Permite las ventanas emergentes para imprimir', true); return; }
   w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Cotización C-${q.folio} · Axion Tools</title>
@@ -2737,7 +2738,9 @@ async function imprimirCot(id){
     <td style="width:46px">${i.codigo?`<img src="https://storage.googleapis.com/indararticulos/${encodeURIComponent(i.codigo.replace(/[^A-Za-z0-9]/g,'_'))}_MD.webp" style="width:42px;height:42px;object-fit:contain;border-radius:4px" onerror="this.style.display='none'">`:''}</td>
     <td>${esc(i.codigo)}</td><td>${esc(i.descripcion)}</td>
     <td class="num">${+i.cantidad}</td><td class="num">${fmt(i.precio_unit)}</td><td class="num">${fmt(i.importe)}</td></tr>`).join('')}</tbody>
-  <tfoot><tr><td colspan="5" class="num tot">TOTAL (IVA incluido)</td><td class="num tot">${fmt(q.total)}</td></tr></tfoot></table>
+  <tfoot><tr><td colspan="5" class="num" style="border-bottom:none;padding-top:12px">Importe (sin IVA)</td><td class="num" style="border-bottom:none;padding-top:12px"><b>${fmt(subSinIva)}</b></td></tr>
+  <tr><td colspan="5" class="num" style="border-bottom:none">IVA 16%</td><td class="num" style="border-bottom:none"><b>${fmt(ivaCot)}</b></td></tr>
+  <tr><td colspan="5" class="num tot" style="border-top:2px solid #26292b">TOTAL (IVA incluido)</td><td class="num tot" style="border-top:2px solid #26292b">${fmt(q.total)}</td></tr></tfoot></table>
   ${q.notas?`<p><b>Notas:</b> ${esc(q.notas)}</p>`:''}
   <div class="pie">Precios en pesos mexicanos con IVA incluido, sujetos a cambio sin previo aviso después de la vigencia. Sujeto a disponibilidad de existencias.</div>
   <p class="noprint" style="margin-top:20px"><button onclick="window.print()" style="padding:10px 18px;background:#E8790F;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer">🖨 Imprimir / Guardar PDF</button></p>
