@@ -2725,6 +2725,7 @@ async function imprimirCot(id){
   td{padding:7px 9px;border-bottom:1px solid #e5e5e5}
   .num{text-align:right}.tot{font-size:17px;font-weight:bold}
   .pie{margin-top:26px;font-size:11px;color:#777;border-top:1px solid #ddd;padding-top:10px}
+  thead{display:table-header-group}tfoot{display:table-row-group}tr{page-break-inside:avoid}
   @media print{.noprint{display:none}}</style></head><body>
   <div class="top"><div><h1 style="line-height:1"><img src="https://axiontools.mx/logo-axion.png" alt="Axion Tools" style="height:46px"></h1><div class="mut">Distribuidora Axion · Ferretería y materiales · Disensa<br>
   Av. Fidel Velázquez Sánchez 788, Santa Elena Estadio, Guadalajara, Jal. · Tel 33 1010 7423</div></div>
@@ -7164,7 +7165,7 @@ function cotizarRequisicion(obra){
     return {codigo:p.cod||'', desc:p.desc+ley, cantidad:p.cant, precio, costo:0, sugerido:precio, producto_id:null};
   }).filter(Boolean);
   if(!window._preCot.length){ toast('No hay partidas con precio para cotizar', true); return; }
-  const nota = (sinPrecio.length && !incluirSin) ? 'Sujeto a volumen (se cotiza aparte): '+sinPrecio.map(s=>String(s).slice(0,38)).slice(0,6).join(', ')+(sinPrecio.length>6?' y '+(sinPrecio.length-6)+' más':'') : '';
+  const nota = (sinPrecio.length && !incluirSin) ? 'Precio sujeto a volumen, se cotiza aparte: '+sinPrecio.slice(0,5).map(s=>String(s).toLowerCase()).join('; ')+(sinPrecio.length>5?' y '+(sinPrecio.length-5)+' más':'')+'.' : '';
   irA('cotizaciones').then(()=>{ nuevaCot(); setTimeout(()=>{ const el=$('ct-cliente-txt'); if(el && obra) el.value = 'Constructora · '+obra;
     const n=$('ct-notas'); if(n && nota) n.value = (n.value ? n.value+' · ' : '') + nota; }, 600); });
 }
