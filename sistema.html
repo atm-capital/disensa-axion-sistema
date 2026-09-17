@@ -6503,8 +6503,8 @@ async function vImportar(){
         <p class="small muted" id="rq-status" style="margin-top:8px"></p>
         <div id="rq-res"></div>
       </div>
-      <div class="card"><h3>📥 Pedido de cliente — cualquier formato</h3>
-        <p class="small muted" style="margin-bottom:10px">Para Excel de otros clientes: súbelo, te muestro las primeras filas, y con 2 clics me dices cuál columna es la <b>cantidad</b> y cuál la <b>descripción</b>. El sistema recuerda el formato de cada cliente para la próxima.</p>
+      <div class="card"><h3>📥 Excel de cliente o lista de precios — cualquier formato</h3>
+        <p class="small muted" style="margin-bottom:10px">Sube el Excel (pedido de un cliente, requisición o una lista de precios armada en Excel). El sistema detecta solo las columnas de <b>código, descripción, cantidad y precio</b> (las puedes corregir arriba de cada columna) y cruza contra el catálogo: primero por <b>código</b>, luego por descripción exacta y al final por parecido. Si el Excel trae precio, ese es el que se cotiza. Recuerda el formato de cada archivo para la próxima.</p>
         <div class="field"><input type="file" id="pl-file" accept=".xlsx,.xls,.csv"></div>
         <button class="btn" onclick="leerPedidoLibre()">Leer archivo</button>
         <p class="small" id="pl-status" style="margin-top:8px;font-weight:600"></p>
@@ -6669,7 +6669,7 @@ function impEditar(idx, campo, val){
   impGuardarDatos(); impPintar();
 }
 let reqParsed = [];
-let plRows = [], plPick = {c:null, d:null}, plSig = '';
+let plRows = [], plPick = {h:null, c:null, cod:null, ds:[], px:null, pxIva:true}, plSig = '';
 /* ===== FACTURAS XML (CFDI) ===== */
 let fxDocs = [], fxPedidos = [];
 function fxParseXML(texto, nombre){
@@ -6879,64 +6879,165 @@ function mxScore(qToks, candDesc){
   for(const t of qToks){ tot += t.length; if(C.includes(t)) hit += t.length; }
   return tot ? hit/tot : 0;
 }
+// ===== v174: cruce de Excel de cliente / lista de precios contra el catálogo =====
+// Antes: solo buscaba por descripción con ilike '%tok%tok%' (lento: ~2 s por consulta, 4 por renglón)
+// y con limit 6 sin orden, así que renglones IDÉNTICOS al catálogo salían sin match o con el vecino
+// equivocado (cemento 25 kg → 50 kg, clavo 2" → 1"). Ahora: (1) por CÓDIGO exacto (lista Indar y mis
+// productos), (2) por descripción exacta, (3) parecido calculado en el navegador contra el catálogo
+// completo (se descarga una vez por sesión) con los números/medidas pesando más. Además el Excel puede
+// traer PRECIO (c/IVA o s/IVA): ese es el precio que se cotiza; si no trae, va nuestro precio o el sugerido.
+function mxToks2(s){
+  const t = normTxt(s).replace(/(\d)([A-Z]+)/g,'$1 $2').replace(/([A-Z])(\d)/g,'$1 $2').split(/\s+/).filter(Boolean);
+  const out = [];
+  for(const x of t){ if(/^\d/.test(x) || /\//.test(x)) out.push(x); else if(x.length>2 && !MX_STOP.has(x)) out.push(x); }
+  return out;
+}
+function mxScore2(qT, candNorm){
+  // qT: tokens de lo que pide el cliente · candNorm: descripción del catálogo ya normalizada
+  const C = ' '+candNorm.replace(/(\d)([A-Z]+)/g,'$1 $2').replace(/([A-Z])(\d)/g,'$1 $2').replace(/\s+/g,' ')+' ';
+  let hit = 0, tot = 0, numFalta = 0, numTot = 0;
+  for(const t of qT){
+    const esNum = /^\d/.test(t) || /\//.test(t);
+    const w = esNum ? Math.max(3, t.length)*2 : t.length;
+    tot += w;
+    const ok = esNum ? C.includes(' '+t+' ') : C.includes(t);
+    if(ok) hit += w; else if(esNum){ numFalta++; }
+    if(esNum) numTot++;
+  }
+  let s = tot ? hit/tot : 0;
+  if(numTot && numFalta) s = Math.min(s, 0.4);          // una medida que no cuadra = no es el mismo producto
+  return s;
+}
+async function liCatalogo(st){
+  const c = window._liCat; if(c && Date.now()-c.t < 1800e3) return c;
+  const PAG = 1000; let desde = 0, rows = [];
+  while(true){
+    if(st) st(`Descargando catálogo Indar para cruzar… ${rows.length.toLocaleString('es-MX')}`);
+    const r = await sb.from('lista_indar').select('codigo,descripcion,categoria,precio_lista,promo_pct,precio_sugerido').order('codigo').range(desde, desde+PAG-1);
+    if(r.error) throw r.error;
+    rows = rows.concat(r.data||[]); if((r.data||[]).length < PAG || desde > 60000) break; desde += PAG;
+  }
+  const items = rows.filter(x=>x.categoria!=='DESCONT X INDAR').map(x=>Object.assign(x, {n: normTxt(x.descripcion).replace(/\s+/g,' ').trim()}));
+  window._liCat = {t:Date.now(), items, porCod: new Map(items.map(x=>[x.codigo, x])), porCodSin: new Map(items.map(x=>[x.codigo.replace(/\s+/g,'').toUpperCase(), x])), porDesc: new Map(items.map(x=>[x.n, x]))};
+  return window._liCat;
+}
 async function matchPartidas(partidas, st){
+  st = st || (()=>{});
+  const cat = await liCatalogo(st);
+  // mis productos: por código, para usar producto_id, precio y costo propios
+  const cods = [...new Set(partidas.map(p=>(p.cod||'').trim()).filter(Boolean))];
+  const mios = new Map();
+  for(let i=0;i<cods.length;i+=200){
+    const r = await sb.from('productos').select('id,codigo,descripcion,precio,costo,stock,activo').in('codigo', cods.slice(i,i+200)).eq('activo', true);
+    (r.data||[]).forEach(m=>mios.set(m.codigo, m));
+  }
+  const conMio = (c) => { if(!c) return c; const m = mios.get(c.codigo); return Object.assign({}, c, {mio: m||null}); };
+  const limpiaCod = s => String(s||'').trim().replace(/\s*\((truper|pretul|fiero|local)\)\s*$/i,'').trim();
   for(let i=0;i<partidas.length;i++){
-    const p = partidas[i];
-    const toks = mxToks(p.desc).sort((a,b)=>b.length-a.length).slice(0,4);
-    const cands = new Map();
-    const pats = [];
-    if(toks.length>1){ pats.push(`%${toks[0]}%${toks[1]}%`, `%${toks[1]}%${toks[0]}%`); }
-    if(toks[0]) pats.push(`%${toks[0]}%`);
-    if(toks[1]) pats.push(`%${toks[1]}%`);
-    for(const pat of pats){
-      const {data} = await sb.from('lista_indar').select('codigo,descripcion,precio_lista,promo_pct,precio_sugerido').ilike('descripcion', pat).limit(6);
-      for(const c of (data||[])) if(!cands.has(c.codigo)) cands.set(c.codigo, c);
-      if(cands.size >= 12) break;
+    const p = partidas[i]; p.alts = []; p.via = '';
+    const cod = limpiaCod(p.cod);
+    // 1) código exacto (con o sin espacios)
+    if(cod){
+      const c = cat.porCod.get(cod) || cat.porCod.get(cod.toUpperCase()) || cat.porCodSin.get(cod.replace(/\s+/g,'').toUpperCase());
+      if(c){ p.alts.push(Object.assign(conMio(c), {score:1, via:'código'})); p.via = 'código'; }
     }
-    const qT = mxToks(p.desc);
-    p.alts = [...cands.values()].map(c=>({...c, score: mxScore(qT, c.descripcion)}))
-      .sort((a,b)=>b.score-a.score).slice(0,4);
-    p.match = (p.alts[0] && p.alts[0].score >= 0.45) ? p.alts[0] : null;
+    // 2) descripción exacta
+    const dn = normTxt(p.desc).replace(/\s+/g,' ').trim();
+    if(!p.alts.length && dn){ const c = cat.porDesc.get(dn); if(c){ p.alts.push(Object.assign(conMio(c), {score:0.98, via:'descripción'})); p.via = 'descripción'; } }
+    // 3) parecido (local): top 4 por puntaje, solo si comparten al menos una palabra clave
+    const qT = mxToks2(p.desc);
+    if(qT.length){
+      const pal = qT.filter(t=>!/^\d/.test(t) && !/\//.test(t)).sort((a,b)=>b.length-a.length).slice(0,3);
+      const yaCod = new Set(p.alts.map(a=>a.codigo));
+      const top = [];
+      for(const c of cat.items){
+        if(pal.length && !pal.some(w=>c.n.includes(w))) continue;
+        const s = mxScore2(qT, c.n); if(s < 0.3) continue;
+        if(top.length < 4){ top.push({c, s}); top.sort((a,b)=>b.s-a.s); }
+        else if(s > top[3].s){ top[3] = {c, s}; top.sort((a,b)=>b.s-a.s); }
+      }
+      for(const t of top){ if(!yaCod.has(t.c.codigo)) p.alts.push(Object.assign(conMio(t.c), {score:t.s, via:'parecido'})); }
+      if(!p.via && p.alts.length && p.alts[0].score >= 0.6) p.via = 'parecido';
+    }
+    p.match = p.via ? p.alts[0] : null;
     p.sel = p.match ? 0 : -1;
-    st(`Cruzando ${i+1}/${partidas.length}...`);
+    if(i%10===0) st(`Cruzando ${i+1}/${partidas.length}…`);
+    if(i%25===0) await new Promise(r=>setTimeout(r,0));
   }
   return partidas;
 }
+// precio que se va a cotizar para la partida: el del Excel (si trae) → el nuestro (si lo vendemos) → sugerido Indar
+function mxPrecioBase(p){
+  const m = p.sel>=0 ? p.alts[p.sel] : null;
+  if(p.px>0) return +p.px;
+  if(p.sinPx) return 0;
+  if(m && m.mio && +m.mio.precio>0) return +m.mio.precio;
+  if(m) return +m.precio_sugerido||0;
+  return +p.pu||0;
+}
+function mxPrecioCot(p){ const b = mxPrecioBase(p); if(!(b>0)) return 0; return (window._mxRedondear!==false) ? Math.ceil(b-0.001) : Math.round(b*100)/100; }
 function mxRender(targetId, partidas, obra){
-  const con = partidas.filter(p=>p.match).length;
+  const via = k => partidas.filter(p=>p.sel>=0 && p.alts[p.sel].via===k).length;
+  const libres = partidas.filter(p=>p.sel<0).length, sinPrecio = partidas.filter(p=>!(mxPrecioCot(p)>0)).length;
+  const fin = esFinanzas();
   $(targetId).innerHTML = `
     <p style="margin:10px 0"><b>${obra?('Obra: '+esc(obra)+' · '):''}${partidas.length} partidas</b> ·
-      <span class="badge b-verde">${con} con match</span> <span class="badge b-ambar">${partidas.length-con} libres</span>
-      <span class="small muted">— revisa cada renglón: puedes cambiar el match o mandarlo a libre</span></p>
-    <div class="tbl-scroll" style="max-height:380px;overflow-y:auto"><table>
-    <thead><tr><th>Piden</th><th class="num">Cant</th><th class="num">Pagan</th><th>Match (elige)</th><th class="num">Nuestro</th><th class="num">vs pagan</th></tr></thead>
+      <span class="badge b-verde">${via('código')} por código</span> <span class="badge b-verde">${via('descripción')} por descripción</span>
+      <span class="badge b-azul">${via('parecido')} parecidos</span> <span class="badge b-ambar">${libres} libres</span>${sinPrecio?` <span class="badge b-rojo">${sinPrecio} sin precio</span>`:''}
+      <span class="small muted">— revisa los parecidos y libres: puedes cambiar el match o mandarlo a libre</span></p>
+    <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin:0 0 8px" class="small">
+      <label><input type="checkbox" ${window._mxRedondear!==false?'checked':''} onchange="window._mxRedondear=this.checked; mxRender('${targetId}', reqParsed, window._mxObra||'')"> Redondear precios al peso (hacia arriba)</label>
+      <label><input type="checkbox" ${window._mxSinPrecio?'checked':''} onchange="window._mxSinPrecio=this.checked; mxRender('${targetId}', reqParsed, window._mxObra||'')"> Incluir en la cotización los renglones SIN precio (a $0, con leyenda)</label>
+    </div>
+    <div class="tbl-scroll" style="max-height:420px;overflow-y:auto"><table>
+    <thead><tr><th>Piden</th><th class="num">Cant</th><th class="num">Precio Excel</th><th>Match (elige)</th><th class="num">Nuestro</th><th class="num">A cotizar</th>${fin?'<th class="num">Margen</th>':''}</tr></thead>
     <tbody>${partidas.map((p,i)=>{
       const sel = p.sel>=0 ? p.alts[p.sel] : null;
-      const comp = (sel && p.pu) ? ((+sel.precio_sugerido - p.pu)/p.pu*100) : null;
-      return `<tr>
-      <td>${esc(p.desc.slice(0,40))}</td><td class="num">${p.cant}</td>
-      <td class="num">${p.pu?fmt(p.pu):'—'}</td>
-      <td><select style="max-width:290px" onchange="mxCambiar('${targetId}', ${i}, this.value)">
+      const pc = mxPrecioCot(p);
+      const nuestro = sel ? (sel.mio && +sel.mio.precio>0 ? +sel.mio.precio : +sel.precio_sugerido) : 0;
+      const costo = sel ? (sel.mio && +sel.mio.costo>0 ? +sel.mio.costo : +sel.precio_lista) : 0;
+      const mg = (fin && pc>0 && costo>0) ? margenSV(pc, costo) : null;
+      const bV = {'código':'b-verde','descripción':'b-verde','parecido':'b-azul'};
+      return `<tr${p.sel<0?' style="background:#fffbeb"':''}>
+      <td>${p.cod?`<b>${esc(p.cod)}</b><br>`:''}<span class="small">${esc(p.desc.slice(0,60))}</span></td><td class="num">${p.cant}</td>
+      <td class="num">${p.px>0?fmt(p.px):(p.pxNota?`<span class="small muted" title="${esc(p.pxNota)}">${esc(p.pxNota.slice(0,18))}</span>`:(p.pu?fmt(p.pu):'—'))}</td>
+      <td><select style="max-width:300px" onchange="mxCambiar('${targetId}', ${i}, this.value)">
         <option value="-1" ${p.sel<0?'selected':''}>— partida libre (sin match) —</option>
-        ${p.alts.map((a,j)=>`<option value="${j}" ${p.sel===j?'selected':''}>${Math.round(a.score*100)}% · ${esc(a.codigo)} · ${esc(a.descripcion.slice(0,42))}</option>`).join('')}
-      </select></td>
-      <td class="num">${sel?fmt(sel.precio_sugerido):'—'}</td>
-      <td class="num">${comp!==null?`<span class="badge ${comp<=0?'b-verde':(comp<=15?'b-ambar':'b-rojo')}">${comp>0?'+':''}${comp.toFixed(0)}%</span>`:'—'}</td>
+        ${p.alts.map((a,j)=>`<option value="${j}" ${p.sel===j?'selected':''}>${a.via==='código'?'✓ código':(a.via==='descripción'?'✓ descripción':Math.round(a.score*100)+'%')} · ${esc(a.codigo)} · ${esc(a.descripcion.slice(0,40))}${a.mio?' · 🏪':''}</option>`).join('')}
+      </select>${sel?`<div class="small"><span class="badge ${bV[sel.via]||'b-gris'}">${esc(sel.via)}</span>${sel.mio?` <span class="badge b-verde" title="Lo vendemos en tienda">🏪 stock ${+sel.mio.stock||0}</span>`:''}</div>`:''}</td>
+      <td class="num small">${nuestro?fmt(nuestro):'—'}</td>
+      <td class="num">${pc>0?`<b>${fmt(pc)}</b>`:'<span class="badge b-rojo">sin precio</span>'}</td>
+      ${fin?`<td class="num">${mg===null?'—':`<span class="badge ${mg>=0.2?'b-verde':(mg>=0.1?'b-ambar':'b-rojo')}">${Math.round(mg*100)}%</span>`}</td>`:''}
       </tr>`;
     }).join('')}</tbody></table></div>
     <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn" onclick="cotizarRequisicion('${esc(obra||'').replace(/'/g,'')}')">📋 Crear cotización con esto</button>
       ${partidas.some(p=>p.sel<0) ? `<button class="btn sec" onclick="enviarLibres('${esc(obra||'').replace(/'/g,'')}')">📤 Mandar libres a proveedor</button>` : ''}</div>`;
 }
-function enviarLibres(obra){
-  const libres = reqParsed.filter(p=>p.sel<0);
-  if(!libres.length){ toast('No hay partidas libres'); return; }
-  const msj = `Hola, ¿me apoyas con precio y disponibilidad de esto?${obra?' ('+obra+')':''}\n\n` + libres.map(p=>`• ${p.cant} x ${p.desc}`).join('\n') + '\n\nGracias — Axion Tools';
-  window.open('https://wa.me/?text='+encodeURIComponent(msj), '_blank');
-}
 function mxCambiar(targetId, i, v){
   reqParsed[i].sel = +v;
   reqParsed[i].match = +v>=0 ? reqParsed[i].alts[+v] : null;
   mxRender(targetId, reqParsed, window._mxObra||'');
+}
+// --- Excel de cliente / lista de precios: detecta solas las columnas ---
+const PL_ROLES = [['','—'],['c','Cantidad'],['cod','Código'],['d','Descripción'],['d2','+Descripción'],['pxc','Precio c/IVA'],['pxs','Precio s/IVA']];
+function plDetectar(rows){
+  const re = {cod:/^(c[oó]digo|clave|sku|c[oó]d\.?|codigo indar|c[oó]digo indar|no\.? ?parte)$/i, d:/descripci|^producto$|^concepto$|art[ií]culo|^nombre$|^material$/i,
+    c:/^(cant|cantidad|qty|pzas?|piezas|unidades|cant\.|volumen)$/i, pxc:/precio.*(con|c\/)\s*iva/i, pxs:/precio.*(sin|s\/)\s*iva/i, px:/^(precio( unitario| venta| axion| de venta)?|p\.?u\.?|pu|unitario)$/i,
+    noPx:/costo|m[ií]nimo|mayoreo|competencia|anterior|lista indar/i};
+  for(let i=0;i<Math.min(rows.length,20);i++){
+    const r = rows[i]||[]; const pick = {h:i, c:null, cod:null, ds:[], px:null, pxIva:true};
+    let hits = 0;
+    r.forEach((v,j)=>{ const t = String(v??'').trim(); if(!t) return;
+      if(re.cod.test(t) && pick.cod===null){ pick.cod = j; hits++; }
+      else if(re.d.test(t)){ pick.ds.push(j); hits++; }
+      else if(re.c.test(t) && pick.c===null){ pick.c = j; hits++; }
+      else if(re.noPx.test(t)){ /* costo, mínimo, mayoreo… no son el precio a cotizar */ }
+      else if(re.pxc.test(t)){ if(pick.px===null || !pick.pxIva){ if(pick.px!==null){ pick.pxAlt = pick.px; pick.pxAltIva = pick.pxIva; } pick.px = j; pick.pxIva = true; } hits++; }
+      else if(re.pxs.test(t)){ if(pick.px===null){ pick.px = j; pick.pxIva = false; } else if(pick.pxAlt===undefined){ pick.pxAlt = j; pick.pxAltIva = false; } hits++; }
+      else if(re.px.test(t) && pick.px===null){ pick.px = j; pick.pxIva = true; hits++; } });
+    if(hits>=2 && (pick.ds.length || pick.cod!==null)) return pick;
+  }
+  return null;
 }
 async function leerPedidoLibre(){
   const f = $('pl-file').files[0];
@@ -6944,49 +7045,71 @@ async function leerPedidoLibre(){
   const wb = XLSX.read(await f.arrayBuffer(), {type:'array'});
   plRows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {header:1, defval:''});
   if(!plRows.length){ toast('El archivo está vacío', true); return; }
-  const nCols = Math.min(14, Math.max(...plRows.slice(0,15).map(r=>r.length)));
+  const nCols = Math.min(16, Math.max(...plRows.slice(0,25).map(r=>r.length)));
   plSig = 'axmap_' + normTxt(plRows.slice(0,3).flat().join('|')).replace(/\s+/g,'').slice(0,60);
   let guardado = null;
   try{ guardado = JSON.parse(localStorage.getItem(plSig)); }catch(e){}
-  plPick = guardado && Array.isArray(guardado.ds) ? guardado : (guardado && guardado.d!==undefined ? {c:guardado.c, ds:guardado.d!==null?[guardado.d]:[]} : {c:null, ds:[]});
-  $('pl-status').textContent = plPick.c!==null ? '✓ Formato conocido — revisa las columnas asignadas y dale Cruzar (o pica columnas para cambiar).' : 'Paso 1: da CLIC en el encabezado de la columna de CANTIDAD.';
-  $('pl-prev').innerHTML = `<table><thead><tr>${Array.from({length:nCols},(_,i)=>
-    `<th id="pl-col-${i}" style="cursor:pointer" onclick="plElegir(${i})"></th>`).join('')}</tr></thead>
-    <tbody>${plRows.slice(0,10).map(r=>`<tr>${Array.from({length:nCols},(_,i)=>`<td class="small">${esc(String(r[i]??'').slice(0,22))}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+  const det = plDetectar(plRows);
+  if(guardado && Array.isArray(guardado.ds)) plPick = Object.assign({h:det?det.h:null, c:null, cod:null, ds:[], px:null, pxIva:true}, guardado);
+  else if(det) plPick = det;
+  else plPick = {h:null, c:null, cod:null, ds:[], px:null, pxIva:true};
+  $('pl-status').textContent = (plPick.ds.length||plPick.cod!==null) ? (det&&!guardado ? '✓ Detecté las columnas solas — revísalas arriba de cada columna y dale Cruzar.' : '✓ Formato conocido — revisa las columnas y dale Cruzar.') : 'Dime qué es cada columna con los selectores de arriba (mínimo Código o Descripción).';
+  const desde = plPick.h!==null ? plPick.h : 0;
+  $('pl-prev').innerHTML = `<table><thead><tr>${Array.from({length:nCols},(_,i)=>`<th id="pl-col-${i}" style="min-width:90px"></th>`).join('')}</tr></thead>
+    <tbody>${plRows.slice(desde, desde+9).map(r=>`<tr>${Array.from({length:nCols},(_,i)=>`<td class="small">${esc(String(r[i]??'').slice(0,22))}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
   leerPedidoLibreRefresca();
 }
-function plElegir(i){
-  if(plPick.c===null){ plPick.c = i; $('pl-status').textContent = 'Paso 2: da CLIC en la columna de DESCRIPCIÓN.'; }
-  else if(i===plPick.c){ plPick = {c:null, ds:[]}; $('pl-status').textContent = 'Paso 1: da CLIC en la columna de CANTIDAD.'; }
-  else if(plPick.ds.includes(i)){ plPick.ds = plPick.ds.filter(x=>x!==i); }
-  else { plPick.ds.push(i); $('pl-status').textContent = '✓ Listo. Opcional: pica MÁS columnas de texto (especificaciones, detalle…) para sumarlas a la búsqueda, o dale Cruzar. Pica una asignada para quitarla.'; }
-  if(plPick.c!==null && plPick.ds.length) localStorage.setItem(plSig, JSON.stringify(plPick));
+function plRolDe(i){ if(plPick.c===i) return 'c'; if(plPick.cod===i) return 'cod'; if(plPick.px===i) return plPick.pxIva?'pxc':'pxs'; const k = plPick.ds.indexOf(i); if(k===0) return 'd'; if(k>0) return 'd2'; return ''; }
+function plAsignar(i, rol){
+  if(plPick.c===i) plPick.c = null; if(plPick.cod===i) plPick.cod = null; if(plPick.px===i) plPick.px = null; plPick.ds = plPick.ds.filter(x=>x!==i);
+  if(rol==='c') plPick.c = i; else if(rol==='cod') plPick.cod = i; else if(rol==='pxc'){ plPick.px = i; plPick.pxIva = true; } else if(rol==='pxs'){ plPick.px = i; plPick.pxIva = false; }
+  else if(rol==='d') plPick.ds.unshift(i); else if(rol==='d2') plPick.ds.push(i);
+  if(plPick.ds.length || plPick.cod!==null) localStorage.setItem(plSig, JSON.stringify(plPick));
   leerPedidoLibreRefresca();
 }
+function plElegir(i){ const r = plRolDe(i); const orden = ['','c','cod','d','d2','pxc','pxs']; plAsignar(i, orden[(orden.indexOf(r)+1)%orden.length]); }
 function leerPedidoLibreRefresca(){
   const letras = i => String.fromCharCode(65 + (i%26));
   document.querySelectorAll('[id^=pl-col-]').forEach((th,i)=>{
-    const nd = plPick.ds.indexOf(i);
-    th.style.background = plPick.c===i?'#dcfce7':(nd>=0?'#dbeafe':'');
-    th.textContent = letras(i) + (plPick.c===i?' =CANT':(nd===0?' =DESC':(nd>0?' +DESC'+(nd+1):'')));
+    const rol = plRolDe(i);
+    th.style.background = rol==='c'?'#dcfce7':(rol==='cod'?'#fef3c7':(rol==='d'||rol==='d2'?'#dbeafe':(rol?'#fce7f3':'')));
+    th.innerHTML = `<div class="small muted">${letras(i)}</div><select style="font-size:11px;padding:2px" onchange="plAsignar(${i}, this.value)">${PL_ROLES.map(([k,t])=>`<option value="${k}"${rol===k?' selected':''}>${t}</option>`).join('')}</select>`;
   });
-  $('pl-res').innerHTML = (plPick.c!==null && plPick.ds.length) ? `<button class="btn" style="margin-top:10px" onclick="cruzarPedidoLibre()">Cruzar contra catálogo</button>` : '';
+  const ok = plPick.ds.length || plPick.cod!==null;
+  $('pl-res').innerHTML = ok ? `<p class="small muted" style="margin:8px 0 0">${plPick.c===null?'Sin columna de cantidad: cada renglón entra con cantidad 1 (lista de precios). ':''}${plPick.px!==null?`Precio del Excel ${plPick.pxIva?'con IVA':'SIN IVA (se le suma el 16%)'}: ese es el que se cotiza.`:'Sin columna de precio: se cotiza a nuestro precio o al sugerido Indar.'}</p><button class="btn" style="margin-top:8px" onclick="cruzarPedidoLibre()">Cruzar contra catálogo</button>` : '';
 }
 async function cruzarPedidoLibre(){
   const partidas = [];
-  for(const r of plRows){
-    const cant = parseFloat(String(r[plPick.c]??'').replace(/[$,]/g,''));
+  const num = v => { const n = parseFloat(String(v??'').replace(/[$,\s]/g,'')); return isFinite(n) ? n : null; };
+  const esEnc = t => /^(c[oó]digo|clave|sku|descripci[oó]n|producto|concepto|cantidad|cant|precio.*)$/i.test(String(t||'').trim());
+  const desde = plPick.h!==null ? plPick.h+1 : 0;
+  for(let k=desde;k<plRows.length;k++){
+    const r = plRows[k];
+    const cod = plPick.cod!==null ? String(r[plPick.cod]??'').trim() : '';
     const desc = plPick.ds.map(d=>String(r[d]??'').trim()).filter(Boolean).join(' · ');
-    const d0 = String(r[plPick.ds[0]]??'').trim();
-    if(!isFinite(cant) || cant<=0 || d0.length<4 || !isNaN(parseFloat(d0))) continue;
-    partidas.push({cant, desc, pu:null});
+    if(!cod && desc.length<4) continue;                       // renglón vacío o encabezado de familia
+    if(esEnc(cod) || esEnc(desc)) continue;                    // encabezado repetido
+    if(!cod && !isNaN(parseFloat(desc)) && isFinite(desc)) continue;
+    let cant = 1;
+    if(plPick.c!==null){ const n = num(r[plPick.c]); if(n===null || n<=0) continue; cant = n; }
+    let px = null, pxNota = '';
+    if(plPick.px!==null){ const raw = r[plPick.px]; const n = num(raw); if(n!==null && n>0) px = plPick.pxIva ? n : Math.round(n*1.16*100)/100; else if(String(raw??'').trim()) pxNota = String(raw).trim(); }
+    if(px===null && plPick.pxAlt!==undefined && plPick.pxAlt!==null){ const raw = r[plPick.pxAlt]; const n = num(raw); // la otra columna de precio (sin/con IVA) como respaldo
+      if(n!==null && n>0 && !pxNota) px = plPick.pxAltIva ? n : Math.round(n*1.16*100)/100; else if(!pxNota && String(raw??'').trim()) pxNota = String(raw).trim(); }
+    partidas.push({cant, desc: desc || cod, cod, pu:null, px, pxNota, sinPx: (plPick.px!==null && px===null)}); // el Excel trae columna de precio pero este renglón no: se queda SIN precio (no se rellena con el nuestro)
   }
   if(!partidas.length){ toast('No encontré renglones válidos con ese mapeo — revisa las columnas', true); return; }
   const st = m => $('pl-status').textContent = m;
-  reqParsed = await matchPartidas(partidas, st);
+  try{ reqParsed = await matchPartidas(partidas, st); }catch(e){ st(''); toast(errMsg(e), true); return; }
   window._mxObra = '';
   st(`✓ ${partidas.length} partidas cruzadas — revisa los matches.`);
   mxRender('pl-res', reqParsed, '');
+}
+function enviarLibres(obra){
+  const libres = reqParsed.filter(p=>p.sel<0);
+  if(!libres.length){ toast('No hay partidas libres'); return; }
+  const msj = `Hola, ¿me apoyas con precio y disponibilidad de esto?${obra?' ('+obra+')':''}\n\n` + libres.map(p=>`• ${p.cant} x ${p.desc}`).join('\n') + '\n\nGracias — Axion Tools';
+  window.open('https://wa.me/?text='+encodeURIComponent(msj), '_blank');
 }
 function normTxt(s){
   return String(s||'').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^A-Z0-9\/ .#"]/g,' ');
@@ -7027,15 +7150,23 @@ async function leerRequisicion(){
   $('rq-btn').disabled = false;
 }
 function cotizarRequisicion(obra){
+  const incluirSin = !!window._mxSinPrecio;
+  const sinPrecio = [];
   window._preCot = reqParsed.map(p=>{
     const m = p.sel>=0 ? p.alts[p.sel] : null;
+    const precio = mxPrecioCot(p);
+    if(!(precio>0)){ sinPrecio.push(m ? m.descripcion : p.desc); if(!incluirSin) return null; }
+    const ley = precio>0 ? '' : ' (precio sujeto a volumen)';
     if(m){
-      const costo = Math.round(+m.precio_lista*(1-(+m.promo_pct||0))*100)/100;
-      return {codigo:m.codigo, desc:m.descripcion, cantidad:p.cant, precio:+m.precio_sugerido, costo, sugerido:+m.precio_sugerido, producto_id:null};
+      const costo = (m.mio && +m.mio.costo>0) ? +m.mio.costo : (+m.precio_lista||0);
+      return {codigo:m.codigo, desc:m.descripcion+ley, cantidad:p.cant, precio, costo, sugerido:(m.mio && +m.mio.precio>0) ? +m.mio.precio : +m.precio_sugerido, producto_id: m.mio ? m.mio.id : null};
     }
-    return {codigo:'', desc:p.desc, cantidad:p.cant, precio:p.pu||0, costo:0, sugerido:p.pu||0, producto_id:null};
-  });
-  irA('cotizaciones').then(()=>{ nuevaCot(); setTimeout(()=>{ const el=$('ct-cliente-txt'); if(el && obra) el.value = 'Constructora · '+obra; }, 600); });
+    return {codigo:p.cod||'', desc:p.desc+ley, cantidad:p.cant, precio, costo:0, sugerido:precio, producto_id:null};
+  }).filter(Boolean);
+  if(!window._preCot.length){ toast('No hay partidas con precio para cotizar', true); return; }
+  const nota = (sinPrecio.length && !incluirSin) ? 'Sujeto a volumen (se cotiza aparte): '+sinPrecio.map(s=>String(s).slice(0,38)).slice(0,6).join(', ')+(sinPrecio.length>6?' y '+(sinPrecio.length-6)+' más':'') : '';
+  irA('cotizaciones').then(()=>{ nuevaCot(); setTimeout(()=>{ const el=$('ct-cliente-txt'); if(el && obra) el.value = 'Constructora · '+obra;
+    const n=$('ct-notas'); if(n && nota) n.value = (n.value ? n.value+' · ' : '') + nota; }, 600); });
 }
 async function subirListaPrecios(){
   const f = $('lp-file').files[0];
