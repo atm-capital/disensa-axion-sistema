@@ -1640,13 +1640,13 @@ function psPintar(){
     return `<tr${cambia?' style="background:#fffbeb"':''}>
       <td><input type="checkbox" class="ps-sel" ${f.sel?'checked':''} onclick="psToggle(${i},this.checked)"></td>
       <td><b>${esc(f.cod)}</b><div class="small muted">${esc(f.desc.slice(0,42))}</div></td>
-      <td class="num small">${fmt(f.costo)}</td><td class="num"><b>${fmt(f.precio)}</b></td>
+      <td class="num small">${fmt(f.costo)}</td><td class="num"><b>${fmt(f.precio)}</b>${f.precio>0?`<div class="small muted" title="Precio sin IVA: es el que se compara contra el costo">s/IVA ${fmt(f.precio/1.16)}</div>`:''}</td>
       <td class="num small muted" title="Sugerido de Indar (~24.6% s/venta)">${f.sug>0?fmt(f.sug):'—'}</td>
       <td class="num small muted" title="Precio con la regla (${Math.round(f.mReg*100)}% s/venta)">${f.regla>0?fmt(f.regla):'—'}</td>
       <td class="num"><input type="number" step="1" min="0" value="${f.nuevo||''}" style="width:80px;${inp}${cambia?';font-weight:bold':''}" onchange="psEdit(${i},'precio',this.value)">${cambia?`<div class="small" style="color:${f.dif>0?'#15803d':'#b45309'}">${f.dif>0?'+':''}${fmt(f.dif)}</div>`:''}</td>
-      <td class="num small" style="white-space:nowrap">${f.mAct===null?'—':Math.round(f.mAct*100)+'%'} → <input type="number" step="1" min="0" max="89" value="${f.mNuevo===null?'':Math.round(f.mNuevo*100)}" style="width:48px;${inp}" onchange="psEdit(${i},'margen',this.value)">% <span class="badge ${bm}">${f.mNuevo===null?'—':(f.mNuevo*100).toFixed(0)+'%'}</span></td>
+      <td class="num small" style="white-space:nowrap">${f.mAct===null?'—':Math.round(f.mAct*100)+'%'} → <input type="number" step="1" min="0" max="89" value="${f.mNuevo===null?'':Math.round(f.mNuevo*100)}" style="width:48px;${inp}" onchange="psEdit(${i},'margen',this.value)">% <span class="badge ${bm}">${f.mNuevo===null?'—':(f.mNuevo*100).toFixed(0)+'%'}</span>${f.nuevo>0&&f.costo>0?`<div class="small muted">${fmt(f.nuevo/1.16)} s/IVA − ${fmt(f.costo)} = <b style="color:${f.nuevo/1.16-f.costo<0?'#b91c1c':'inherit'}">${fmt(f.nuevo/1.16-f.costo)}</b></div>`:''}</td>
       <td class="num small">${f.stock}</td></tr>`; }).join('');
-  const n = $('ps-nota'); if(n) n.textContent = (vis.length>MAX ? `Mostrando ${MAX} de ${vis.length} — busca por código o descripción para ver el resto. ` : (vis.length ? '' : 'Nada que mostrar con este filtro. ')) + 'Margen = (precio sin IVA − costo) ÷ precio sin IVA · 🟢 cumple la regla · 🟡 ≥25% · 🔴 <25%. Todo precio se redondea hacia arriba al peso. Los que apliques salen en 🏷️ Etiquetas.';
+  const n = $('ps-nota'); if(n) n.textContent = (vis.length>MAX ? `Mostrando ${MAX} de ${vis.length} — busca por código o descripción para ver el resto. ` : (vis.length ? '' : 'Nada que mostrar con este filtro. ')) + 'OJO: el precio trae IVA y el costo NO. Margen = (precio ÷ 1.16 − costo) ÷ (precio ÷ 1.16) · 🟢 cumple la regla · 🟡 ≥25% · 🔴 <25%. Todo precio se redondea hacia arriba al peso. Los que apliques salen en 🏷️ Etiquetas.';
   psCuenta();
 }
 function psToggle(i, on){ const f = (window._psFilas||[])[i]; if(f) f.sel = !!on; psCuenta(); }
@@ -2685,13 +2685,13 @@ function pintarCot(){
         <option value="">precio…</option><option value="pub">Público</option><option value="m25">Margen 25%</option><option value="m20">Margen 20%</option><option value="m15">Margen 15%</option><option value="m10">Margen 10%</option></select>
       ${pz?`<br><span class="small" style="color:var(--azul)">≈ ${fmt(c.precio/pz)} por pieza (${pz} pzas)</span>`:''}</td>
     <td class="num">${fmt(c.cantidad*c.precio)}${esAdmin()?`<br>
-      <span class="small" style="color:${col}">${costoD>0?`costo ${fmt(c.costo)} · marg ${pct.toFixed(0)}%`:'sin costo'}</span>`:''}</td>
+      <span class="small" style="color:${col}" title="El precio trae IVA y el costo no: se compara el precio sin IVA (÷1.16) contra el costo">${costoD>0?`${fmt(c.precio/1.16)} s/IVA − ${fmt(c.costo)} costo = <b>${fmt(c.precio/1.16-costoD)}</b> · marg ${pct.toFixed(0)}%`:'sin costo'}</span>`:''}</td>
     <td><span class="x" onclick="cotCarrito.splice(${i},1);pintarCot()">✕</span></td></tr>`;
   }).join('') || '<tr><td class="muted" style="padding:12px 6px">Busca productos y da clic para agregarlos.</td></tr>';
   const tot = cotCarrito.reduce((s,c)=>s+c.cantidad*c.precio,0);
   const cost = cotCarrito.reduce((s,c)=>s+c.cantidad*(c.costo||0)*(1-DESC_DISENSA),0);
   const mg = (cost>0 && tot>0) ? ((tot/1.16-cost)/(tot/1.16)*100) : null; // v163: sobre venta
-  $('ct-total').innerHTML = fmt(tot) + (esAdmin() && mg!==null?` <span class="small" style="color:var(--gris)">· margen total ${mg.toFixed(1)}% sobre venta (costo real Disensa, sin descuentos · no se imprime)</span>`:'');
+  $('ct-total').innerHTML = fmt(tot) + (esAdmin() && mg!==null?` <span class="small" style="color:var(--gris)">· sin IVA ${fmt(tot/1.16)} − costo ${fmt(cost)} = <b>utilidad ${fmt(tot/1.16-cost)}</b> · margen ${mg.toFixed(1)}% sobre venta (costo real Disensa, sin descuentos · no se imprime)</span>`:'');
 }
 async function guardarCot(){
   if(!cotCarrito.length){ toast('Agrega al menos una partida', true); return; }
@@ -6710,7 +6710,7 @@ function impPintar(){
       <td><b>${esc(i.c)}</b>${i.so?`<br><span class="badge b-gris" title="Parte / sales order">${esc(i.so)}</span>`:''}</td><td>${esc((i.d||'').slice(0,55))}</td>
       <td class="num">${i.q}</td><td class="num">${fmt(i.l)}</td><td class="num muted">${fmt(i.s)}</td>
       <td class="num"><input type="number" step="1" min="0" value="${precio||''}" style="width:80px;${inp}${cambia?';font-weight:bold':''}" onchange="impEditar(${idx},'precio',this.value)" title="${i.nuevo?'Precio de venta con el que se dará de alta':'Precio actual: '+fmt(i.pa)+' — cámbialo solo si quieres moverlo'}"></td>
-      <td class="num"><input type="number" step="1" min="0" max="89" value="${m===null?'':Math.round(m*100)}" style="width:54px;${inp}" onchange="impEditar(${idx},'margen',this.value)">% ${impBadgeM(m,i)}</td>
+      <td class="num"><input type="number" step="1" min="0" max="89" value="${m===null?'':Math.round(m*100)}" style="width:54px;${inp}" onchange="impEditar(${idx},'margen',this.value)">% ${impBadgeM(m,i)}${precio>0&&i.l>0?`<div class="small muted">${fmt(precio/1.16)} s/IVA − ${fmt(i.l)} = <b style="color:${precio/1.16-i.l<0?'#b91c1c':'inherit'}">${fmt(precio/1.16-i.l)}</b></div>`:''}</td>
       <td style="white-space:nowrap">${i.nuevo ? '<span class="badge b-azul">nuevo</span>' : '<span class="badge b-gris">existente</span>'}${cambia?' <span class="badge b-ambar">cambia precio</span>':''}${i.manual?' <span title="Editado a mano">✏️</span>':''}</td>
     </tr>`; }).join('');
   const k = $('imp-kpi-nuevos'); if(k) k.textContent = nN ? `${nN} producto(s) nuevo(s) · margen prom. ${(sumM/nN*100).toFixed(1)}% s/venta` : 'sin productos nuevos';
