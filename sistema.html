@@ -757,6 +757,36 @@ function cerrarModal(){ $('modal-root').innerHTML=''; }
 /* ============================================================
    VISTA: RESUMEN
 ============================================================ */
+// ===== v181: ventas a revisar — margen bajo, abajo del costo o con descuento (últimos 7 días) =====
+async function pintarVentasRevisar(){
+  const el = $('res-revisar'); if(!el) return;
+  const desde = new Date(); desde.setDate(desde.getDate()-7); desde.setHours(0,0,0,0);
+  const r = await sb.from('venta_items').select('venta_id,cantidad,precio_unit,costo_unit,descripcion,ventas!inner(id,folio,fecha,total,descuento,cancelada,notas)').gte('ventas.fecha', desde.toISOString()).eq('ventas.cancelada', false);
+  if(r.error || !r.data){ el.innerHTML=''; return; }
+  const porV = {};
+  r.data.forEach(i=>{
+    const v = i.ventas; if(!v || /CONSUMO PROPIO/i.test(v.notas||'')) return;
+    const g = porV[v.id] || (porV[v.id] = {v, neto:0, costo:0, bajo:[]});
+    g.neto += +i.precio_unit/1.16 * +i.cantidad; g.costo += +i.costo_unit * +i.cantidad;
+    if(+i.costo_unit>0 && +i.precio_unit/1.16 < +i.costo_unit-0.005) g.bajo.push(i.descripcion);
+  });
+  const filas = Object.values(porV).map(g=>{
+    const neto = g.neto - (+g.v.descuento||0)/1.16, util = neto - g.costo, m = neto>0 ? util/neto*100 : 0;
+    const motivos = [];
+    if(g.bajo.length) motivos.push('🚫 abajo del costo: '+g.bajo.map(d=>esc(String(d).slice(0,30))).join(', '));
+    if(m < 10) motivos.push('margen '+m.toFixed(0)+'%');
+    if(+g.v.descuento>0) motivos.push('descuento '+fmt(g.v.descuento));
+    return {g, m, util, motivos};
+  }).filter(x=>x.motivos.length).sort((a,b)=>a.m-b.m);
+  if(!filas.length){ el.innerHTML = ''; return; }
+  const hayBajo = filas.some(x=>x.g.bajo.length);
+  el.innerHTML = `<div class="card" style="border-left:5px solid ${hayBajo?'#b91c1c':'#d97706'};background:${hayBajo?'#fef2f2':'#fffbeb'};margin-bottom:14px">
+    <h3 style="margin:0 0 6px">🔎 ${filas.length} venta(s) a revisar en los últimos 7 días</h3>
+    <p class="small muted" style="margin:0 0 6px">Abajo del costo, margen menor a 10% o con descuento. Clic en el folio para ver el ticket.</p>
+    ${filas.slice(0,12).map(x=>`<div class="small" style="padding:3px 0;border-top:1px solid rgba(0,0,0,.06)"><a href="#" onclick="verVenta(${x.g.v.id});return false" style="font-weight:700">#${x.g.v.folio}</a> · ${fecha(x.g.v.fecha)} · ${fmt(x.g.v.total)} · <b style="color:${x.util<0?'#b91c1c':'inherit'}">utilidad ${fmt(Math.round(x.util*100)/100)} (${x.m.toFixed(0)}%)</b> — ${x.motivos.join(' · ')}</div>`).join('')}
+    ${filas.length>12?`<p class="small muted" style="margin:4px 0 0">… y ${filas.length-12} más en Ventas</p>`:''}
+  </div>`;
+}
 async function vResumen(){
   const hoy = new Date(); hoy.setHours(0,0,0,0);
   // Mes elegido (por default el actual). window._resMes = 'YYYY-MM'
@@ -838,7 +868,8 @@ async function vResumen(){
   }
   const promDia = ventasMes.data.length ? totMes/diasMes : 0;
 
-  $('v-resumen').innerHTML = alertaCxp + `
+  setTimeout(()=>{ if(esFinanzas()) pintarVentasRevisar(); }, 0); // v181
+  $('v-resumen').innerHTML = alertaCxp + '<div id="res-revisar"></div>' + `
     <div class="card" style="padding:10px;margin-bottom:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
       <b>📅 Mes:</b>
       <select onchange="window._resMes=this.value; vResumen()" style="padding:8px;border:1px solid var(--linea);border-radius:8px;font-size:15px">
@@ -4038,7 +4069,7 @@ async function buscarProdAp(){
   const el = $('ap-res');
   if(q.length<2){ el.innerHTML=''; return; }
   const q2 = qCodVar(q); // v151: "b31377-5g2" también busca "B3 1377-5G2"
-  const r = await sb.from('productos').select('id,codigo,descripcion,precio,stock,unidad').or(`codigo.ilike.%${q}%,${q2?`codigo.ilike.%${q2}%,`:''}descripcion.ilike.%${q}%`).eq('activo',true).limit(8);
+  const r = await sb.from('productos').select('id,codigo,descripcion,precio,stock,unidad,costo,granel,contenido').or(`codigo.ilike.%${q}%,${q2?`codigo.ilike.%${q2}%,`:''}descripcion.ilike.%${q}%`).eq('activo',true).limit(8);
 
   let html = (r.data||[]).map(p=>`<div style="padding:7px;border-bottom:1px solid var(--linea);cursor:pointer" onclick='addProdAp(${JSON.stringify(p).replace(/'/g,"&#39;")})'>
     <b>${esc(p.codigo)}</b> ${esc(p.descripcion.slice(0,42))} · <b>${fmt(p.precio)}</b>
@@ -4062,16 +4093,32 @@ async function altaYApartar(i){
 }
 function addProdAp(p){
   const ex = apItems.find(x=>x.producto_id===p.id);
-  if(ex) ex.cantidad++; else apItems.push({producto_id:p.id, descripcion:p.codigo+' · '+p.descripcion, precio_unit:+p.precio, cantidad:1});
+  if(ex) ex.cantidad++; else apItems.push({producto_id:p.id, descripcion:p.codigo+' · '+p.descripcion, precio_unit:+p.precio, cantidad:1, base:+p.precio, costoIva: (+p.costo>0) ? Math.round(+p.costo/((p.granel && +p.contenido>0)?+p.contenido:1)*1.16*100)/100 : 0});
   $('ap-q').value=''; $('ap-res').innerHTML='';
   calcAp();
 }
+// v181: candado de precio en apartados (igual que en Ventas): nadie abajo del costo, vendedor no baja del precio de lista
+function apCambiarPrecio(n, v){
+  const it = apItems[n]; if(!it) return; const antes = +it.precio_unit; let x = Math.max(0, +v||0);
+  if(it.costoIva>0 && x < it.costoIva-0.001){
+    alert('🚫 ABAJO DEL COSTO\n\n'+it.descripcion+'\n\n'+fmt(x)+' es menos de lo que nos cuesta (con IVA). Ese precio NO se puede poner.');
+    x = antes;
+  } else if(!esAdmin() && +it.base>0 && x < +it.base-0.001){
+    toast('El precio de lista es '+fmt(it.base)+' y no se baja a mano. Para dar descuento usa la casilla de % (máximo 20%).', true);
+    x = +it.base;
+  }
+  it.precio_unit = x; calcAp();
+}
 // v152: descuento en el apartado (por % o $), igual que en Ventas
 function apSub(){ return apItems.reduce((s,i)=>s+i.cantidad*i.precio_unit,0); }
-function apDesc(){ const sub = apSub(); const pctEl = $('ap-descpct'); if(pctEl && +pctEl.value>0 && $('ap-desc')) $('ap-desc').value = Math.round(sub*(+pctEl.value)/100*100)/100; return Math.min(sub, Math.max(0, +($('ap-desc')?.value||0))); }
+function apDesc(){ const sub = apSub(); const pctEl = $('ap-descpct'); if(pctEl && +pctEl.value>0 && $('ap-desc')) $('ap-desc').value = Math.round(sub*(+pctEl.value)/100*100)/100;
+  let d = Math.min(sub, Math.max(0, +($('ap-desc')?.value||0)));
+  if(!esAdmin() && sub>0 && d > sub*0.2+0.005){ d = Math.round(sub*0.2*100)/100; if($('ap-desc')) $('ap-desc').value = d; if(pctEl) pctEl.value = '20'; toast('Máximo 20% de descuento; más solo lo autoriza Andrés', true); } // v181
+  return d; }
 function apTotal(){ return Math.round((apSub()-apDesc())*100)/100; }
 function apDescPct(v){
-  const pct = Math.max(0, Math.min(100, +String(v).replace(',','.')||0));
+  let pct = Math.max(0, Math.min(100, +String(v).replace(',','.')||0));
+  if(!esAdmin() && pct > 20){ pct = 20; toast('Máximo 20% de descuento; más solo lo autoriza Andrés', true); } // v181
   const el = $('ap-descpct'); if(el && document.activeElement!==el) el.value = pct||'';
   if($('ap-desc')) $('ap-desc').value = pct ? Math.round(apSub()*pct/100*100)/100 : 0;
   calcAp();
@@ -4081,7 +4128,7 @@ function calcAp(){
   if(el) el.innerHTML = apItems.length ? `<table><thead><tr><th>Producto</th><th>Cant.</th><th>Precio ✏️</th><th class="num">Importe</th><th></th></tr></thead><tbody>${apItems.map((i,n)=>`<tr>
     <td>${esc(i.descripcion.slice(0,42))}</td>
     <td style="width:70px"><input type="number" min="1" value="${i.cantidad}" style="width:60px;padding:4px;text-align:right" onchange="apItems[${n}].cantidad=+this.value||1; calcAp()"></td>
-    <td style="width:90px"><input type="number" step="0.01" value="${i.precio_unit}" style="width:80px;padding:4px;text-align:right" onchange="apItems[${n}].precio_unit=+this.value||0; calcAp()"></td>
+    <td style="width:90px"><input type="number" step="0.01" value="${i.precio_unit}" style="width:80px;padding:4px;text-align:right${(+i.precio_unit < (+i.base||0)-0.001)?';border-color:#b91c1c;background:#fef2f2':''}" onchange="apCambiarPrecio(${n}, this.value)"></td>
     <td class="num" style="width:90px"><b>${fmt(i.cantidad*i.precio_unit)}</b></td>
     <td style="width:30px"><button class="btn sec sm" onclick="apItems.splice(${n},1); calcAp()">✖</button></td></tr>`).join('')}</tbody></table>`
     : '<p class="small muted">Busca y agrega los productos que va a apartar.</p>';
