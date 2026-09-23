@@ -1921,7 +1921,7 @@ function grModo(id, m){
         <input id="gr-cant" type="number" step="0.01" min="0" value="1" style="font-size:22px;padding:12px"
           oninput="calcGranel(${id})" onkeydown="if(event.key==='Enter'){event.preventDefault();addGranel(${id});}"></div>
       <div class="field"><label>Precio por ${esc(uv)}</label>
-        <input id="gr-precio" type="number" step="0.01" min="${esAdmin()?0:pu}" value="${pu}" style="font-size:22px;padding:12px" oninput="calcGranel(${id})">
+        <input id="gr-precio" type="number" step="0.01" min="${esAdmin()?costoUIva(p):pu}" value="${pu}" style="font-size:22px;padding:12px" oninput="calcGranel(${id})">
         <p class="small muted" style="margin:4px 0 0">Sugerido <b>${fmt(pu)}</b>. ${esAdmin()?'Como admin puedes subirlo o bajarlo — queda fijo.':'Puedes <b>subirlo</b>, no bajarlo.'}</p></div>
     </div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin:-4px 0 10px">
@@ -1960,6 +1960,7 @@ function calcGranel(id){
     return;
   }
   const bajo = pr < pu - 0.001 && !esAdmin();
+  const cU = costoUIva(p), bajoCosto = cU>0 && pr < cU - 0.001; // v180
   const ab = +(p.abierto||0);
   const abrir = n <= ab ? 0 : Math.ceil((n - ab) / +p.contenido);
   el.innerHTML = `
@@ -1968,7 +1969,7 @@ function calcGranel(id){
         <div class="small muted">${abrir>0?`se abre ${abrir} ${esc(uc)}${abrir>1?'s':''} · quedan ${Math.round((dispGranel(p)-n)*100)/100} ${esc(uv)}`:`del ${esc(uc)} abierto · quedan ${Math.round((dispGranel(p)-n)*100)/100} ${esc(uv)}`}</div></div>
       <div style="font-size:25px"><b>${fmt(Math.round(n*pr*100)/100)}</b></div>
     </div>
-    ${bajo?`<div class="small" style="color:#b91c1c;margin-top:6px"><b>⚠️ El precio no puede ser menor a ${fmt(pu)}.</b> Se va a usar ${fmt(pu)}.</div>`:''}
+    ${bajoCosto?`<div class="small" style="color:#b91c1c;margin-top:6px"><b>🚫 ${fmt(pr)} por ${esc(uv)} está abajo del costo.</b> No se puede cobrar así.</div>`:(bajo?`<div class="small" style="color:#b91c1c;margin-top:6px"><b>⚠️ El precio no puede ser menor a ${fmt(pu)}.</b> Se va a usar ${fmt(pu)}.</div>`:'')}
     ${pr>pu?`<div class="small" style="color:#15803d;margin-top:6px">Precio arriba del sugerido — al cobrar queda fijo en ${fmt(pr)} para las próximas ventas.</div>`:''}`;
 }
 async function addGranel(id){
@@ -1995,6 +1996,7 @@ async function addGranel(id){
   if(n <= 0){ toast('Pon la cantidad', true); return; }
   if(n > disp){ toast('Solo hay '+disp+' '+uv, true); return; }
   if(pr !== pu){
+    if(costoUIva(p)>0 && pr < costoUIva(p)-0.001){ toast('🚫 '+fmt(pr)+' por '+uv+' está abajo del costo — no se puede', true); return; } // v180
     if(pr < pu && !esAdmin()){ pr = pu; }
     else {
       const r = await sb.from('productos').update({precio_unidad: pr}).eq('id', id);
@@ -2046,7 +2048,28 @@ function cambiarCant(i, v){
   if(n===0) carrito.splice(i,1); else carrito[i].cantidad = n;
   pintarCarrito();
 }
-function cambiarPrecio(i, v){ carrito[i].precio_unit = Math.max(0, +v||0); pintarCarrito(); }
+// ===== v180: nadie vende abajo del costo; el vendedor no baja el precio a mano (descuento solo por la casilla de %) =====
+function costoRow(c){ // costo CON IVA por unidad del renglón (0 si no se conoce: renglón libre o sin costo)
+  if(!c.producto_id) return 0;
+  const p = prodCache.find(x=>x.id===c.producto_id); if(!p || !(+p.costo>0)) return 0;
+  const u = c.granel ? +p.costo / (+p.contenido||1) : +p.costo;
+  return Math.round(u*1.16*100)/100;
+}
+function costoTicket(){ return Math.round(carrito.reduce((s,c)=>s + costoRow(c)*(+c.cantidad||0), 0)*100)/100; }
+function costoUIva(p){ return (+p.costo>0) ? Math.round(+p.costo/(+p.contenido||1)*1.16*100)/100 : 0; }
+function cambiarPrecio(i, v){
+  const c = carrito[i]; const antes = +c.precio_unit; let n = Math.max(0, +v||0);
+  const piso = Math.round((+c.base||0)*(100-pctMaestro()))/100, cIva = costoRow(c);
+  if(cIva>0 && n < cIva-0.001){
+    alert('🚫 ABAJO DEL COSTO\n\n'+c.codigo+' · '+c.desc+'\n\n'+fmt(n)+' es menos de lo que nos cuesta esa pieza (con IVA). Ese precio NO se puede poner.'+
+      (esAdmin()?'':'\n\nSi es una venta por metro o kilo, avísale a Andrés para configurarlo a granel; si es descuento, usa la casilla de %.'));
+    n = antes;
+  } else if(!esAdmin() && piso>0 && n < piso-0.001){
+    toast('El precio de lista es '+fmt(piso)+' y no se baja a mano. Para dar descuento usa la casilla de % (queda registrado).', true);
+    n = piso;
+  }
+  c.precio_unit = n; pintarCarrito();
+}
 function quitarProd(i){ carrito.splice(i,1); pintarCarrito(); }
 function pctMaestro(){ const id = +($('nv-cliente')?.value||0); const c = (cliCache||[]).find(x=>x.id===id); return (c && +c.desc_pct>0) ? Math.min(20, +c.desc_pct) : 0; }
 function aplicarMaestro(){
@@ -2063,7 +2086,7 @@ function pintarCarrito(){
       ? `<td><input value="${c.cantidad}" readonly style="background:#eef2ff;cursor:pointer" title="Clic para cambiar los ${esc(c.unidad||'')}s" onclick="pedirCantidadGranel(${c.producto_id})"></td>
          <td><input value="${c.precio_unit}" readonly style="background:#eef2ff" title="El precio por ${esc(c.unidad||'unidad')} es fijo"></td>`
       : `<td><input value="${c.cantidad}" onchange="cambiarCant(${i}, this.value)"></td>
-         <td><input value="${c.precio_unit}" onchange="cambiarPrecio(${i}, this.value)"></td>`}
+         <td><input value="${c.precio_unit}" onchange="cambiarPrecio(${i}, this.value)"${(+c.precio_unit < (+c.base||0)-0.001)?' style="border-color:#b91c1c;background:#fef2f2" title="Abajo del precio de lista"':''}></td>`}
     <td class="num">${fmt(Math.round(c.cantidad*c.precio_unit*100)/100)}</td>
     <td><span class="x" onclick="quitarProd(${i})">✕</span></td></tr>`).join('')
     || '<tr><td class="muted" style="padding:14px 6px">El carrito está vacío — busca y da clic en un producto.</td></tr>';
@@ -2071,8 +2094,10 @@ function pintarCarrito(){
   // v150: si hay % capturado, el $ de descuento se recalcula con el carrito actual
   const pctEl = $('nv-descpct');
   if(pctEl && +pctEl.value>0 && $('nv-desc')) $('nv-desc').value = Math.round(sub*(+pctEl.value)/100*100)/100;
-  const desc = +($('nv-desc')?.value||0);
-  const info = $('nv-desc-info'); if(info) info.textContent = (desc>0 && sub>0) ? '(−'+(desc/sub*100).toFixed(1).replace(/\.0$/,'')+'%)' : '';
+  let desc = +($('nv-desc')?.value||0);
+  if(!esAdmin() && sub>0 && desc > sub*0.2+0.005){ desc = Math.round(sub*0.2*100)/100; if($('nv-desc')) $('nv-desc').value = desc; if(pctEl) pctEl.value = '20'; toast('Máximo 20% de descuento; más solo lo autoriza Andrés', true); } // v180
+  const cIvaT = costoTicket(), bajoCosto = cIvaT>0 && (sub-desc) < cIvaT-0.005; // v180
+  const info = $('nv-desc-info'); if(info) info.innerHTML = ((desc>0 && sub>0) ? '(−'+(desc/sub*100).toFixed(1).replace(/\.0$/,'')+'%)' : '') + (bajoCosto?' <b style="color:#b91c1c">⚠️ así la venta queda abajo del costo</b>':'');
   window._nvTotal = Math.round((sub - desc)*100)/100;
   $('nv-total').textContent = fmt(window._nvTotal);
   if($('nv-recibido')) calcCambio();
@@ -2080,7 +2105,8 @@ function pintarCarrito(){
 }
 // v150: descuento por porcentaje de volada (botones 5/10/15 o escribir el %)
 function descPct(v){
-  const pct = Math.max(0, Math.min(100, +String(v).replace(',','.')||0));
+  let pct = Math.max(0, Math.min(100, +String(v).replace(',','.')||0));
+  if(!esAdmin() && pct > 20){ pct = 20; toast('Máximo 20% de descuento; más solo lo autoriza Andrés', true); } // v180
   const el = $('nv-descpct'); if(el && document.activeElement!==el) el.value = pct||'';
   const sub = carrito.reduce((s,c)=>s+c.cantidad*c.precio_unit,0);
   if($('nv-desc')) $('nv-desc').value = pct ? Math.round(sub*pct/100*100)/100 : 0;
@@ -2143,6 +2169,13 @@ function numALetras(n){
 async function guardarVenta(){
   if(!carrito.length){ toast('Agrega al menos un producto', true); return; }
   if($('nv-metodo').value==='credito' && !$('nv-cliente').value){ toast('Para vender a CRÉDITO elige al cliente (no puede ser Mostrador) — así sabemos quién nos debe', true); return; }
+  { // v180: nunca cobrar abajo del costo
+    const subV = carrito.reduce((s,c)=>s+c.cantidad*c.precio_unit,0), descV = +($('nv-desc')?.value||0), cIvaV = costoTicket();
+    if(cIvaV>0 && subV-descV < cIvaV-0.005){
+      if(!esAdmin()){ toast('🚫 Con ese descuento la venta queda abajo del costo. Baja el descuento o pide autorización a Andrés.', true); return; }
+      if(!confirm('⚠️ La venta queda ABAJO DEL COSTO: cobras '+fmt(subV-descV)+' y la mercancía cuesta '+fmt(cIvaV)+' (con IVA).\n\n¿Seguro que quieres cobrarla así?')) return;
+    }
+  }
   const esMixto = $('nv-metodo').value==='mixto'; let pagosMx = [];
   if(esMixto){ // v159
     pagosMx = mxPagos(); const sumaMx = pagosMx.reduce((s,p)=>s+p.monto,0);
