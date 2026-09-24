@@ -4657,11 +4657,90 @@ async function guardarDeposito(){
 }
 // ===== v147: COMPRA A PROVEEDOR LOCAL (Truper, Arca, tlapalería...) en un solo paso =====
 let clItems = [];
+// ===== v182: compra local desde la factura XML (CFDI) del proveedor =====
+// Sube el XML (y el PDF) y se llena solo: proveedor, folio, productos, cantidades y costos SIN IVA.
+// Los productos se cruzan por código del proveedor (NoIdentificacion); los que no existen se dan de alta con precio sugerido por la regla.
+window._clXml = null;
+function clDescBonita(s){
+  s = String(s||'').trim(); if(s !== s.toUpperCase()) return s; // ya viene con minúsculas: se respeta
+  const KEEP = /^(PVC|CPVC|GALV\.?|MM|RD[\d.]*|MTS?|KG|CU|PP|HDPE|LED|USB|AC|DC|GAL\.?|SANIT\.?|CAMP\.?|BUSH\.?|R\.C\.?)$/;
+  return s.toLowerCase().split(/\s+/).map(w=>{ const W = w.toUpperCase(); if(W==='X') return 'x'; if(KEEP.test(W) || /\d/.test(w)) return W; return w.replace(/^(\W*)(\w)/, (m,a,b)=>a+b.toUpperCase()); }).join(' ');
+}
+async function clDesdeXML(){
+  const inp = $('cl-xml'); const files = [...(inp && inp.files || [])]; const info = $('cl-xml-info');
+  if(!files.length) return;
+  let d = null, pdf = null, emisor = '', rfc = '', serie = '', formaPago = '', descs = {};
+  for(const f of files){
+    if(/\.pdf$/i.test(f.name)){ pdf = f; continue; }
+    try{
+      const txt = (await f.text()).replace(/^\uFEFF/, ''); const p = fxParseXML(txt, f.name);
+      if(!p) continue;
+      const doc = new DOMParser().parseFromString(txt, 'text/xml');
+      const em = doc.getElementsByTagName('cfdi:Emisor')[0] || doc.getElementsByTagName('Emisor')[0];
+      emisor = em ? (em.getAttribute('Nombre')||'') : ''; rfc = em ? (em.getAttribute('Rfc')||'') : '';
+      serie = doc.documentElement.getAttribute('Serie')||''; formaPago = doc.documentElement.getAttribute('FormaPago')||'';
+      [...doc.getElementsByTagName('cfdi:Concepto')].concat([...doc.getElementsByTagName('Concepto')]).forEach(c=>{ const k=(c.getAttribute('NoIdentificacion')||'').trim(); if(k && !descs[k]) descs[k] = (c.getAttribute('Descripcion')||'').trim(); });
+      d = p;
+    }catch(e){}
+  }
+  if(!d){ info.innerHTML = '<span style="color:#b91c1c">No encontré un XML válido (CFDI). Si solo tienes el PDF, captura a mano.</span>'; return; }
+  if(d.tipo !== 'I'){ info.innerHTML = '<span style="color:#b91c1c">Ese XML es tipo '+esc(d.tipo)+', no una factura de compra.</span>'; return; }
+  info.textContent = 'Leyendo factura '+(serie?serie+' ':'')+d.folio+'…';
+  const {data:ya} = await sb.from('facturas').select('id,pedido_id').eq('uuid', d.uuid);
+  if(ya && ya.length){ info.innerHTML = '<span style="color:#b91c1c">⚠️ Esta factura ya está registrada'+(ya[0].pedido_id?' (pedido #'+ya[0].pedido_id+')':'')+'. No se captura dos veces.</span>'; window._clXml = null; return; }
+  // proveedor: si ya existe uno parecido, se usa ese nombre (no duplicar)
+  const provs = (await sb.from('proveedores').select('id,nombre')).data||[];
+  const toks = s => new Set(normTxt(s).split(/\s+/).filter(t=>t.length>2 && !['de','del','la','los','sa','cv','s.a.','s.a','c.v.','de'].includes(t)));
+  const te = toks(emisor); let provNombre = clDescBonita(emisor);
+  for(const p of provs){ const tp = toks(p.nombre); const hits = [...tp].filter(t=>te.has(t)).length; if(tp.size && hits >= Math.min(2, tp.size)){ provNombre = p.nombre; break; } }
+  $('cl-prov').value = provNombre;
+  $('cl-folio').value = (serie ? serie+' ' : '') + d.folio;
+  // productos: por código del proveedor (exacto, sin importar mayúsculas)
+  const codes = [...new Set(d.items.map(i=>i.cod).filter(Boolean))];
+  let mios = [];
+  for(let k=0;k<codes.length;k+=40){ const r = await sb.from('productos').select('id,codigo,descripcion,costo,precio,stock,unidad').or(codes.slice(k,k+40).map(c=>`codigo.ilike.${c.replace(/[%,()]/g,'')}`).join(',')); mios = mios.concat(r.data||[]); }
+  const porCod = {}; mios.forEach(p=>{ porCod[String(p.codigo).replace(/\s+/g,'').toUpperCase()] = p; });
+  clItems = []; let nEx = 0, nNew = 0;
+  for(const it of d.items){
+    const m = porCod[String(it.cod).replace(/\s+/g,'').toUpperCase()];
+    const costo = Math.round(it.pu*10000)/10000; // ValorUnitario del CFDI = SIN IVA
+    if(m){ nEx++; clItems.push({producto_id:m.id, codigo:m.codigo, descripcion:m.descripcion, cantidad:it.cant, precioCompra:costo, precioVenta:+m.precio, costoAntes:+m.costo}); }
+    else { nNew++; const desc = clDescBonita(descs[it.cod] || it.desc);
+      const pv = precioPorMargen(costo, impMargenRegla(precioPorMargen(costo, 0.35)));
+      clItems.push({producto_id:null, codigo:it.cod, descripcion:desc, cantidad:it.cant, precioCompra:costo, precioVenta:pv, unidad:'pza', xml:true}); }
+  }
+  if($('cl-iva')){ $('cl-iva').checked = false; }
+  window._clXml = {d, pdf, emisor, rfc, serie, formaPago, folio:(serie?serie+' ':'')+d.folio};
+  clPintar();
+  const fp = {'01':'efectivo','03':'transferencia','04':'tarjeta','28':'tarjeta de débito','99':'por definir'}[formaPago]||'';
+  info.innerHTML = `✅ Factura <b>${esc((serie?serie+' ':'')+d.folio)}</b> de <b>${esc(emisor)}</b> · ${d.fecha} · ${d.items.length} renglón(es) · subtotal ${fmt(d.subtotal)} + IVA = <b>${fmt(d.total)}</b>${fp?' · forma de pago en la factura: '+fp:''}<br>
+    <b>${nEx}</b> ya están en el inventario${nNew?` · <b style="color:#b45309">${nNew} NUEVOS</b> (revisa su precio de venta en la tabla: viene sugerido con la regla de márgenes)`:''}.
+    Los costos ya van <b>sin IVA</b> (tal cual la factura)${pdf?' · el PDF se usa como comprobante y se archiva en Finanzas → Facturas':' · <span style="color:#b45309">sube también el PDF para archivarlo (o una foto abajo)</span>'}.`;
+}
+async function clArchivarFactura(x, pedidoId){ // registra la factura del proveedor local y marca las partidas como facturadas
+  try{
+    let pdfPath = null;
+    if(x.pdf){ const up = await sb.storage.from('facturas').upload(x.d.uuid+'.pdf', x.pdf, {upsert:true, contentType:'application/pdf'}); if(!up.error) pdfPath = x.d.uuid+'.pdf'; }
+    const {error} = await sb.from('facturas').insert({uuid:x.d.uuid, folio:x.folio, tipo:'I', fecha:x.d.fecha||null, subtotal:x.d.subtotal, total:x.d.total, dias:0, pedido_id:pedidoId||null, pdf_path:pdfPath, items:x.d.items});
+    if(error) throw error;
+    if(pedidoId){
+      const {data:its} = await sb.from('pedido_compra_items').select('id,cantidad').eq('pedido_id', pedidoId);
+      await Promise.all((its||[]).map(i=>sb.from('pedido_compra_items').update({cantidad_facturada:i.cantidad}).eq('id', i.id)));
+    }
+    return true;
+  }catch(e){ toast('La compra quedó registrada, pero la factura no se pudo archivar: '+errMsg(e)+'. Súbela en Importar → facturas XML.', true); return false; }
+}
+
 async function compraLocal(){
-  clItems = [];
+  clItems = []; window._clXml = null;
   const provs = (await sb.from('proveedores').select('id,nombre').order('nombre')).data||[];
   abrirModal(`<h3>🧾 Compra a proveedor local</h3>
     <p class="small muted" style="margin:0 0 10px">Para lo que se compra fuera de Indar/Holcim (Truper, refrescos, tlapalería…). En un solo paso: entra al inventario con su costo, se registra el proveedor y sale el dinero de donde lo pagaron.</p>
+    <div class="card" style="padding:10px;margin:0 0 10px;background:#eef6ff;border:1px solid #bfdbfe">
+      <b>📄 ¿Tienes la factura (XML)?</b> <span class="small muted">Súbela junto con su PDF y se llena solo: proveedor, folio, productos, cantidades y costos sin IVA. Los productos que no existan se dan de alta con precio sugerido; el PDF queda archivado en Finanzas → Facturas.</span>
+      <input type="file" id="cl-xml" accept=".xml,.pdf,application/xml,text/xml,application/pdf" multiple onchange="clDesdeXML()" style="margin-top:6px;display:block">
+      <div id="cl-xml-info" class="small" style="margin-top:6px"></div>
+    </div>
     <div class="frow">
       <div class="field"><label>Proveedor (escribe el nombre; si es nuevo se da de alta solo)</label><input id="cl-prov" list="cl-provs" placeholder="Ej. Truper Sra. Lupita / Arca Continental"><datalist id="cl-provs">${provs.map(p=>`<option value="${esc(p.nombre)}">`).join('')}</datalist></div>
       <div class="field"><label>Ticket / nota / folio</label><input id="cl-folio" placeholder="Ej. nota 1234 (opcional)"></div>
@@ -4717,7 +4796,7 @@ function clPintar(redraw=true){
   const tot = clItems.reduce((s,x)=>s + x.cantidad*x.precioCompra, 0);
   $('cl-total').textContent = fmt(tot);
   if(!redraw) { clItems.forEach((x,i)=>{ const el=$('cl-imp-'+i); if(el) el.textContent = fmt(x.cantidad*x.precioCompra); }); return; }
-  $('cl-tabla').innerHTML = clItems.map((x,i)=>`<tr><td><b>${esc(x.codigo||'nuevo')}</b><br><span class="small muted">${esc(x.descripcion.slice(0,40))}${x.producto_id?'':' <span class="badge b-azul">nuevo · venta '+fmt(x.precioVenta)+'</span>'}</span></td>
+  $('cl-tabla').innerHTML = clItems.map((x,i)=>`<tr><td><b>${esc(x.codigo||'nuevo')}</b><br><span class="small muted">${esc(x.descripcion.slice(0,48))}${x.producto_id?'':` <span class="badge b-azul">NUEVO</span> venta $<input type="number" step="1" min="0" value="${x.precioVenta||0}" style="width:66px;padding:2px" title="Precio de VENTA con IVA del producto nuevo" onchange="clSet(${i},'precioVenta',this.value)">${x.precioCompra>0?` <span class="small" title="margen sobre venta sin IVA">${Math.round((margenSV(x.precioVenta, ($('cl-iva')&&$('cl-iva').checked)?x.precioCompra/1.16:x.precioCompra)||0)*100)}%</span>`:''}`}</span></td>
     <td><input type="number" step="1" min="0.01" value="${x.cantidad}" style="width:64px" onchange="clSet(${i},'cantidad',this.value)"></td>
     <td><input type="number" step="0.01" min="0" value="${x.precioCompra}" style="width:84px" onchange="clSet(${i},'precioCompra',this.value)"></td>
     <td class="num" id="cl-imp-${i}">${fmt(x.cantidad*x.precioCompra)}</td>
@@ -4727,8 +4806,9 @@ async function guardarCompraLocal(){
   const prov = ($('cl-prov').value||'').trim(); if(!prov){ toast('Pon el nombre del proveedor', true); return; }
   if(!clItems.length){ toast('Agrega al menos un producto', true); return; }
   if(clItems.some(x=>!(x.cantidad>0) || !(x.precioCompra>0))){ toast('Cada renglón necesita cantidad y precio de compra', true); return; }
-  const f = $('cl-file') && $('cl-file').files && $('cl-file').files[0];
-  if(!f){ toast('Falta la foto del ticket — es obligatoria', true); return; }
+  const f = ($('cl-file') && $('cl-file').files && $('cl-file').files[0]) || (window._clXml && window._clXml.pdf) || null; // v182: el PDF de la factura vale como comprobante
+  if(!f){ toast('Falta la foto del ticket o el PDF de la factura — es obligatorio', true); return; }
+  if(window._clXml && clItems.some(x=>!x.producto_id && !(x.precioVenta>0))){ toast('Los productos NUEVOS necesitan precio de venta (columna Producto)', true); return; }
   const btn = $('cl-btn'); btn.disabled = true; btn.textContent = 'Registrando…';
   const ext = (f.name.split('.').pop()||'jpg').toLowerCase();
   const path = 'compras/'+hoyMX()+'-'+Date.now()+'.'+ext;
@@ -4738,7 +4818,8 @@ async function guardarCompraLocal(){
   const items = clItems.map(x=>({producto_id:x.producto_id, codigo:x.codigo||'', descripcion:x.descripcion, unidad:x.unidad||'pza', precio: x.producto_id?null:redondearPrecio(x.precioVenta||0),
     cantidad:x.cantidad, costo: Math.round((conIva ? x.precioCompra/1.16 : x.precioCompra)*10000)/10000}));
   const pago = $('cl-pago').value;
-  const r = await sb.rpc('compra_local', {p_proveedor:prov, p_folio:($('cl-folio').value||'').trim(), p_items:items, p_pago:pago, p_nota:($('cl-nota').value||'').trim(),
+  const notaX = window._clXml ? ('Factura '+window._clXml.folio+' ('+window._clXml.d.fecha+', '+fmt(window._clXml.d.total)+') registrada desde el XML. ') : ''; // v182
+  const r = await sb.rpc('compra_local', {p_proveedor:prov, p_folio:($('cl-folio').value||'').trim(), p_items:items, p_pago:pago, p_nota:(notaX+($('cl-nota').value||'')).trim(),
     p_nombre:(typeof perfil!=='undefined'&&perfil?(perfil.nombre||perfil.correo):''), p_comprobante:path, p_plazo:+($('cl-plazo')?.value||15)});
   if(r.error){ toast(errMsg(r.error), true); btn.disabled=false; btn.textContent='✅ Registrar compra'; return; }
   const d = r.data||{};
@@ -4748,7 +4829,9 @@ async function guardarCompraLocal(){
     else await sb.from('cuentas_pagar').update({saldo:0, estado:'pagada'}).eq('id', d.cuenta_id);
   }
   logEv('compra_local', prov+' '+fmt(d.total)+' ('+pago+') pedido #'+d.pedido_id);
+  let factOk = null; if(window._clXml){ factOk = await clArchivarFactura(window._clXml, d.pedido_id); window._clXml = null; } // v182
   cerrarModal();
+  if(factOk) toast('📄 Factura archivada en Finanzas → Facturas y ligada al pedido #'+d.pedido_id);
   toast(`✅ Compra registrada: ${d.partidas} producto(s) al inventario${d.nuevos?', '+d.nuevos+' nuevo(s)':''} · ${fmt(d.total)} ${pago==='credito'?'por pagar':'pagados'}`);
   if(d.nuevos && typeof avisoTarjetasProductos==='function'){ const pids = items.filter(x=>x.producto_id).map(x=>x.producto_id); setTimeout(()=>verTarjetas(null, '🆕 Los productos nuevos necesitan tarjeta de precio:'), 600); }
   if(typeof vCaja==='function' && document.querySelector('#v-caja')) vCaja();
