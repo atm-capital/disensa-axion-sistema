@@ -3576,6 +3576,7 @@ async function vPedidos(){
     <div class="toolbar" style="margin-bottom:8px">
       <input type="search" id="ped-q" placeholder="🔍 Busca CUALQUIER número del papel: pedido, parte (sales order) o factura…" oninput="filtrarPedidos()" style="flex:1;min-width:280px;font-size:15px;padding:11px 13px">
       <span class="small muted" id="ped-qn"></span>
+      ${puedeVender()?`<button class="btn" onclick="pedidoDesdeXML()" title="Proveedores que facturan: Plomería Universal, Truper, etc.">📄 Nuevo pedido desde factura XML</button>`:''}
     </div>
     <p class="small muted" style="margin:0 0 10px">Indar usa <b>dos números</b>: el del pedido (ej. <b>1411378</b>) y el de la <b>parte / sales order</b> que viene en la lista de empaque (ej. <b>2957693</b>). Aquí puedes buscar con cualquiera de los dos, o con el de la factura.</p>
     <div class="toolbar" style="margin-bottom:10px">
@@ -3684,8 +3685,14 @@ async function verPedido(id, estado){
   const devs = devR.data||[];
   const devPorProd = {}; devs.forEach(d=>{ if(d.producto_id) devPorProd[d.producto_id] = (devPorProd[d.producto_id]||[]).concat(d); });
   const nomDev = {pendiente:'por recoger', recogido:'ya se la llevaron', nota_credito:'nota de crédito ✓', repuesto:'repuesto ✓', rechazado:'rechazada'};
-  const pedR = await sb.from('pedidos_compra').select('folio_externo').eq('id', id).maybeSingle();
+  const pedR = await sb.from('pedidos_compra').select('folio_externo, proveedores(nombre)').eq('id', id).maybeSingle();
   const pedFolio = (pedR.data||{}).folio_externo || '';
+  const pedProv = ((pedR.data||{}).proveedores||{}).nombre || ''; // v183
+  let cxpAbierta = null; // v183: factura de este pedido pendiente de pago (proveedores que no son Indar)
+  if(pedFolio && !/indar/i.test(pedProv) && puedeVender()){
+    const cq = await sb.from('cuentas_pagar').select('id,concepto,saldo,fecha_vencimiento').ilike('concepto', '%'+pedFolio+'%').neq('estado','pagada').gt('saldo', 0).limit(1);
+    cxpAbierta = (cq.data||[])[0] || null;
+  }
   window._pedFolioAct = pedFolio; window._recOk = false; window._pedAct = {id:id, estado:estado}; // v154: para refrescar tras adjuntar un PDF
   window._pindPed = {}; pindar.forEach(z=>{ window._pindPed[String(z.parte)] = z; });
   pedItems = data;
@@ -3743,6 +3750,7 @@ async function verPedido(id, estado){
       ${recibiendo?`<button class="btn sec" onclick="llenarPendiente()">Llenar TODO lo pendiente</button>
       <button class="btn" onclick="registrarRecepcion(${id})">Registrar recepción</button>`:''}
       ${editando?`<button class="btn sec" onclick="guardarCambiosPedido(${id})">💾 Guardar cambios (cantidades/quitar)</button>`:''}
+      ${cxpAbierta?`<button class="btn" style="background:#15803d" onclick="pagarFacturaPedido(${cxpAbierta.id})">💵 Pagar factura · ${fmt(cxpAbierta.saldo)} (vence ${fecha(cxpAbierta.fecha_vencimiento)})</button>`:''}
       <button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
   cargarEvidencias(id);
 }
@@ -4729,6 +4737,191 @@ async function clArchivarFactura(x, pedidoId){ // registra la factura del provee
     }
     return true;
   }catch(e){ toast('La compra quedó registrada, pero la factura no se pudo archivar: '+errMsg(e)+'. Súbela en Importar → facturas XML.', true); return false; }
+}
+
+// ===== v183: pedido a proveedor desde la factura XML (cualquier proveedor: Plomería Universal, Truper, etc.) =====
+// Flujo igual que Indar: pedido "enviado" con sus partidas y CxP (contra entrega o a crédito) → 📦 Recibir cuando llega → 💵 Pagar (sale del cajón / caja fuerte / banco).
+let pxItems = [];
+async function xmlLeerFactura(files){ // lee XML (+PDF) y regresa {d, pdf, emisor, rfc, serie, formaPago, descs, folio, condiciones}
+  let d = null, pdf = null, emisor = '', rfc = '', serie = '', formaPago = '', cond = '', descs = {};
+  for(const f of files){
+    if(/\.pdf$/i.test(f.name)){ pdf = f; continue; }
+    try{
+      const txt = (await f.text()).replace(/^﻿/, ''); const p = fxParseXML(txt, f.name);
+      if(!p) continue;
+      const doc = new DOMParser().parseFromString(txt, 'text/xml');
+      const em = doc.getElementsByTagName('cfdi:Emisor')[0] || doc.getElementsByTagName('Emisor')[0];
+      emisor = em ? (em.getAttribute('Nombre')||'') : ''; rfc = em ? (em.getAttribute('Rfc')||'') : '';
+      serie = doc.documentElement.getAttribute('Serie')||''; formaPago = doc.documentElement.getAttribute('FormaPago')||''; cond = doc.documentElement.getAttribute('CondicionesDePago')||'';
+      [...doc.getElementsByTagName('cfdi:Concepto')].concat([...doc.getElementsByTagName('Concepto')]).forEach(c=>{ const k=(c.getAttribute('NoIdentificacion')||'').trim(); if(k && !descs[k]) descs[k] = (c.getAttribute('Descripcion')||'').trim(); });
+      d = p;
+    }catch(e){}
+  }
+  if(!d) return null;
+  return {d, pdf, emisor, rfc, serie, formaPago, cond, descs, folio:(serie?serie+' ':'')+d.folio};
+}
+async function pedidoDesdeXML(){
+  pxItems = []; window._px = null;
+  const provs = (await sb.from('proveedores').select('id,nombre').order('nombre')).data||[];
+  window._pxProvs = provs;
+  abrirModal(`<h3>📄 Nuevo pedido a proveedor desde su factura (XML)</h3>
+    <p class="small muted" style="margin:0 0 10px">Para proveedores que facturan (Plomería Universal, Truper, etc.). Sube el XML y el PDF de la factura: se llena el pedido con sus partidas y costos sin IVA, se registra la cuenta por pagar (contra entrega o a crédito) y la factura queda archivada. Cuando llegue la mercancía se recibe en este mismo pedido, igual que con Indar.</p>
+    <div class="card" style="padding:10px;margin:0 0 10px;background:#eef6ff;border:1px solid #bfdbfe">
+      <input type="file" id="px-files" accept=".xml,.pdf,application/xml,text/xml,application/pdf" multiple onchange="pxLeer()" style="display:block">
+      <div id="px-info" class="small" style="margin-top:6px">Elige el XML y el PDF juntos (Ctrl + clic).</div>
+    </div>
+    <div id="px-form" style="display:none">
+      <div class="frow">
+        <div class="field"><label>Proveedor</label><select id="px-prov">${provs.map(p=>`<option value="${p.id}">${esc(p.nombre)}</option>`).join('')}<option value="nuevo">➕ Nuevo (el de la factura)</option></select></div>
+        <div class="field"><label>Folio de la factura</label><input id="px-folio"></div>
+        <div class="field"><label>Fecha</label><input id="px-fecha" type="date"></div>
+      </div>
+      <div class="frow">
+        <div class="field"><label>¿Ya llegó la mercancía?</label><select id="px-llego"><option value="no">🚚 Viene en camino — se recibe después</option><option value="si">✅ Ya está aquí — entra al inventario ahora</option></select></div>
+        <div class="field"><label>¿Cuándo se paga?</label><select id="px-plazo"><option value="0">💵 Contra entrega (al recibir)</option><option value="7">📄 Crédito 7 días</option><option value="15">📄 Crédito 15 días</option><option value="30">📄 Crédito 30 días</option><option value="45">📄 Crédito 45 días</option></select></div>
+      </div>
+      <div class="tbl-scroll" style="max-height:340px;overflow:auto"><table><thead><tr><th>Producto</th><th class="num">Cant.</th><th class="num">Costo s/IVA</th><th class="num">Importe</th><th>Venta</th><th></th></tr></thead><tbody id="px-tabla"></tbody></table></div>
+      <p class="small muted" style="margin:6px 0">Los productos <b>NUEVOS</b> se dan de alta con el precio de venta que ves (sugerido con la regla de márgenes; cámbialo si quieres). Los que ya existen conservan su precio; su costo se actualiza al recibir.</p>
+      <div class="field"><label>Nota (opcional)</label><input id="px-nota" placeholder="Ej. lo trae el proveedor el viernes"></div>
+      <p style="text-align:right;margin:6px 0"><b>Subtotal <span id="px-sub">$0.00</span> · IVA <span id="px-iva">$0.00</span> · Total <span id="px-tot">$0.00</span></b></p>
+      <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cancelar</button><button class="btn" id="px-btn" onclick="guardarPedidoXML()">📦 Registrar pedido</button></div>
+    </div>`, true);
+}
+async function pxLeer(){
+  const files = [...($('px-files').files||[])]; const info = $('px-info'); if(!files.length) return;
+  const x = await xmlLeerFactura(files);
+  if(!x){ info.innerHTML = '<span style="color:#b91c1c">No encontré un XML válido (CFDI).</span>'; return; }
+  if(x.d.tipo !== 'I'){ info.innerHTML = '<span style="color:#b91c1c">Ese XML es tipo '+esc(x.d.tipo)+', no una factura de compra.</span>'; return; }
+  info.textContent = 'Leyendo factura '+x.folio+'…';
+  const {data:ya} = await sb.from('facturas').select('id,pedido_id').eq('uuid', x.d.uuid);
+  if(ya && ya.length){ info.innerHTML = '<span style="color:#b91c1c">⚠️ Esta factura ya está registrada'+(ya[0].pedido_id?' (pedido #'+ya[0].pedido_id+')':'')+'. No se captura dos veces.</span>'; return; }
+  // proveedor: el que comparta ≥2 palabras con el emisor; si no, "nuevo"
+  const toks = s => new Set(normTxt(s).split(/\s+/).filter(t=>t.length>2 && !['del','los','las','s.a.','c.v.'].includes(t)));
+  const te = toks(x.emisor); let provId = 'nuevo';
+  for(const p of (window._pxProvs||[])){ const tp = toks(p.nombre); const hits = [...tp].filter(t=>te.has(t)).length; if(tp.size && hits >= Math.min(2, tp.size)){ provId = p.id; break; } }
+  $('px-prov').value = String(provId); $('px-folio').value = x.folio; $('px-fecha').value = x.d.fecha || hoyMX();
+  // plazo según condiciones de la factura
+  const nd = parseInt((x.cond.match(/(\d+)\s*d[ií]as/i)||[])[1]); if(nd && [7,15,30,45].includes(nd)) $('px-plazo').value = String(nd); else $('px-plazo').value = '0';
+  // productos por código del proveedor
+  const codes = [...new Set(x.d.items.map(i=>i.cod).filter(Boolean))];
+  let mios = [];
+  for(let k=0;k<codes.length;k+=40){ const r = await sb.from('productos').select('id,codigo,descripcion,costo,precio,stock,unidad').or(codes.slice(k,k+40).map(c=>`codigo.ilike.${c.replace(/[%,()]/g,'')}`).join(',')); mios = mios.concat(r.data||[]); }
+  const porCod = {}; mios.forEach(p=>{ porCod[String(p.codigo).replace(/\s+/g,'').toUpperCase()] = p; });
+  pxItems = []; let nEx = 0, nNew = 0;
+  for(const it of x.d.items){
+    const m = porCod[String(it.cod).replace(/\s+/g,'').toUpperCase()];
+    const costo = Math.round(it.pu*10000)/10000;
+    if(m){ nEx++; pxItems.push({producto_id:m.id, codigo:m.codigo, descripcion:m.descripcion, cantidad:it.cant, costo, precioVenta:+m.precio, costoAntes:+m.costo}); }
+    else { nNew++; pxItems.push({producto_id:null, codigo:it.cod, descripcion:clDescBonita(x.descs[it.cod] || it.desc), cantidad:it.cant, costo, precioVenta:precioPorMargen(costo, impMargenRegla(precioPorMargen(costo, 0.35))), unidad:'pza'}); }
+  }
+  window._px = x;
+  $('px-form').style.display = '';
+  pxPintar();
+  const fp = {'01':'efectivo','03':'transferencia','04':'tarjeta','28':'tarjeta de débito','99':'por definir'}[x.formaPago]||'';
+  info.innerHTML = `✅ Factura <b>${esc(x.folio)}</b> de <b>${esc(x.emisor)}</b>${x.rfc?' ('+esc(x.rfc)+')':''} · ${x.d.fecha} · ${x.d.items.length} renglón(es) · subtotal ${fmt(x.d.subtotal)} + IVA = <b>${fmt(x.d.total)}</b>${fp?' · forma de pago: '+fp:''}${x.cond?' · '+esc(x.cond):''}<br>
+    <b>${nEx}</b> ya están en el inventario${nNew?` · <b style="color:#b45309">${nNew} NUEVOS</b> (revisa su precio de venta)`:''}${x.pdf?' · PDF listo para archivar':' · <span style="color:#b45309">falta el PDF (se puede subir después con 📎 en el pedido)</span>'}${provId==='nuevo'?' · <b style="color:#b45309">proveedor nuevo: se da de alta con el nombre de la factura</b>':''}.`;
+}
+function pxSet(i, k, v){ pxItems[i][k] = +v||0; pxPintar(); }
+function pxPintar(){
+  const sub = Math.round(pxItems.reduce((s,x)=>s + x.cantidad*x.costo, 0)*100)/100, iva = Math.round(sub*16)/100;
+  $('px-sub').textContent = fmt(sub); $('px-iva').textContent = fmt(iva); $('px-tot').textContent = fmt(Math.round((sub+iva)*100)/100);
+  $('px-tabla').innerHTML = pxItems.map((x,i)=>`<tr><td><b>${esc(x.codigo)}</b>${x.producto_id?'':' <span class="badge b-azul">NUEVO</span>'}<br><span class="small muted">${esc(x.descripcion.slice(0,52))}</span></td>
+    <td><input type="number" step="1" min="0.01" value="${x.cantidad}" style="width:62px" onchange="pxSet(${i},'cantidad',this.value)"></td>
+    <td><input type="number" step="0.01" min="0" value="${x.costo}" style="width:80px" onchange="pxSet(${i},'costo',this.value)"></td>
+    <td class="num">${fmt(Math.round(x.cantidad*x.costo*100)/100)}</td>
+    <td>${x.producto_id ? `<span class="small">${fmt(x.precioVenta)} <span class="muted">(${Math.round((margenSV(x.precioVenta, x.costo)||0)*100)}%)</span></span>` : `$<input type="number" step="1" min="0" value="${x.precioVenta||0}" style="width:64px" onchange="pxSet(${i},'precioVenta',this.value)"> <span class="small muted">${Math.round((margenSV(x.precioVenta, x.costo)||0)*100)}%</span>`}</td>
+    <td><span class="x" onclick="pxItems.splice(${i},1);pxPintar()">✕</span></td></tr>`).join('') || '<tr><td colspan="6" class="muted">Sin partidas</td></tr>';
+}
+async function guardarPedidoXML(){
+  const x = window._px; if(!x){ toast('Primero sube el XML', true); return; }
+  if(!pxItems.length){ toast('El pedido no tiene partidas', true); return; }
+  if(pxItems.some(p=>!(p.cantidad>0) || !(p.costo>=0))){ toast('Revisa cantidades y costos', true); return; }
+  if(pxItems.some(p=>!p.producto_id && !(p.precioVenta>0))){ toast('Los productos NUEVOS necesitan precio de venta', true); return; }
+  const btn = $('px-btn'); btn.disabled = true; btn.textContent = 'Registrando…';
+  try{
+    // 1) proveedor
+    let provId = $('px-prov').value, provNombre = '';
+    if(provId === 'nuevo'){
+      const nombre = clDescBonita(x.emisor) || 'Proveedor';
+      const {data:pn, error:eP} = await sb.from('proveedores').insert({nombre, notas:(x.rfc?'RFC '+x.rfc+'. ':'')+'Dado de alta desde la factura '+x.folio+'.'}).select('id,nombre').single();
+      if(eP) throw eP; provId = pn.id; provNombre = pn.nombre;
+    } else { provId = +provId; provNombre = ((window._pxProvs||[]).find(p=>p.id===provId)||{}).nombre||''; }
+    // 2) productos nuevos
+    const nuevos = pxItems.filter(p=>!p.producto_id);
+    if(nuevos.length){
+      const filas = nuevos.map(p=>({codigo:p.codigo, descripcion:p.descripcion, categoria:'General', costo:p.costo, precio:redondearPrecio(p.precioVenta), stock:0, stock_min:3, unidad:p.unidad||'pza', activo:true}));
+      let {error:eN} = await sb.from('productos').insert(filas);
+      if(eN && /activo|unidad/i.test(eN.message||'')){ ({error:eN} = await sb.from('productos').insert(filas.map(({activo, unidad, ...r})=>r))); }
+      if(eN) throw eN;
+      const {data:re} = await sb.from('productos').select('id,codigo').in('codigo', nuevos.map(p=>p.codigo));
+      const mapa = new Map((re||[]).map(p=>[String(p.codigo).toUpperCase(), p.id]));
+      nuevos.forEach(p=>{ p.producto_id = mapa.get(String(p.codigo).toUpperCase())||null; });
+      if(nuevos.some(p=>!p.producto_id)) throw new Error('No pude dar de alta algunos productos nuevos');
+    }
+    // 3) pedido + partidas
+    const sub = Math.round(pxItems.reduce((s,p)=>s + p.cantidad*p.costo, 0)*100)/100, iva = Math.round(sub*16)/100, tot = Math.round((sub+iva)*100)/100;
+    const plazo = +($('px-plazo').value||0), fecha = $('px-fecha').value || hoyMX(), folio = ($('px-folio').value||x.folio).trim();
+    const llego = $('px-llego').value === 'si';
+    const nota = ($('px-nota').value||'').trim();
+    const {data:pc, error:e1} = await sb.from('pedidos_compra').insert({proveedor_id:provId, folio_externo:folio, fecha, estado:'enviado', plazo_dias:plazo, subtotal:sub, iva, total:tot,
+      notas:`Pedido desde la factura ${x.folio} (${x.d.fecha}, ${fmt(x.d.total)}). Pago: ${plazo?'crédito '+plazo+' días':'contra entrega'}. ${nuevos.length?nuevos.length+' producto(s) nuevo(s) con precio sugerido. ':''}${nota}`.trim()}).select('id').single();
+    if(e1) throw e1;
+    const items = pxItems.map(p=>({pedido_id:pc.id, producto_id:p.producto_id, cantidad:p.cantidad, costo_unit:p.costo, importe:Math.round(p.cantidad*p.costo*100)/100, cantidad_facturada:p.cantidad}));
+    let {error:e2} = await sb.from('pedido_compra_items').insert(items);
+    if(e2 && /cantidad_facturada/i.test(e2.message||'')){ ({error:e2} = await sb.from('pedido_compra_items').insert(items.map(({cantidad_facturada, ...r})=>r))); }
+    if(e2) throw e2;
+    // 4) cuenta por pagar
+    const v = new Date(fecha+'T00:00:00'); v.setDate(v.getDate()+plazo);
+    const {error:eC} = await sb.from('cuentas_pagar').insert({proveedor_id:provId, concepto:'Factura '+folio+' (pedido '+folio+')', referencia: plazo?('Crédito '+plazo+' días · '+provNombre):('Contra entrega · '+provNombre),
+      fecha_emision:fecha, fecha_vencimiento:v.toISOString().slice(0,10), monto:tot, saldo:tot});
+    if(eC) toast('El pedido quedó, pero la cuenta por pagar no: '+errMsg(eC), true);
+    // 5) factura archivada + PDF
+    await clArchivarFactura(x, pc.id);
+    // 6) si ya llegó: recibir todo ahora (entra al inventario y el costo se actualiza)
+    let recibido = false;
+    if(llego){
+      const {data:its} = await sb.from('pedido_compra_items').select('id,cantidad').eq('pedido_id', pc.id);
+      const r = await sb.rpc('recibir_partidas', {p_pedido_id:pc.id, p_items:(its||[]).map(i=>({item_id:i.id, cantidad:i.cantidad}))});
+      if(r.error) toast('El pedido quedó registrado pero no se pudo recibir: '+errMsg(r.error)+'. Recíbelo desde la lista.', true); else recibido = true;
+    }
+    logEv('pedido_xml', provNombre+' factura '+folio+' '+fmt(tot)+(recibido?' recibido':' en camino'));
+    cerrarModal();
+    toast(`✅ Pedido ${folio} registrado: ${pxItems.length} partida(s)${nuevos.length?', '+nuevos.length+' producto(s) nuevo(s)':''} · ${fmt(tot)} ${plazo?'a crédito':'contra entrega'}${recibido?' · ya en inventario':' · pendiente de recibir'}`);
+    if(nuevos.length && typeof verTarjetas==='function') setTimeout(()=>verTarjetas(null, '🆕 Los productos nuevos necesitan tarjeta de precio:'), 800);
+    if(typeof vPedidos==='function' && document.querySelector('#v-pedidos')) vPedidos();
+  }catch(e){ toast(errMsg(e), true); btn.disabled = false; btn.textContent = '📦 Registrar pedido'; }
+}
+// 💵 pagar la factura de un pedido (contra entrega o crédito) desde el pedido: registra el pago y, si fue efectivo, el movimiento de caja
+async function pagarFacturaPedido(cuentaId){
+  const {data:c, error} = await sb.from('cuentas_pagar').select('*, proveedores(nombre)').eq('id', cuentaId).single();
+  if(error||!c){ toast('No encontré la cuenta por pagar', true); return; }
+  abrirModal(`<h3>💵 Pagar ${esc(c.concepto)}</h3>
+    <p style="margin:0 0 10px">${esc(c.proveedores?.nombre||'')} · saldo <b>${fmt(c.saldo)}</b> · vence ${fecha(c.fecha_vencimiento)}</p>
+    <div class="frow">
+      <div class="field"><label>Monto pagado</label><input id="pf-monto" type="number" step="0.01" value="${c.saldo}"></div>
+      <div class="field"><label>¿De dónde salió?</label><select id="pf-origen">
+        <option value="cajon">💵 Efectivo del cajón (ventas del día)</option><option value="chica">🏠 Efectivo de la caja fuerte</option>
+        <option value="transferencia">🏦 Transferencia del banco</option></select></div>
+    </div>
+    <div class="field"><label>Referencia (opcional)</label><input id="pf-ref" placeholder="Ej. le pagamos al chofer / SPEI 123"></div>
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cancelar</button><button class="btn" id="pf-btn" onclick="confirmarPagoFacturaPedido(${c.id})">Registrar pago</button></div>`);
+}
+async function confirmarPagoFacturaPedido(cuentaId){
+  const monto = +($('pf-monto').value||0); if(!(monto>0)){ toast('Escribe el monto', true); return; }
+  const origen = $('pf-origen').value, ref = ($('pf-ref').value||'').trim();
+  const btn = $('pf-btn'); btn.disabled = true;
+  const {data:c} = await sb.from('cuentas_pagar').select('concepto, proveedores(nombre)').eq('id', cuentaId).single();
+  const r = await sb.rpc('registrar_pago', {p_cuenta_id:cuentaId, p_monto:monto, p_metodo: origen==='transferencia'?'transferencia':'efectivo', p_referencia:(origen==='cajon'?'efectivo del cajón':origen==='chica'?'efectivo de caja fuerte':'transferencia')+(ref?' · '+ref:'')});
+  if(r.error){ toast(errMsg(r.error), true); btn.disabled = false; return; }
+  if(origen !== 'transferencia'){ // que el corte cuadre: el efectivo salió de la caja
+    const fila = {tipo:'gasto', monto, concepto:'Pago a '+((c&&c.proveedores&&c.proveedores.nombre)||'proveedor')+' · '+((c&&c.concepto)||'')+(ref?' · '+ref:''), nombre:perfil.nombre||perfil.correo, usuario_id:perfil.id, fecha:hoyMX(), origen};
+    let {error:eM} = await sb.from('caja_movs').insert(fila);
+    if(eM && /origen/i.test(eM.message||'')){ delete fila.origen; ({error:eM} = await sb.from('caja_movs').insert(fila)); }
+    if(eM) toast('El pago quedó registrado pero no el movimiento de caja: '+errMsg(eM), true);
+  }
+  logEv('pago_factura_pedido', ((c&&c.concepto)||cuentaId)+' '+fmt(monto)+' '+origen);
+  cerrarModal(); toast('✅ Pago registrado'+(origen!=='transferencia'?' y descontado de la caja':''));
+  if(window._pedAct && window._pedAct.id) verPedido(window._pedAct.id, window._pedAct.estado);
 }
 
 async function compraLocal(){
