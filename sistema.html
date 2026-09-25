@@ -2856,10 +2856,152 @@ async function imprimirCot(id){
    VISTA: CATÁLOGO (navegar 23 mil productos, seleccionar → cotizar)
 ============================================================ */
 let catSel = new Map(), catPagina = 0;
+// ===== v184: TRUPER — lista de precios (catalogo.csv de Truper en línea) y catálogo Truper en la pestaña Catálogo =====
+function trParseCsv(text){ // CSV con comillas (las descripciones traen comas y pulgadas: "Llave (perica) 15"", TRUPER")
+  const rows = []; let row = [], cell = '', q = false;
+  for(let i=0;i<text.length;i++){
+    const ch = text[i];
+    if(q){
+      if(ch === '"'){ if(text[i+1] === '"'){ cell += '"'; i++; } else q = false; }
+      else cell += ch;
+    } else {
+      if(ch === '"') q = true;
+      else if(ch === ','){ row.push(cell); cell = ''; }
+      else if(ch === '\n'){ row.push(cell); rows.push(row); row = []; cell = ''; }
+      else if(ch === '\r'){ }
+      else cell += ch;
+    }
+  }
+  if(cell.length || row.length){ row.push(cell); rows.push(row); }
+  return rows.filter(r=>r.length>1 && r.some(c=>c.trim()));
+}
+async function trDecode(file){
+  const buf = await file.arrayBuffer();
+  try{ return new TextDecoder('utf-8', {fatal:true}).decode(buf); }catch(e){ return new TextDecoder('windows-1252').decode(buf); }
+}
+function trNum(v){ const n = parseFloat(String(v??'').replace(/[$,\s]/g,'')); return isFinite(n) ? n : null; }
+async function subirListaTruper(){
+  const f = $('lt-file') && $('lt-file').files && $('lt-file').files[0];
+  const st = m => { const e = $('lt-status'); if(e) e.textContent = m; };
+  if(!f){ toast('Elige el archivo catalogo.csv que bajaste de Truper en línea', true); return; }
+  const btn = $('lt-btn'); btn.disabled = true;
+  try{
+    st('Leyendo el archivo…');
+    const rows = trParseCsv(await trDecode(f));
+    const H = rows[0].map(h=>normTxt(h));
+    const col = (...names) => { for(const n of names){ const i = H.findIndex(h=>h===normTxt(n)); if(i>=0) return i; } for(const n of names){ const i = H.findIndex(h=>h.includes(normTxt(n))); if(i>=0) return i; } return -1; };
+    const C = { codigo:col('código','codigo'), clave:col('clave'), desc:col('descripción','descripcion'), mm:col('margen de mercado'), inner:col('caja'), master:col('master'),
+      unidad:col('unidad'), ean:col('ean'), pmin:col('precio mínimo de venta','precio minimo'), alta:col('alta rotación','alta rotacion'),
+      mayI:col('precio mayoreo con iva'), disI:col('precio distribuidor con iva'), pubI:col('precio público con iva','precio publico con iva'),
+      may:col('precio mayoreo sin iva'), dis:col('precio distribuidor sin iva'), pub:col('precio público sin iva','precio publico sin iva'),
+      marca:col('marca'), mmay:col('precio medio mayoreo sin'), mmayI:col('precio medio mayoreo con'), sat:col('codigo sat','código sat'), satd:col('descripcion sat','descripción sat'),
+      fam:col('familia'), famd:col('descripción familia','descripcion familia'), peso:col('peso'), vol:col('volumen') };
+    if(C.codigo<0 || C.clave<0 || C.dis<0){ throw new Error('No reconozco las columnas del archivo (código / clave / precio distribuidor sin IVA). ¿Es el catalogo.csv de "Archivo de Precios"?'); }
+    const g = (r,i) => i>=0 ? String(r[i]??'').trim() : '';
+    const filas = rows.slice(1).map(r=>({
+      codigo:g(r,C.codigo), clave:g(r,C.clave), descripcion:g(r,C.desc), marca:g(r,C.marca)||null, familia:g(r,C.fam)||null, familia_desc:g(r,C.famd)||null,
+      unidad:g(r,C.unidad)||null, ean:g(r,C.ean)||null, inner_pack:trNum(g(r,C.inner)), master_pack:trNum(g(r,C.master)),
+      precio_publico_iva:trNum(g(r,C.pubI)), precio_publico:trNum(g(r,C.pub)), precio_minimo:trNum(g(r,C.pmin)),
+      distribuidor_iva:trNum(g(r,C.disI)), distribuidor:trNum(g(r,C.dis)), mayoreo_iva:trNum(g(r,C.mayI)), mayoreo:trNum(g(r,C.may)),
+      medio_mayoreo_iva:trNum(g(r,C.mmayI)), medio_mayoreo:trNum(g(r,C.mmay)), alta_rotacion:/^(1|s|si|sí|x|true)$/i.test(g(r,C.alta)),
+      margen_mercado:g(r,C.mm)||null, sat_codigo:g(r,C.sat)||null, sat_desc:g(r,C.satd)||null, peso_kg:trNum(g(r,C.peso)), volumen_cm3:trNum(g(r,C.vol)), actualizado:new Date().toISOString()
+    })).filter(x=>x.codigo && x.clave);
+    if(!filas.length) throw new Error('El archivo no trae renglones con código y clave');
+    let ok = 0;
+    for(let i=0;i<filas.length;i+=500){
+      st(`Subiendo ${Math.min(i+500, filas.length)} de ${filas.length}…`);
+      const {error} = await sb.from('lista_truper').upsert(filas.slice(i,i+500), {onConflict:'codigo'});
+      if(error) throw error;
+      ok += Math.min(500, filas.length-i);
+    }
+    // costo de MIS productos con clave Truper (código del producto = clave Truper)
+    let costos = 0;
+    if($('lt-mios') && $('lt-mios').checked){
+      st('Actualizando costos de mis productos con clave Truper…');
+      const claves = filas.map(x=>x.clave.toUpperCase());
+      const porClave = {}; filas.forEach(x=>{ porClave[x.clave.toUpperCase()] = x; });
+      const mios = await traerTodo(()=>sb.from('productos').select('id,codigo,costo').eq('activo', true).order('id'));
+      for(const m of (mios||[])){
+        const t = porClave[String(m.codigo).trim().toUpperCase()];
+        if(t && +t.distribuidor>0 && Math.abs(+m.costo - +t.distribuidor) > 0.005){ const r = await sb.from('productos').update({costo:+t.distribuidor}).eq('id', m.id); if(!r.error) costos++; }
+      }
+    }
+    st(''); toast(`✅ Lista Truper actualizada: ${ok.toLocaleString('es-MX')} productos${costos?` · costo actualizado en ${costos} producto(s) míos`:''}`);
+    logEv('lista_truper', ok+' productos'+(costos?', '+costos+' costos':''));
+  }catch(e){ st(''); toast(errMsg(e), true); }
+  btn.disabled = false;
+}
+// ---- Catálogo Truper (pestaña Catálogo → Proveedor: Truper) ----
+async function pintarCatalogoTruper(agregar){
+  const q = ($('cat-q')?.value||'').trim();
+  let con = sb.from('lista_truper').select('codigo,clave,descripcion,marca,familia_desc,unidad,ean,inner_pack,precio_publico_iva,precio_publico,precio_minimo,distribuidor,distribuidor_iva,alta_rotacion').order('descripcion');
+  if(q.length>=2){
+    for(const t of q.split(/\s+/).slice(0,6)){
+      const tt = normTxt(t).replace(/[%,()]/g,' ').trim(); if(tt.length<2) continue;
+      const like = `%${tt}%`;
+      con = con.or(`clave.ilike.${like},descripcion.ilike.${like},marca.ilike.${like},codigo.ilike.${like},ean.ilike.${like},familia_desc.ilike.${like}`);
+    }
+  }
+  const marca = $('cat-marca')?.value; if(marca && marca!=='(sin marca)') con = con.eq('marca', marca);
+  const desde = catPagina*48;
+  const {data, error} = await con.range(desde, desde+47);
+  if(error){ toast(/lista_truper/.test(error.message||'')?'Falta correr el SQL 57 (tabla lista_truper)':errMsg(error), true); return; }
+  const mios = {};
+  try{ const cods = (data||[]).map(p=>p.clave).filter(Boolean); if(cods.length){ const rm = await sb.from('productos').select('id,codigo,precio,costo,stock').in('codigo', cods).eq('activo', true); (rm.data||[]).forEach(m=>{ mios[String(m.codigo).toUpperCase()] = m; }); } }catch(e){}
+  if(q.length>=2 && !catPagina){ clearTimeout(window._evT); window._evT=setTimeout(function(){ logEv('busqueda_truper', q); }, 1500); }
+  window._catTr = window._catTr || {}; (data||[]).forEach(p=>{ window._catTr[p.codigo] = p; });
+  const html = (data||[]).map(p=>{
+    const mio = mios[String(p.clave).toUpperCase()];
+    const sel = catSel.has(p.clave);
+    const co = +p.distribuidor||0, pubI = +p.precio_publico_iva||0;
+    const m = margenSV(pubI, co);
+    const precioHtml = (mio && +mio.precio>0)
+      ? `<b>${fmt(mio.precio)}</b> <span class="badge b-verde" title="Ya lo vendemos: este es nuestro precio">🏪 nuestro</span><br><span class="small muted">stock ${+mio.stock||0}${esFinanzas()?` · público Truper ${fmt(pubI)}`:''}</span>`
+      : `<b>${fmt(pubI)}</b><br><span class="small muted">público Truper${esFinanzas()?` · costo ${fmt(co)} (${m!==null?Math.round(m*100)+'%':'—'})`:''}</span>`;
+    const obj = {c:p.clave, d:p.descripcion, pr:(mio&&+mio.precio>0)?+mio.precio:pubI, co:(mio&&+mio.costo>0)?+mio.costo:co, su:pubI, pid:mio?mio.id:undefined, tr:p.codigo};
+    return `<div class="card" style="margin:0;padding:12px;${sel?'outline:2px solid var(--rojo)':''}">
+      <div class="small" style="min-height:58px"><b>${esc(p.clave)}</b> <span class="badge b-gris">${esc(p.marca||'')}</span>${p.alta_rotacion?' <span class="badge b-azul" title="Alta rotación según Truper">🔥</span>':''}<br>${esc(p.descripcion||'')}<br><span class="muted">${esc(p.familia_desc||'')}${p.inner_pack?` · inner ${+p.inner_pack}`:''}${p.unidad?` · ${esc(p.unidad)}`:''}</span></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;gap:6px">
+        <div>${precioHtml}</div>
+        <div style="white-space:nowrap">${(!mio && esAdmin())?`<button class="btn sm sec" title="Dar de alta en mi inventario (stock 0) con costo distribuidor y precio público Truper" onclick="altaProductoTruper('${esc(p.codigo)}')">➕ Alta</button> `:''}<button class="btn sm ${sel?'':'sec'}" onclick='toggleCat(${JSON.stringify(obj).replace(/'/g,"&#39;")})'>${sel?'✓':'+'}</button></div>
+      </div></div>`;
+  }).join('');
+  if(agregar) $('cat-grid').insertAdjacentHTML('beforeend', html);
+  else $('cat-grid').innerHTML = html || '<p class="muted">Sin resultados en la lista Truper.'+(q.length<2?' Escribe una clave (PET-15X), descripción o código de barras.':'')+'</p>';
+  $('cat-mas').style.display = (data||[]).length===48 ? '' : 'none';
+  pintarSelBar();
+}
+async function altaProductoTruper(codigo){
+  const p = (window._catTr||{})[codigo]; if(!p){ toast('No encontré el producto', true); return; }
+  const precio = redondearPrecio(+p.precio_publico_iva||0);
+  if(!confirm(`Dar de alta en el inventario:\n\n${p.clave} · ${p.descripcion}\n\nCosto (distribuidor s/IVA): ${fmt(p.distribuidor)}\nPrecio de venta: ${fmt(precio)} (público Truper)\n\nQueda con stock 0; entra cuando recibas el pedido.`)) return;
+  const fila = {codigo:p.clave, descripcion:p.descripcion, categoria:p.familia_desc||'Truper', costo:+p.distribuidor||0, precio, stock:0, stock_min:3, unidad:(p.unidad||'pza').toLowerCase().startsWith('pieza')?'pza':(p.unidad||'pza').toLowerCase(), codigo_barras:p.ean||null, activo:true};
+  let {error} = await sb.from('productos').insert(fila);
+  if(error && /codigo_barras/i.test(error.message||'')){ delete fila.codigo_barras; ({error} = await sb.from('productos').insert(fila)); }
+  if(error){ toast(errMsg(error), true); return; }
+  logEv('alta_truper', p.clave+' '+fmt(precio));
+  toast('✅ '+p.clave+' dado de alta a '+fmt(precio)); pintarCatalogo(false);
+}
+async function catMarcasTruper(){
+  try{ const r = await sb.from('lista_truper').select('marca').not('marca','is',null).limit(20000); const c = {}; (r.data||[]).forEach(x=>{ c[x.marca] = (c[x.marca]||0)+1; }); return Object.entries(c).sort((a,b)=>b[1]-a[1]).map(([marca,n])=>({marca,n})); }catch(e){ return []; }
+}
+async function catCambiarProv(){
+  const tr = ($('cat-prov')?.value==='truper');
+  ['cat-rubro','cat-fam'].forEach(id=>{ const e=$(id); if(e) e.style.display = tr?'none':''; });
+  const ms = $('cat-marca');
+  if(ms){
+    if(tr){ const marcas = await catMarcasTruper(); ms.innerHTML = '<option value="">Todas las marcas Truper</option>'+marcas.map(x=>`<option value="${esc(x.marca)}">${esc(x.marca)} (${x.n})</option>`).join(''); }
+    else if(window._catMarcasIndar) ms.innerHTML = window._catMarcasIndar;
+  }
+  const qi = $('cat-q'); if(qi) qi.placeholder = tr ? 'Buscar en la lista Truper (clave PET-15X, descripción, código de barras)…' : 'Buscar en el catálogo...';
+  catPagina = 0; pintarCatalogo();
+}
+
 async function vCatalogo(){
   const [ma, fa, ru] = await Promise.all([sb.rpc('marcas_indar'), sb.rpc('familias_indar'), sb.rpc('rubros_indar')]);
   $('v-catalogo').innerHTML = `
     <div class="toolbar">
+      <select id="cat-prov" onchange="catCambiarProv()" title="Catálogo de qué proveedor"><option value="indar">Indar</option><option value="truper">🔧 Truper</option></select>
       <input type="search" id="cat-q" placeholder="Buscar en el catálogo..." oninput="clearTimeout(window._catT); window._catT=setTimeout(()=>{catPagina=0;pintarCatalogo();},350)">
       <select id="cat-rubro" onchange="catPagina=0;pintarCatalogo()"><option value="">Todos los usos</option>
         ${(ru.data||[]).map(x=>`<option value="${esc(x.rubro)}">${esc(x.rubro)} (${x.n})</option>`).join('')}</select>
@@ -2872,9 +3014,11 @@ async function vCatalogo(){
     <div id="cat-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px"></div>
     <p style="margin-top:14px"><button class="btn sec" id="cat-mas" onclick="catPagina++;pintarCatalogo(true)">Cargar más</button></p>`;
   catSel = new Map(); catPagina = 0;
+  window._catMarcasIndar = $('cat-marca') ? $('cat-marca').innerHTML : ''; // v184
   pintarCatalogo();
 }
 async function pintarCatalogo(agregar){
+  if(($('cat-prov')||{}).value==='truper') return pintarCatalogoTruper(agregar); // v184
   const q = ($('cat-q')?.value||'').trim(), marca = $('cat-marca')?.value, fam = $('cat-fam')?.value, rubro = $('cat-rubro')?.value;
   let con = sb.from('lista_indar').select('codigo,descripcion,marca,categoria,precio_lista,promo_pct,precio_sugerido').order('descripcion');
   if(q.length>=2){
@@ -6935,6 +7079,14 @@ async function vImportar(){
         <div class="field"><label><input type="checkbox" id="lp-mios" checked> También actualizar el COSTO de MIS productos que aparezcan en la lista (el precio de venta NO se toca)</label></div>
         <button class="btn" id="lp-btn" onclick="subirListaPrecios()">Actualizar lista de precios</button>
         <p class="small muted" id="lp-status" style="margin-top:8px"></p>
+      </div>
+      <div class="card"><h3>🔧 Truper: lista de precios (catalogo.csv)</h3>
+        <p class="small muted" style="margin-bottom:10px">1) En <b>Truper en línea</b> → Actualización de precios y productos → <b>Archivo de Precios</b> → baja el <b>.csv</b>. 2) Súbelo aquí.
+        Se cargan los 16 mil productos con precio público, mínimo y distribuidor (nuestro costo = distribuidor sin IVA). Luego se buscan en <b>Catálogo → Proveedor: Truper</b>, se dan de alta y se cotizan.</p>
+        <div class="field"><input type="file" id="lt-file" accept=".csv,.txt,text/csv"></div>
+        <div class="field"><label><input type="checkbox" id="lt-mios" checked> También actualizar el COSTO de MIS productos cuyo código sea una clave Truper (el precio de venta NO se toca)</label></div>
+        <button class="btn" id="lt-btn" onclick="subirListaTruper()">Actualizar lista Truper</button>
+        <p class="small muted" id="lt-status" style="margin-top:8px"></p>
       </div>
       <div class="card"><h3>O pega los datos manualmente</h3>
         <div class="field"><textarea id="imp-manual" rows="3" placeholder="Pega aquí el texto que genera el botón (por si no se abre solo)"></textarea></div>
