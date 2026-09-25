@@ -3745,7 +3745,7 @@ function solCreditoHtml(v){ const e = x => esc(x==null?'':String(x)); const chk 
   <div class="g c4">
     <div class="opts" style="font-size:8.6pt">${chk(v.tipo==='moral')}Persona moral<br>${chk(v.tipo==='fisica')}Persona física c/act. empresarial</div>
     <div class="f"><label>Línea solicitada (MXN)</label>$ ${e(v.monto)}</div>
-    <div class="opts"><b class="small">Plazo:</b> ${chk(+v.plazo===15)}15 días ${chk(+v.plazo===30)}30 días ${chk(+v.plazo===45)}45 días</div>
+    <div class="opts"><b class="small">Plazo:</b> ${chk(+v.plazo===15)}15 días ${chk(+v.plazo===30)}30 días</div>
     <div class="f"><label>Compra mensual estimada</label>$ ${e(v.compra_mensual)}</div>
   </div>
   <div class="g c2">
@@ -3923,7 +3923,7 @@ async function expedienteCredito(id){
       <div class="frow" style="grid-template-columns:repeat(4,1fr)">
         <div class="field"><label>Tipo</label><select id="cs-tipo"><option value="moral" ${s.tipo==='moral'?'selected':''}>Persona moral</option><option value="fisica" ${s.tipo==='fisica'?'selected':''}>Física c/act. empresarial</option></select></div>
         ${F('monto','Línea solicitada (MXN)')}
-        <div class="field"><label>Plazo solicitado</label><select id="cs-plazo">${[15,30,45].map(d=>`<option value="${d}" ${+s.plazo===d?'selected':''}>${d} días</option>`).join('')}</select></div>
+        <div class="field"><label>Plazo solicitado</label><select id="cs-plazo">${[15,30].map(d=>`<option value="${d}" ${+s.plazo===d?'selected':''}>${d} días</option>`).join('')}</select></div>
         ${F('compra_mensual','Compra mensual estimada')}
       </div>
       <div class="frow" style="grid-template-columns:2fr 1fr 1fr">${F('razon','Razón social / nombre (como en la CSF)')}${F('rfc','RFC')}${F('giro','Giro')}</div>
@@ -3949,7 +3949,7 @@ async function expedienteCredito(id){
       <div class="frow" style="grid-template-columns:repeat(5,1fr)">
         <div class="field"><label>Estado</label><select id="cr-estado">${Object.entries(CR_ESTADOS).map(([k,t])=>`<option value="${k}" ${est===k?'selected':''}>${t}</option>`).join('')}</select></div>
         <div class="field"><label>Límite (MXN, con IVA)</label><input id="cr-limite" type="number" step="100" value="${+c.credito_limite||''}"></div>
-        <div class="field"><label>Plazo (días)</label><select id="cr-plazo"><option value="0">—</option>${[7,15,30,45,60].map(d=>`<option value="${d}" ${+c.credito_plazo===d?'selected':''}>${d}</option>`).join('')}</select></div>
+        <div class="field"><label>Plazo (días)</label><select id="cr-plazo"><option value="0">—</option>${[7,15,30].map(d=>`<option value="${d}" ${+c.credito_plazo===d?'selected':''}>${d}</option>`).join('')}</select></div>
         <div class="field"><label>Día de pago</label><input id="cr-diapago" value="${esc(c.credito_dia_pago||'')}" placeholder="Ej. viernes / día 15"></div>
         <div class="field"><label>Próxima revisión</label><input id="cr-revision" type="date" value="${esc(c.credito_revision||'')}"></div>
       </div>
