@@ -4060,9 +4060,9 @@ async function crLigaCliente(id, nuevo){
       <button class="btn sec" onclick="crLigaCliente(${id}, true)">↻ Liga nueva</button>
       <button class="btn sec" onclick="navigator.clipboard.writeText($('cr-liga-url').value).then(()=>toast('📋 Liga copiada'))">📋 Copiar liga</button>
       <button class="btn sec" onclick="navigator.clipboard.writeText($('cr-liga-txt').value).then(()=>toast('📋 Mensaje copiado'))">📋 Copiar mensaje</button>
-      <a class="btn" href="${wa}" target="_blank" rel="noopener" onclick="logEv('credito','liga del portal por WhatsApp a ${esc(c.nombre||id)}')">💬 Mandar por WhatsApp</a>
+      <a class="btn" style="text-decoration:none" href="${wa}" target="_blank" rel="noopener" onclick="logEv('credito','liga del portal por WhatsApp a ${esc(c.nombre||id)}')">💬 Mandar por WhatsApp</a>
       <button class="btn sec" onclick="expedienteCredito(${id})">← Volver al expediente</button>
-    </div>`);
+    </div>`, true);
 }
 async function crCerrarLiga(id){
   if(!confirm('¿Cerrar la liga del portal? El cliente ya no podrá entrar con ella (puedes generar otra después).')) return;

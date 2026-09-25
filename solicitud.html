@@ -71,7 +71,7 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {auth:{persistSessi
 const $ = id => document.getElementById(id);
 const esc = s => String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function toast(m, bad){ const t=$('toast'); t.textContent=m; t.className='toast on'+(bad?' bad':''); clearTimeout(t._t); t._t=setTimeout(()=>t.className='toast', bad?5000:2600); }
-const fechaMX = d => { try{ return new Date(d).toLocaleDateString('es-MX',{day:'2-digit',month:'short',year:'numeric'}); }catch(e){ return ''; } };
+const fechaMX = d => { try{ const x = (typeof d==='string' && /^\d{4}-\d{2}-\d{2}$/.test(d)) ? new Date(d+'T12:00:00') : new Date(d); return x.toLocaleDateString('es-MX',{day:'2-digit',month:'short',year:'numeric'}); }catch(e){ return ''; } };
 const token = new URLSearchParams(location.search).get('t') || '';
 let D = null, dirty = false, subiendo = 0;
 const DOCS = [
@@ -99,7 +99,7 @@ function docHtml(d){
   const x = (D.docs&&D.docs[d.k])||{}; const ok = !!x.ok;
   const st = ok ? `<span class="badge b-verde">✓ recibido${x.nombre?' · '+esc(x.nombre):''}${x.fecha?' · '+esc(fechaMX(x.fecha)):''}</span>` : (d.req?'<span class="badge b-ambar">falta</span>':'<span class="badge b-gris">opcional</span>');
   return `<div class="doc" id="doc-${d.k}"><div><b>${esc(d.t)}${d.req?' <span style="color:var(--naranja)">*</span>':''}</b><div class="why">${esc(d.why)}</div><div class="st">${st}</div><div class="prog" id="pg-${d.k}" style="display:none"><i></i></div></div>
-    <div><label class="up ${ok?'ok':''}">${ok?'↻ Cambiar':'📎 Subir'}<input type="file" accept="application/pdf,image/*" ${d.multi?'multiple':''} onchange="subir('${d.k}', this)"></label></div></div>`;
+    <div><label class="up ${ok?'ok':''}">${ok?'↻ Cambiar':'📎 Subir'}<input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,.heic,application/pdf,image/*" ${d.multi?'multiple':''} onchange="subir('${d.k}', this)"></label></div></div>`;
 }
 function pintar(){
   const s = D.solicitud||{};
@@ -201,6 +201,8 @@ async function subir(k, inp){
   const files = [...(inp.files||[])]; if(!files.length) return;
   const d = DOCS.find(x=>x.k===k); const big = files.find(f=>f.size > 20*1024*1024);
   if(big){ toast('"'+big.name+'" pesa más de 20 MB. Comprímelo o tómale foto por partes.', true); inp.value=''; return; }
+  const malo = files.find(f=>!/\.(pdf|jpe?g|png|webp|heic)$/i.test(f.name));
+  if(malo){ toast('"'+malo.name+'": solo aceptamos PDF o fotos (JPG, PNG). Si es Word o Excel, guárdalo como PDF.', true); inp.value=''; return; }
   if(!d.multi && files.length>1){ toast('Sube un solo archivo para este documento (si son varias hojas, júntalas en un PDF).', true); inp.value=''; return; }
   const pg = $('pg-'+k); pg.style.display=''; pg.firstElementChild.style.width='15%'; subiendo++;
   const paths = [];
