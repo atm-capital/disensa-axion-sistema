@@ -3907,6 +3907,7 @@ async function expedienteCredito(id){
   let saldo = 0, venc = 0;
   try{ const r1 = await sb.rpc('saldo_credito_cliente', {p_cliente_id:id}); saldo = +(r1.data||0); const r2 = await sb.rpc('vencidas_credito_cliente', {p_cliente_id:id}); venc = +(r2.data||0); }catch(e){}
   const est = c.credito_estado||'sin';
+  let tk = null; try{ const rt = await sb.from('credito_tokens').select('*').eq('cliente_id', id).order('creado',{ascending:false}).limit(1); tk = (rt.data&&rt.data[0])||null; }catch(e){} // v188
   const F = (k, label, w) => `<div class="field" ${w?`style="grid-column:span ${w}"`:''}><label>${label}</label><input id="cs-${k}" value="${esc(s[k]||'')}"></div>`;
   abrirModal(`<h3>💳 Expediente de crédito — ${esc(c.nombre)}</h3>
     <div class="card" style="padding:10px;margin-bottom:10px;background:${est==='autorizado'?'#f0fdf4':(est==='tramite'?'#fffbeb':'#f8fafc')}">
@@ -3916,6 +3917,7 @@ async function expedienteCredito(id){
         ${c.credito_autorizado_at?`<span class="small muted">autorizado ${fecha(c.credito_autorizado_at)}${c.credito_autorizado_por?' por '+esc(c.credito_autorizado_por):''}</span>`:''}
         <span class="small muted">Folio ${esc(c.credito_folio||('SC-'+String(c.id).padStart(4,'0')))}</span>
       </div>
+      ${puedeVender()?`<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px">${crPortalHtml(id, tk)}</div>`:''}
     </div>
     <details open><summary style="cursor:pointer;font-weight:700;margin-bottom:6px">📋 Solicitud (datos del cliente)</summary>
       <div class="frow" style="grid-template-columns:repeat(4,1fr)">
@@ -3937,9 +3939,9 @@ async function expedienteCredito(id){
       <div class="tbl-scroll"><table><thead><tr><th>Documento</th><th>Estado</th><th>Fecha del documento</th><th></th></tr></thead><tbody>
       ${CR_DOCS.map(d=>{ const x = docs[d.k]||{}; const st = crDocEstado(x, d); return `<tr>
         <td>${d.req?'<b>':''}${esc(d.t)}${d.req?'</b>':' <span class="small muted">(opcional)</span>'}${d.meses?` <span class="small muted">· vigencia ${d.meses} mes${d.meses>1?'es':''}</span>`:''}</td>
-        <td><span class="badge ${st.cls}">${st.txt}</span></td>
+        <td><span class="badge ${st.cls}">${st.txt}</span>${x.origen==='cliente'?' <span class="badge b-azul" title="Lo subió el cliente por el portal">📬 cliente</span>':''}</td>
         <td><input type="date" id="cd-f-${d.k}" value="${esc(x.fecha||'')}" style="padding:4px" onchange="crDocFecha(${id},'${d.k}',this.value)"></td>
-        <td style="white-space:nowrap">${x.path?`<button class="btn sm sec" onclick="verPdfFactura('${esc(x.path)}')">📄 Ver</button> `:''}<label class="btn sm ${x.path?'sec':''}" style="cursor:pointer">${x.path?'↻ Reemplazar':'📎 Subir'}<input type="file" accept="image/*,application/pdf" style="display:none" onchange="crSubirDoc(${id},'${d.k}',this)"></label>${x.ok?` <button class="btn sm sec" title="Marcar como faltante" onclick="crDocQuitar(${id},'${d.k}')">✕</button>`:(x.path?'':` <button class="btn sm sec" title="Lo tengo en papel, sin archivo" onclick="crDocOk(${id},'${d.k}')">✓ en papel</button>`)}</td></tr>`; }).join('')}
+        <td style="white-space:nowrap">${x.path?`<button class="btn sm sec" onclick="verPdfFactura('${esc(x.path)}')">📄 Ver</button> `:''}${(x.extra||[]).map((p,i)=>`<button class="btn sm sec" title="Archivo adicional" onclick="verPdfFactura('${esc(p)}')">📄 ${i+2}</button> `).join('')}<label class="btn sm ${x.path?'sec':''}" style="cursor:pointer">${x.path?'↻ Reemplazar':'📎 Subir'}<input type="file" accept="image/*,application/pdf" style="display:none" onchange="crSubirDoc(${id},'${d.k}',this)"></label>${x.ok?` <button class="btn sm sec" title="Marcar como faltante" onclick="crDocQuitar(${id},'${d.k}')">✕</button>`:(x.path?'':` <button class="btn sm sec" title="Lo tengo en papel, sin archivo" onclick="crDocOk(${id},'${d.k}')">✓ en papel</button>`)}</td></tr>`; }).join('')}
       </tbody></table></div>
       <p class="small muted" style="margin:6px 0 0">Los archivos quedan en el expediente del cliente (solo admin y contador los ven). La opinión de cumplimiento debe ser positiva y de este mes; CSF, domicilio y estados de cuenta de menos de 3 meses.</p>
     </details>
@@ -3965,7 +3967,8 @@ function crLeerSolicitud(){
 }
 async function guardarExpedienteCredito(id){
   const s = crLeerSolicitud();
-  const obj = {credito_solicitud:s};
+  let prev = {}; try{ const cur = await sb.from('clientes').select('credito_solicitud').eq('id', id).single(); prev = (cur.data&&cur.data.credito_solicitud)||{}; }catch(e){} // v188: lo del portal se conserva
+  const obj = {credito_solicitud: Object.assign({}, prev, s)};
   if(esAdmin() && $('cr-estado')){
     obj.credito_estado = $('cr-estado').value; obj.credito_limite = +($('cr-limite').value||0); obj.credito_plazo = +($('cr-plazo').value||0);
     obj.credito_dia_pago = ($('cr-diapago').value||'').trim()||null; obj.credito_revision = $('cr-revision').value||null;
@@ -3982,6 +3985,7 @@ async function guardarExpedienteCredito(id){
   const {error} = await sb.from('clientes').update(obj).eq('id', id);
   if(error){ toast(errMsg(error), true); return; }
   logEv('credito', 'expediente '+(c.nombre||id)+(obj.credito_estado?' → '+obj.credito_estado+(obj.credito_limite?' '+fmt(obj.credito_limite)+' '+obj.credito_plazo+'d':''):''));
+  if(obj.credito_estado==='autorizado' || obj.credito_estado==='rechazado'){ try{ await sb.rpc('portal_token_cerrar', {p_cliente_id:id}); }catch(e){} } // v188: la liga del portal se cierra sola
   toast('💾 Expediente guardado'+(obj.credito_estado==='autorizado'?' — crédito AUTORIZADO':''));
   cerrarModal(); if(document.querySelector('#v-clientes')) vClientes();
 }
@@ -4029,6 +4033,43 @@ async function imprimirSolicitudCredito(id){
   setTimeout(()=>{ try{ w.focus(); w.print(); }catch(e){} }, 900);
   logEv('credito', 'imprimir solicitud cliente '+id);
 }
+// ===== v188: PORTAL DEL CLIENTE — liga con token para que el cliente llene su solicitud y suba documentos (SQL 60) =====
+function crPortalHtml(id, tk){
+  const viva = tk && !tk.cerrado && new Date(tk.vence) > new Date();
+  const enviado = tk && tk.enviado_at ? `<span class="badge b-verde" title="El cliente dio Enviar en el portal">📬 el cliente ENVIÓ su solicitud el ${fecha(tk.enviado_at)}</span>` : '';
+  if(viva) return `<span class="badge b-azul">🔗 liga del portal activa hasta ${fecha(tk.vence)}</span>
+    <span class="small muted">${tk.visitas?`abierta ${tk.visitas} ${tk.visitas===1?'vez':'veces'}`:'el cliente aún no la abre'}${tk.guardado_at?` · último avance ${fecha(tk.guardado_at)}`:''}</span> ${enviado}
+    <button class="btn sm sec" onclick="crLigaCliente(${id}, false)">🔗 Ver / mandar liga</button>
+    <button class="btn sm sec" onclick="crCerrarLiga(${id})">🔒 Cerrar liga</button>`;
+  return `${enviado} <button class="btn sm sec" title="El cliente llena la solicitud y sube sus documentos desde su celular, sin contraseña" onclick="crLigaCliente(${id}, false)">🔗 Liga para que el cliente llene su solicitud</button>`;
+}
+async function crLigaCliente(id, nuevo){
+  if(nuevo && !confirm('La liga anterior dejará de funcionar. ¿Generar una liga nueva?')) return;
+  const c = (cliData||[]).find(x=>x.id===id) || (await sb.from('clientes').select('id,nombre,telefono').eq('id', id).single()).data || {};
+  const r = await sb.rpc('portal_token_crear', {p_cliente_id:id, p_por:(typeof perfil!=='undefined'&&perfil)?(perfil.nombre||perfil.correo||''):'', p_dias:30, p_nuevo:!!nuevo});
+  if(r.error){ toast(/portal_token_crear/.test(r.error.message||'')?'Falta correr el SQL 60 (portal del cliente)':errMsg(r.error), true); return; }
+  const t = r.data||{}; const url = 'https://axiontools.mx/solicitud.html?t='+t.token;
+  const txt = `Hola${c.nombre?' '+c.nombre:''}, para abrir tu línea de crédito con Axion Tools llena tu solicitud y sube tus documentos en esta liga (sin contraseña, dura 30 días):\n${url}\n\nVas a necesitar: Constancia de Situación Fiscal, opinión de cumplimiento del SAT (positiva), comprobante de domicilio, INE del representante y estados de cuenta de los últimos 3 meses. Puedes guardar el avance y regresar después. Cualquier duda, aquí estamos.`;
+  const tel = String(c.telefono||'').replace(/\D/g,''); const wa = 'https://wa.me/'+(tel.length===10?'52'+tel:tel)+'?text='+encodeURIComponent(txt);
+  if(t.nueva) logEv('credito', 'liga del portal para '+(c.nombre||id));
+  abrirModal(`<h3>🔗 Liga del portal — ${esc(c.nombre||'')}</h3>
+    <p class="small muted">${t.nueva?'Liga nueva':'Liga vigente'} · vence ${fecha(t.vence)}${t.enviado_at?` · <b>📬 el cliente ya envió su solicitud el ${fecha(t.enviado_at)}</b>`:''}. El cliente entra sin contraseña, llena la solicitud y sube sus documentos; todo cae directo en este expediente.</p>
+    <div class="field"><label>Liga</label><input id="cr-liga-url" value="${esc(url)}" readonly onclick="this.select()"></div>
+    <div class="field"><label>Mensaje sugerido (edítalo si quieres)</label><textarea id="cr-liga-txt" rows="7" style="width:100%;font:inherit;padding:8px">${esc(txt)}</textarea></div>
+    <div class="acciones">
+      <button class="btn sec" onclick="crLigaCliente(${id}, true)">↻ Liga nueva</button>
+      <button class="btn sec" onclick="navigator.clipboard.writeText($('cr-liga-url').value).then(()=>toast('📋 Liga copiada'))">📋 Copiar liga</button>
+      <button class="btn sec" onclick="navigator.clipboard.writeText($('cr-liga-txt').value).then(()=>toast('📋 Mensaje copiado'))">📋 Copiar mensaje</button>
+      <a class="btn" href="${wa}" target="_blank" rel="noopener" onclick="logEv('credito','liga del portal por WhatsApp a ${esc(c.nombre||id)}')">💬 Mandar por WhatsApp</a>
+      <button class="btn sec" onclick="expedienteCredito(${id})">← Volver al expediente</button>
+    </div>`);
+}
+async function crCerrarLiga(id){
+  if(!confirm('¿Cerrar la liga del portal? El cliente ya no podrá entrar con ella (puedes generar otra después).')) return;
+  const r = await sb.rpc('portal_token_cerrar', {p_cliente_id:id}); if(r.error){ toast(errMsg(r.error), true); return; }
+  logEv('credito', 'liga del portal cerrada, cliente '+id); toast('🔒 Liga cerrada'); expedienteCredito(id);
+}
+
 // POS: aviso claro antes de que la base rechace la venta a crédito
 async function crValidarVentaCredito(clienteId, total){
   const c = (cliCache||[]).find(x=>x.id===clienteId); if(!c) return 'Elige al cliente';

@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Solicitud de crédito · Axion Tools</title>
+<link rel="icon" href="logo-axion.png">
+<style>
+:root{--naranja:#E8790F;--naranja-d:#c76408;--tinta:#33383b;--gris:#6b7280;--linea:#e7e2d8;--fondo:#f5f1e8;--verde:#16a34a;--ambar:#d97706;--rojo:#b91c1c}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:var(--fondo);color:var(--tinta);font-size:15px;line-height:1.35}
+.top{background:#26292b;color:#fff;padding:14px 16px}
+.top .in{max-width:920px;margin:0 auto;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.top img{height:40px}
+.top h1{font-size:17px;font-weight:700;letter-spacing:.3px}
+.top .sub{font-size:12.5px;color:#cfc9bd}
+.wrap{max-width:920px;margin:0 auto;padding:16px}
+.card{background:#fff;border:1px solid var(--linea);border-radius:12px;padding:16px;margin-bottom:14px;box-shadow:0 1px 2px rgba(0,0,0,.03)}
+h2{font-size:15px;text-transform:uppercase;letter-spacing:.4px;color:#fff;background:var(--tinta);border-left:5px solid var(--naranja);padding:5px 10px;border-radius:6px;margin:0 0 12px}
+h2 small{font-weight:400;text-transform:none;letter-spacing:0;color:#d9d4ca;margin-left:6px}
+.g{display:grid;gap:10px 12px;grid-template-columns:repeat(12,1fr)}
+.f{grid-column:span 12}
+@media(min-width:640px){.f.c6{grid-column:span 6}.f.c4{grid-column:span 4}.f.c3{grid-column:span 3}.f.c2{grid-column:span 2}.f.c8{grid-column:span 8}}
+label{display:block;font-size:12px;font-weight:600;color:var(--gris);text-transform:uppercase;letter-spacing:.3px;margin-bottom:3px}
+label .req{color:var(--naranja)}
+input,select,textarea{width:100%;font:inherit;font-size:15px;padding:9px 10px;border:1px solid #d6d0c4;border-radius:8px;background:#fff;color:var(--tinta)}
+input:focus,select:focus,textarea:focus{outline:2px solid #f5c79a;border-color:var(--naranja)}
+input.err{border-color:var(--rojo);background:#fff5f5}
+.help{font-size:12.5px;color:var(--gris);margin-top:4px}
+.btn{display:inline-flex;align-items:center;gap:6px;font:inherit;font-weight:700;font-size:15px;padding:11px 18px;border-radius:9px;border:0;background:var(--naranja);color:#fff;cursor:pointer}
+.btn:hover{background:var(--naranja-d)}
+.btn.sec{background:#fff;color:var(--tinta);border:1px solid #cfc9bd}
+.btn.sec:hover{background:#f3efe6}
+.btn:disabled{opacity:.55;cursor:default}
+.acciones{display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end;align-items:center;position:sticky;bottom:0;background:linear-gradient(transparent,var(--fondo) 30%);padding:14px 0 6px}
+.badge{display:inline-block;font-size:11.5px;font-weight:700;padding:2px 8px;border-radius:999px;background:#eee;color:#555;white-space:nowrap}
+.b-verde{background:#dcfce7;color:#166534}.b-ambar{background:#fef3c7;color:#92400e}.b-gris{background:#eee;color:#555}.b-rojo{background:#fee2e2;color:#991b1b}
+.doc{display:grid;grid-template-columns:1fr auto;gap:8px 12px;align-items:center;padding:10px 0;border-top:1px solid var(--linea)}
+.doc:first-of-type{border-top:0}
+.doc b{display:block}
+.doc .why{font-size:12.5px;color:var(--gris)}
+.doc .st{font-size:12.5px;margin-top:3px}
+.doc label.up{display:inline-flex;align-items:center;gap:6px;text-transform:none;letter-spacing:0;font-size:14px;font-weight:700;color:#fff;background:var(--tinta);padding:8px 12px;border-radius:8px;cursor:pointer;margin:0}
+.doc label.up.ok{background:#fff;color:var(--tinta);border:1px solid #cfc9bd}
+.doc input[type=file]{display:none}
+.prog{height:8px;background:#e9e4d9;border-radius:99px;overflow:hidden;margin-top:8px}
+.prog i{display:block;height:100%;background:var(--naranja);width:0;transition:width .3s}
+.toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:#26292b;color:#fff;padding:10px 16px;border-radius:10px;font-size:14px;box-shadow:0 6px 20px rgba(0,0,0,.25);z-index:9;max-width:92vw;opacity:0;transition:opacity .2s}
+.toast.on{opacity:1}
+.toast.bad{background:var(--rojo)}
+.msg{max-width:620px;margin:40px auto;text-align:center}
+.msg h2{background:none;color:var(--tinta);border:0;font-size:22px;text-transform:none;letter-spacing:0;padding:0;margin-bottom:10px}
+.msg p{color:var(--gris);margin-bottom:8px}
+.pill{display:inline-block;background:#fff;border:1px solid var(--linea);border-radius:999px;padding:4px 12px;font-size:13px;margin:2px}
+.ok-big{font-size:54px}
+.aviso{background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:10px 12px;font-size:13.5px;margin-bottom:12px}
+.foot{text-align:center;color:var(--gris);font-size:12px;padding:10px 0 30px}
+</style>
+</head>
+<body>
+<div class="top"><div class="in"><img src="logo-axion.png" alt="Axion Tools"><div><h1>Solicitud de crédito</h1><div class="sub" id="sub">Distribuidora Axion · Disensa Guadalajara</div></div></div></div>
+<div class="wrap" id="app"><div class="msg"><p>Cargando tu solicitud…</p></div></div>
+<div class="foot">Axion Tools · Administradora de Productividad, S.A. de C.V. · Tus datos y documentos se usan solo para evaluar tu línea de crédito.</div>
+<div class="toast" id="toast"></div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script>
+const SUPABASE_URL = "https://ypdnzbuvlgkicvbulopk.supabase.co";
+const SUPABASE_KEY = "sb_publishable_6L-Mb-JGXVJ36ccpyX6Zjg_5uxDHPvS";
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {auth:{persistSession:false, autoRefreshToken:false}});
+const $ = id => document.getElementById(id);
+const esc = s => String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function toast(m, bad){ const t=$('toast'); t.textContent=m; t.className='toast on'+(bad?' bad':''); clearTimeout(t._t); t._t=setTimeout(()=>t.className='toast', bad?5000:2600); }
+const fechaMX = d => { try{ return new Date(d).toLocaleDateString('es-MX',{day:'2-digit',month:'short',year:'numeric'}); }catch(e){ return ''; } };
+const token = new URLSearchParams(location.search).get('t') || '';
+let D = null, dirty = false, subiendo = 0;
+const DOCS = [
+  {k:'csf', t:'Constancia de Situación Fiscal (SAT)', req:true, why:'De menos de 3 meses. Se descarga en el portal del SAT con tu RFC y contraseña.'},
+  {k:'opinion', t:'Opinión de cumplimiento de obligaciones fiscales (32-D)', req:true, why:'Debe salir POSITIVA y ser de este mes. También se descarga en el portal del SAT.'},
+  {k:'domicilio', t:'Comprobante de domicilio fiscal', req:true, why:'Luz, agua, teléfono o predial, de menos de 3 meses.'},
+  {k:'ine', t:'Identificación oficial del representante legal o dueño', req:true, why:'INE o pasaporte vigente, por los dos lados.'},
+  {k:'edos_cuenta', t:'Estados de cuenta bancarios de los últimos 3 meses', req:true, multi:true, why:'Puedes subir los 3 archivos de una vez. Solo necesitamos ver los movimientos; puedes tachar el número de cuenta.'},
+  {k:'acta', t:'Acta constitutiva y poder del representante', req:false, why:'Solo personas morales (empresas).'},
+  {k:'aval', t:'Identificación y comprobante de domicilio del aval', req:false, why:'Del aval que pones en la sección 5. Si aún no lo tienes, lo puedes traer después.'},
+  {k:'edos_fin', t:'Estados financieros del último ejercicio', req:false, why:'Opcional. Ayuda a autorizar una línea más alta.'},
+  {k:'solicitud', t:'Solicitud firmada', req:false, firma:true, why:'La imprimimos nosotros con estos datos y la firmas en la tienda o te la mandamos. Si ya la firmaste, súbela aquí.'},
+  {k:'pagare', t:'Pagaré firmado', req:false, firma:true, why:'Se firma junto con la solicitud (representante y aval).'},
+];
+const OBLIG = ['razon','rfc','giro','calle','colonia','cp','municipio','correo','tel','rep_nombre','rep_tel','monto','plazo'];
+function F(k, label, opts){ opts=opts||{}; const v = (D.solicitud&&D.solicitud[k])||''; const req = OBLIG.includes(k);
+  const inner = opts.sel ? `<select id="s-${k}" onchange="marca()">${opts.sel.map(o=>`<option value="${esc(o[0])}" ${String(v)===String(o[0])?'selected':''}>${esc(o[1])}</option>`).join('')}</select>`
+    : `<input id="s-${k}" value="${esc(v)}" ${opts.type?`type="${opts.type}"`:''} ${opts.ph?`placeholder="${esc(opts.ph)}"`:''} ${opts.im?`inputmode="${opts.im}"`:''} oninput="marca()">`;
+  return `<div class="f ${opts.c||''}"><label>${esc(label)}${req?' <span class="req">*</span>':''}</label>${inner}${opts.help?`<div class="help">${esc(opts.help)}</div>`:''}</div>`;
+}
+function marca(){ dirty = true; }
+window.addEventListener('beforeunload', e => { if(dirty || subiendo){ e.preventDefault(); e.returnValue=''; } });
+function leer(){ const s = {}; document.querySelectorAll('[id^="s-"]').forEach(el => { s[el.id.slice(2)] = (el.value||'').trim(); }); return s; }
+function docHtml(d){
+  const x = (D.docs&&D.docs[d.k])||{}; const ok = !!x.ok;
+  const st = ok ? `<span class="badge b-verde">✓ recibido${x.nombre?' · '+esc(x.nombre):''}${x.fecha?' · '+esc(fechaMX(x.fecha)):''}</span>` : (d.req?'<span class="badge b-ambar">falta</span>':'<span class="badge b-gris">opcional</span>');
+  return `<div class="doc" id="doc-${d.k}"><div><b>${esc(d.t)}${d.req?' <span style="color:var(--naranja)">*</span>':''}</b><div class="why">${esc(d.why)}</div><div class="st">${st}</div><div class="prog" id="pg-${d.k}" style="display:none"><i></i></div></div>
+    <div><label class="up ${ok?'ok':''}">${ok?'↻ Cambiar':'📎 Subir'}<input type="file" accept="application/pdf,image/*" ${d.multi?'multiple':''} onchange="subir('${d.k}', this)"></label></div></div>`;
+}
+function pintar(){
+  const s = D.solicitud||{};
+  const nDocs = DOCS.filter(d=>d.req).length, okDocs = DOCS.filter(d=>d.req && D.docs && D.docs[d.k] && D.docs[d.k].ok).length;
+  $('sub').textContent = `${D.nombre} · Folio ${D.folio}`;
+  $('app').innerHTML = `
+  ${D.enviado_at?`<div class="aviso">✅ Ya recibimos tu solicitud el ${esc(fechaMX(D.enviado_at))}. Puedes seguir agregando o cambiando documentos aquí mismo; si cambias datos, vuelve a darle <b>Enviar</b>.</div>`:''}
+  <div class="card"><p style="margin-bottom:6px">Hola <b>${esc(D.nombre)}</b>. Llena tus datos y sube tus documentos; puedes <b>guardar el avance</b> y regresar con esta misma liga (vence el ${esc(fechaMX(D.vence))}). Los campos con <span style="color:var(--naranja)">*</span> son obligatorios.</p>
+    <div class="help">Documentos obligatorios recibidos: <b id="cnt-docs">${okDocs} de ${nDocs}</b> · archivos PDF, JPG o PNG de hasta 20 MB.</div></div>
+
+  <div class="card"><h2>1. Crédito que solicitas</h2><div class="g">
+    ${F('tipo','Tipo de contribuyente',{c:'c4',sel:[['moral','Persona moral (empresa)'],['fisica','Persona física con actividad empresarial']]})}
+    ${F('monto','Línea de crédito solicitada (MXN)',{c:'c3',im:'numeric',ph:'Ej. 50,000'})}
+    ${F('plazo','Plazo de pago',{c:'c3',sel:[['15','15 días'],['30','30 días'],['45','45 días']]})}
+    ${F('compra_mensual','Compra mensual estimada',{c:'c3',im:'numeric',ph:'Ej. 30,000'})}
+    ${F('uso','¿Para qué usarás el crédito? (obras, proyectos, reventa…)',{c:'c8'})}
+    ${F('desde','¿Desde cuándo compras con Axion?',{c:'c4',ph:'Ej. marzo 2026 / cliente nuevo'})}
+  </div></div>
+
+  <div class="card"><h2>2. Datos de la empresa o negocio</h2><div class="g">
+    ${F('razon','Razón social o nombre (como aparece en la CSF)',{c:'c8'})}
+    ${F('rfc','RFC',{c:'c4',ph:'XAXX010101000'})}
+    ${F('comercial','Nombre comercial',{c:'c4'})}
+    ${F('giro','Giro o actividad',{c:'c4',ph:'Ej. constructora, ferretería, instalaciones'})}
+    ${F('anios','Años operando',{c:'c4',im:'numeric'})}
+    ${F('web','Página web o redes',{c:'c6'})}
+    ${F('horario','Horario de recepción de material',{c:'c6',ph:'Ej. L–V 8:00 a 17:00'})}
+  </div></div>
+
+  <div class="card"><h2>3. Domicilios</h2><div class="g">
+    ${F('calle','Domicilio fiscal — calle',{c:'c6'})}
+    ${F('next','Núm. exterior',{c:'c3'})}
+    ${F('nint','Núm. interior',{c:'c3'})}
+    ${F('colonia','Colonia',{c:'c4'})}
+    ${F('cp','Código postal',{c:'c2',im:'numeric'})}
+    ${F('municipio','Municipio',{c:'c3'})}
+    ${F('estado','Estado',{c:'c3',ph:'Jalisco'})}
+    ${F('entrega','Domicilio de entrega u obra (si es distinto)',{c:'c8'})}
+  </div></div>
+
+  <div class="card"><h2>4. Contactos</h2><div class="g">
+    ${F('correo','Correo para facturas y estados de cuenta',{c:'c6',type:'email'})}
+    ${F('tel','Teléfono de la oficina o negocio',{c:'c6',type:'tel'})}
+    ${F('rep_nombre','Representante legal o dueño',{c:'c4'})}
+    ${F('rep_tel','Teléfono / WhatsApp',{c:'c4',type:'tel'})}
+    ${F('rep_correo','Correo',{c:'c4',type:'email'})}
+    ${F('rep_id','Núm. de INE o pasaporte',{c:'c4'})}
+    ${F('compras_nombre','Contacto de compras',{c:'c4'})}
+    ${F('compras_tel','Tel. compras',{c:'c4',type:'tel'})}
+    ${F('pagos_nombre','Contacto de pagos / cuentas por pagar',{c:'c4'})}
+    ${F('pagos_tel','Tel. pagos',{c:'c4',type:'tel'})}
+    ${F('dia_pago','Día en que pagan a proveedores',{c:'c4',ph:'Ej. viernes / día 15'})}
+  </div></div>
+
+  <div class="card"><h2>5. Aval <small>(persona que responde por el crédito)</small></h2><div class="g">
+    ${F('aval_nombre','Nombre completo',{c:'c6'})}
+    ${F('aval_rfc','RFC',{c:'c3'})}
+    ${F('aval_tel','Teléfono',{c:'c3',type:'tel'})}
+    ${F('aval_rel','Relación con el solicitante',{c:'c4',ph:'Socio, dueño, familiar…'})}
+    ${F('aval_dom','Domicilio del aval',{c:'c8'})}
+  </div></div>
+
+  <div class="card"><h2>6. Referencias bancarias <small>(sin números de cuenta)</small></h2><div class="g">
+    ${F('banco1','Banco 1',{c:'c4'})}${F('banco1_tipo','Tipo de cuenta',{c:'c4',ph:'Cheques, débito, crédito…'})}${F('banco1_ant','Antigüedad',{c:'c4',ph:'Ej. 3 años'})}
+    ${F('banco2','Banco 2',{c:'c4'})}${F('banco2_tipo','Tipo de cuenta',{c:'c4'})}${F('banco2_ant','Antigüedad',{c:'c4'})}
+  </div></div>
+
+  <div class="card"><h2>7. Referencias comerciales <small>(proveedores que te dan crédito)</small></h2>
+    ${[1,2,3].map(i=>`<div class="g" style="margin-bottom:10px">
+      ${F('ref'+i+'_prov','Proveedor '+i,{c:'c3'})}${F('ref'+i+'_contacto','Contacto y teléfono',{c:'c3'})}${F('ref'+i+'_plazo','Plazo',{c:'c2',ph:'30 días'})}${F('ref'+i+'_linea','Línea',{c:'c2',ph:'$'})}${F('ref'+i+'_ant','Antigüedad',{c:'c2',ph:'2 años'})}
+    </div>`).join('')}
+  </div>
+
+  <div class="card"><h2>8. Documentos</h2>
+    <div class="help" style="margin-bottom:8px">Sube cada documento con el botón. Se guardan al momento; los revisa únicamente el área de crédito de Axion Tools.</div>
+    ${DOCS.map(docHtml).join('')}
+  </div>
+
+  <div class="card"><h2>9. Declaraciones</h2>
+    <p style="font-size:13.5px;color:#444">Declaro que la información y documentos que entrego son verídicos y autorizo a Administradora de Productividad, S.A. de C.V. (Axion Tools) a verificarlos con las referencias indicadas y a consultar mi historial crediticio. Entiendo que el crédito es revolvente, sujeto al límite y plazo que Axion autorice, que puede suspenderse en cualquier momento y que el saldo vencido genera un interés moratorio del 3% mensual. La solicitud y el pagaré se firman en original.</p>
+    <label style="display:flex;gap:8px;align-items:center;margin-top:10px;text-transform:none;font-size:14px;letter-spacing:0"><input type="checkbox" id="acepto" style="width:auto" ${D.enviado_at?'checked':''}> Acepto las declaraciones anteriores</label>
+  </div>
+
+  <div class="acciones"><span class="help" id="estado-guardado">${D.guardado_at?'Último avance guardado el '+esc(fechaMX(D.guardado_at)):''}</span>
+    <button class="btn sec" onclick="guardar(false)">💾 Guardar avance</button>
+    <button class="btn" onclick="guardar(true)">📨 Enviar solicitud</button></div>`;
+}
+async function cargar(){
+  if(!token){ $('app').innerHTML = `<div class="msg"><div class="ok-big">🔗</div><h2>Falta la liga</h2><p>Abre la liga completa que te mandó Axion Tools por WhatsApp o correo.</p></div>`; return; }
+  const r = await sb.rpc('portal_solicitud_leer', {p_token: token});
+  if(r.error){ $('app').innerHTML = `<div class="msg"><div class="ok-big">⚠️</div><h2>No pudimos cargar tu solicitud</h2><p>${esc(r.error.message)}</p><p>Intenta de nuevo en un momento o avísanos por WhatsApp.</p></div>`; return; }
+  if(!r.data || !r.data.ok){
+    const m = {liga_invalida:'Esta liga no es válida. Revisa que la hayas copiado completa.', liga_cerrada:'Esta liga ya se cerró porque tu solicitud ya fue revisada. Si necesitas actualizar documentos, pide una liga nueva a Axion Tools.', liga_vencida:'Esta liga ya venció (dura 30 días). Pide una liga nueva a Axion Tools.'};
+    $('app').innerHTML = `<div class="msg"><div class="ok-big">⏳</div><h2>Liga no disponible</h2><p>${esc(m[(r.data||{}).motivo]||'No se pudo abrir la solicitud.')}</p></div>`; return;
+  }
+  D = r.data; pintar();
+}
+async function subir(k, inp){
+  const files = [...(inp.files||[])]; if(!files.length) return;
+  const d = DOCS.find(x=>x.k===k); const big = files.find(f=>f.size > 20*1024*1024);
+  if(big){ toast('"'+big.name+'" pesa más de 20 MB. Comprímelo o tómale foto por partes.', true); inp.value=''; return; }
+  if(!d.multi && files.length>1){ toast('Sube un solo archivo para este documento (si son varias hojas, júntalas en un PDF).', true); inp.value=''; return; }
+  const pg = $('pg-'+k); pg.style.display=''; pg.firstElementChild.style.width='15%'; subiendo++;
+  const paths = [];
+  try{
+    for(let i=0;i<files.length;i++){
+      const f = files[i]; const ext = (f.name.split('.').pop()||'pdf').toLowerCase().replace(/[^a-z0-9]/g,'') || 'pdf';
+      const path = `clientes/${D.cliente_id}/${token}/${k}_${Date.now()}_${i}.${ext}`;
+      const up = await sb.storage.from('facturas').upload(path, f, {upsert:false, contentType: f.type||'application/octet-stream'});
+      if(up.error) throw new Error(up.error.message||'error al subir');
+      paths.push(path); pg.firstElementChild.style.width = Math.round(15+80*(i+1)/files.length)+'%';
+    }
+    const docs = {}; docs[k] = {path: paths[0], extra: paths.slice(1), nombre: files.map(f=>f.name).join(', ').slice(0,110), fecha: new Date().toISOString().slice(0,10)};
+    const r = await sb.rpc('portal_solicitud_guardar', {p_token: token, p_solicitud: leer(), p_docs: docs, p_enviar: false});
+    if(r.error) throw new Error(r.error.message);
+    D.docs = D.docs||{}; D.docs[k] = {ok:true, nombre: docs[k].nombre, fecha: docs[k].fecha, cliente:true}; D.guardado_at = new Date().toISOString();
+    pg.firstElementChild.style.width='100%';
+    toast('📎 '+d.t+' recibido'); dirty = false;
+    const holder = $('doc-'+k); holder.outerHTML = docHtml(d);
+    const nDocs = DOCS.filter(x=>x.req).length, okDocs = DOCS.filter(x=>x.req && D.docs[x.k] && D.docs[x.k].ok).length; $('cnt-docs').textContent = okDocs+' de '+nDocs;
+    $('estado-guardado').textContent = 'Avance guardado ahora';
+  }catch(e){
+    toast('No se pudo subir: '+(e.message||e)+'. Intenta de nuevo.', true); pg.style.display='none'; inp.value='';
+  }
+  subiendo--;
+}
+async function guardar(enviar){
+  const s = leer();
+  if(enviar){
+    let faltan = [];
+    document.querySelectorAll('input.err').forEach(el=>el.classList.remove('err'));
+    OBLIG.forEach(k=>{ if(!s[k]){ faltan.push(k); const el=$('s-'+k); if(el) el.classList.add('err'); } });
+    if(faltan.length){ toast('Faltan '+faltan.length+' dato(s) obligatorio(s) (marcados en rojo).', true); const el=$('s-'+faltan[0]); if(el){ el.scrollIntoView({block:'center'}); el.focus(); } return; }
+    if(s.rfc && !/^[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}$/i.test(s.rfc.replace(/\s|-/g,''))){ toast('El RFC no se ve bien (ej. XAXX010101000).', true); $('s-rfc').classList.add('err'); $('s-rfc').focus(); return; }
+    const faltaDocs = DOCS.filter(d=>d.req && !(D.docs&&D.docs[d.k]&&D.docs[d.k].ok));
+    if(faltaDocs.length){ toast('Falta subir: '+faltaDocs.map(d=>d.t.split(' (')[0]).join(', ')+'. Puedes guardar el avance mientras los consigues.', true); $('doc-'+faltaDocs[0].k).scrollIntoView({block:'center'}); return; }
+    if(!$('acepto').checked){ toast('Marca que aceptas las declaraciones para enviar.', true); $('acepto').scrollIntoView({block:'center'}); return; }
+  }
+  const btns = document.querySelectorAll('.acciones .btn'); btns.forEach(b=>b.disabled=true);
+  const r = await sb.rpc('portal_solicitud_guardar', {p_token: token, p_solicitud: s, p_docs: {}, p_enviar: !!enviar});
+  btns.forEach(b=>b.disabled=false);
+  if(r.error){ toast('No se pudo guardar: '+r.error.message, true); return; }
+  dirty = false; D.solicitud = Object.assign({}, D.solicitud||{}, s); D.guardado_at = new Date().toISOString();
+  if(enviar){
+    D.enviado_at = D.guardado_at;
+    $('app').innerHTML = `<div class="msg"><div class="ok-big">✅</div><h2>¡Listo, recibimos tu solicitud!</h2>
+      <p><b>${esc(D.nombre)}</b> · Folio ${esc(D.folio)}</p>
+      <p>Vamos a revisar tus documentos y referencias. Te contactamos en <b>2 a 3 días hábiles</b> al ${esc(s.rep_tel||s.tel||'teléfono que nos diste')} para la firma de la solicitud y el pagaré.</p>
+      <p style="margin-top:14px"><span class="pill">📎 ${DOCS.filter(d=>D.docs&&D.docs[d.k]&&D.docs[d.k].ok).length} documento(s) recibido(s)</span><span class="pill">💳 Línea solicitada: $${esc(s.monto)}</span><span class="pill">📅 Plazo: ${esc(s.plazo)} días</span></p>
+      <p style="margin-top:18px"><button class="btn sec" onclick="pintar()">Volver a ver mi solicitud</button></p></div>`;
+    window.scrollTo(0,0);
+  } else {
+    toast('💾 Avance guardado. Puedes regresar con esta misma liga.'); $('estado-guardado').textContent = 'Avance guardado ahora';
+  }
+}
+cargar();
+</script>
+</body>
+</html>
