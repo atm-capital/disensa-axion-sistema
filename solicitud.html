@@ -80,9 +80,9 @@ const DOCS = [
   {k:'domicilio', t:'Comprobante de domicilio fiscal', req:true, why:'Luz, agua, teléfono o predial, de menos de 3 meses.'},
   {k:'ine', t:'Identificación oficial del representante legal o dueño', req:true, why:'INE o pasaporte vigente, por los dos lados.'},
   {k:'edos_cuenta', t:'Estados de cuenta bancarios de los últimos 3 meses', req:true, multi:true, why:'Puedes subir los 3 archivos de una vez. Solo necesitamos ver los movimientos; puedes tachar el número de cuenta.'},
-  {k:'acta', t:'Acta constitutiva y poder del representante', req:false, why:'Solo personas morales (empresas).'},
-  {k:'aval', t:'Identificación y comprobante de domicilio del aval', req:false, why:'Del aval que pones en la sección 5. Si aún no lo tienes, lo puedes traer después.'},
-  {k:'edos_fin', t:'Estados financieros del último ejercicio', req:false, why:'Opcional. Ayuda a autorizar una línea más alta.'},
+  {k:'acta', t:'Acta constitutiva y poder del representante', req:false, why:'Personas morales (empresas): acta constitutiva y el poder del representante legal.'},
+  {k:'aval', t:'Identificación y comprobante de domicilio del aval', req:false, why:'INE y comprobante de domicilio del aval que pones en la sección 5.'},
+  {k:'edos_fin', t:'Estados financieros del último ejercicio', req:false, why:'Balance y estado de resultados del último ejercicio. Ayudan a autorizar una línea más alta.'},
   {k:'solicitud', t:'Solicitud firmada', req:false, firma:true, why:'La imprimimos nosotros con estos datos y la firmas en la tienda o te la mandamos. Si ya la firmaste, súbela aquí.'},
   {k:'pagare', t:'Pagaré firmado', req:false, firma:true, why:'Se firma junto con la solicitud (representante y aval).'},
 ];
@@ -97,18 +97,18 @@ window.addEventListener('beforeunload', e => { if(dirty || subiendo){ e.preventD
 function leer(){ const s = {}; document.querySelectorAll('[id^="s-"]').forEach(el => { s[el.id.slice(2)] = (el.value||'').trim(); }); return s; }
 function docHtml(d){
   const x = (D.docs&&D.docs[d.k])||{}; const ok = !!x.ok;
-  const st = ok ? `<span class="badge b-verde">✓ recibido${x.nombre?' · '+esc(x.nombre):''}${x.fecha?' · '+esc(fechaMX(x.fecha)):''}</span>` : (d.req?'<span class="badge b-ambar">falta</span>':'<span class="badge b-gris">opcional</span>');
+  const st = ok ? `<span class="badge b-verde">✓ recibido${x.nombre?' · '+esc(x.nombre):''}${x.fecha?' · '+esc(fechaMX(x.fecha)):''}</span>` : '<span class="badge b-ambar">falta</span>';
   return `<div class="doc" id="doc-${d.k}"><div><b>${esc(d.t)}${d.req?' <span style="color:var(--naranja)">*</span>':''}</b><div class="why">${esc(d.why)}</div><div class="st">${st}</div><div class="prog" id="pg-${d.k}" style="display:none"><i></i></div></div>
     <div><label class="up ${ok?'ok':''}">${ok?'↻ Cambiar':'📎 Subir'}<input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,.heic,application/pdf,image/*" ${d.multi?'multiple':''} onchange="subir('${d.k}', this)"></label></div></div>`;
 }
 function pintar(){
   const s = D.solicitud||{};
-  const nDocs = DOCS.filter(d=>d.req).length, okDocs = DOCS.filter(d=>d.req && D.docs && D.docs[d.k] && D.docs[d.k].ok).length;
+  const nDocs = DOCS.length, okDocs = DOCS.filter(d=>D.docs && D.docs[d.k] && D.docs[d.k].ok).length;
   $('sub').textContent = `${D.nombre} · Folio ${D.folio}`;
   $('app').innerHTML = `
   ${D.enviado_at?`<div class="aviso">✅ Ya recibimos tu solicitud el ${esc(fechaMX(D.enviado_at))}. Puedes seguir agregando o cambiando documentos aquí mismo; si cambias datos, vuelve a darle <b>Enviar</b>.</div>`:''}
   <div class="card"><p style="margin-bottom:6px">Hola <b>${esc(D.nombre)}</b>. Llena tus datos y sube tus documentos; puedes <b>guardar el avance</b> y regresar con esta misma liga (vence el ${esc(fechaMX(D.vence))}). Los campos con <span style="color:var(--naranja)">*</span> son obligatorios.</p>
-    <div class="help">Documentos obligatorios recibidos: <b id="cnt-docs">${okDocs} de ${nDocs}</b> · archivos PDF, JPG o PNG de hasta 20 MB.</div></div>
+    <div class="help">Documentos recibidos: <b id="cnt-docs">${okDocs} de ${nDocs}</b> · archivos PDF, JPG o PNG de hasta 20 MB.</div></div>
 
   <div class="card"><h2>1. Crédito que solicitas</h2><div class="g">
     ${F('tipo','Tipo de contribuyente',{c:'c4',sel:[['moral','Persona moral (empresa)'],['fisica','Persona física con actividad empresarial']]})}
@@ -174,7 +174,7 @@ function pintar(){
   </div>
 
   <div class="card"><h2>8. Documentos</h2>
-    <div class="help" style="margin-bottom:8px">Sube cada documento con el botón. Se guardan al momento; los revisa únicamente el área de crédito de Axion Tools.</div>
+    <div class="help" style="margin-bottom:8px">Sube cada documento con el botón; se guardan al momento y los revisa únicamente el área de crédito de Axion Tools. Entre más completo esté tu expediente, más rápido se autoriza tu línea.</div>
     ${DOCS.map(docHtml).join('')}
   </div>
 
@@ -221,7 +221,7 @@ async function subir(k, inp){
     pg.firstElementChild.style.width='100%';
     toast('📎 '+d.t+' recibido'); dirty = false;
     const holder = $('doc-'+k); holder.outerHTML = docHtml(d);
-    const nDocs = DOCS.filter(x=>x.req).length, okDocs = DOCS.filter(x=>x.req && D.docs[x.k] && D.docs[x.k].ok).length; $('cnt-docs').textContent = okDocs+' de '+nDocs;
+    const nDocs = DOCS.length, okDocs = DOCS.filter(x=>D.docs[x.k] && D.docs[x.k].ok).length; $('cnt-docs').textContent = okDocs+' de '+nDocs;
     $('estado-guardado').textContent = 'Avance guardado ahora';
   }catch(e){
     toast('No se pudo subir: '+(e.message||e)+'. Intenta de nuevo.', true); pg.style.display='none'; inp.value='';
@@ -239,6 +239,8 @@ async function guardar(enviar){
     const faltaDocs = DOCS.filter(d=>d.req && !(D.docs&&D.docs[d.k]&&D.docs[d.k].ok));
     if(faltaDocs.length){ toast('Falta subir: '+faltaDocs.map(d=>d.t.split(' (')[0]).join(', ')+'. Puedes guardar el avance mientras los consigues.', true); $('doc-'+faltaDocs[0].k).scrollIntoView({block:'center'}); return; }
     if(!$('acepto').checked){ toast('Marca que aceptas las declaraciones para enviar.', true); $('acepto').scrollIntoView({block:'center'}); return; }
+    const faltanOtros = DOCS.filter(d=>!d.req && !d.firma && !(D.docs&&D.docs[d.k]&&D.docs[d.k].ok));
+    if(faltanOtros.length && !confirm('Aún no subes: '+faltanOtros.map(d=>d.t).join(', ')+'.\n\nEntre más completo esté tu expediente, más rápido se autoriza tu crédito. ¿Enviar de todos modos? (Puedes subirlos después con esta misma liga.)')) { $('doc-'+faltanOtros[0].k).scrollIntoView({block:'center'}); return; }
   }
   const btns = document.querySelectorAll('.acciones .btn'); btns.forEach(b=>b.disabled=true);
   const r = await sb.rpc('portal_solicitud_guardar', {p_token: token, p_solicitud: s, p_docs: {}, p_enviar: !!enviar});
