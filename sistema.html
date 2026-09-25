@@ -1293,7 +1293,7 @@ async function nuevaVenta(){
   carrito = [];
   const [p, c] = await Promise.all([
     traerTodo(()=>sb.from('productos').select('*').eq('activo',true).order('descripcion')).then(d=>({data:d})),
-    sb.from('clientes').select('id,nombre,oficio,desc_pct').order('nombre'),
+    sb.from('clientes').select('id,nombre,oficio,desc_pct,credito_estado,credito_limite,credito_plazo').order('nombre'),
   ]);
   if(c.error){ toast(errMsg(c.error),true); return; }
   prodCache = p.data; cliCache = c.data;
@@ -2200,6 +2200,7 @@ function numALetras(n){
 async function guardarVenta(){
   if(!carrito.length){ toast('Agrega al menos un producto', true); return; }
   if($('nv-metodo').value==='credito' && !$('nv-cliente').value){ toast('Para vender a CRÉDITO elige al cliente (no puede ser Mostrador) — así sabemos quién nos debe', true); return; }
+  if($('nv-metodo').value==='credito'){ const msgCr = await crValidarVentaCredito(+$('nv-cliente').value, window._nvTotal||0); if(msgCr){ alert('🚫 CRÉDITO NO DISPONIBLE\n\n'+msgCr); return; } } // v187
   { // v180: nunca cobrar abajo del costo
     const subV = carrito.reduce((s,c)=>s+c.cantidad*c.precio_unit,0), descV = +($('nv-desc')?.value||0), cIvaV = costoTicket();
     if(cIvaV>0 && subV-descV < cIvaV-0.005){
@@ -3684,6 +3685,362 @@ function exportarInv(){
    VISTA: CLIENTES
 ============================================================ */
 let cliData = [];
+function solCreditoHtml(v){ const e = x => esc(x==null?'':String(x)); const chk = on => `<span class="chk" style="${on?'background:#2b2b2b':''}"></span>`; return `<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><title>Solicitud de crédito · Axion Tools</title>
+<style>
+  @page { size: letter; margin: 12mm 12mm 14mm 12mm; }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI", Arial, Helvetica, sans-serif; color: #2b2b2b; font-size: 9.6pt; margin: 0; }
+  .pg { page-break-after: always; position: relative; height: 252mm; overflow: hidden; }
+  .pg:last-child { page-break-after: auto; }
+  .hdr { display: flex; align-items: center; justify-content: space-between; border-bottom: 3px solid #E8790F; padding-bottom: 6px; margin-bottom: 8px; }
+  .hdr img { height: 44px; }
+  .hdr .t { text-align: right; }
+  .hdr .t h1 { margin: 0; font-size: 17pt; letter-spacing: .5px; color: #2b2b2b; }
+  .hdr .t .sub { font-size: 8.5pt; color: #666; margin-top: 2px; }
+  .pg2 h2 { margin-top: 6px; }
+  .meta { display: flex; gap: 10px; font-size: 8.5pt; color: #555; margin: 0 0 6px; }
+  .meta b { color: #2b2b2b; }
+  .meta .box { border: 1px solid #ccc; border-radius: 4px; padding: 3px 8px; }
+  .meta .box.fill { min-width: 150px; }
+  h2 { background: #2b2b2b; color: #fff; font-size: 9.1pt; font-weight: 700; letter-spacing: .4px; padding: 2px 8px; margin: 6px 0 3px; border-left: 5px solid #E8790F; text-transform: uppercase; }
+  .g { display: grid; gap: 4px 8px; margin-bottom: 2px; }
+  .c2 { grid-template-columns: 1fr 1fr; } .c3 { grid-template-columns: 1fr 1fr 1fr; } .c4 { grid-template-columns: 1fr 1fr 1fr 1fr; }
+  .c21 { grid-template-columns: 2fr 1fr; } .c31 { grid-template-columns: 3fr 1fr; } .c211 { grid-template-columns: 2fr 1fr 1fr; } .c121 { grid-template-columns: 1fr 2fr 1fr; }
+  .f { border-bottom: 1px solid #9a9a9a; padding: 8px 4px 1px; min-height: 20px; position: relative; }
+  .f label { position: absolute; top: 1px; left: 3px; font-size: 6.6pt; color: #777; text-transform: uppercase; letter-spacing: .3px; }
+  .f.tall { min-height: 30px; }
+  .chk { display: inline-block; width: 10px; height: 10px; border: 1.3px solid #555; border-radius: 2px; vertical-align: -1px; margin-right: 4px; }
+  .opts { padding: 8px 4px 2px; }
+  .opts span { margin-right: 12px; white-space: nowrap; }
+  .note { font-size: 7.8pt; color: #666; margin: 2px 0 4px; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { border: 1px solid #bbb; padding: 3px 6px; font-size: 8.5pt; vertical-align: top; }
+  th { background: #f4f4f4; text-align: left; font-weight: 700; }
+  td.h { height: 21px; }
+  .docs td:first-child { width: 22px; text-align: center; }
+  .small { font-size: 8pt; color: #555; }
+  .cond { font-size: 8.2pt; line-height: 1.35; text-align: justify; }
+  .cond li { margin-bottom: 2px; }
+  .firmas { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 26px; }
+  .firma { border-top: 1px solid #444; padding-top: 4px; text-align: center; font-size: 8pt; }
+  .interno { border: 2px dashed #E8790F; border-radius: 6px; padding: 6px 8px; margin-top: 8px; background: #fff8f1; }
+  .interno .g { grid-template-columns: 1.3fr 1fr 1fr 1fr; }
+  .interno h3 { margin: 0 0 4px; font-size: 9pt; color: #E8790F; text-transform: uppercase; }
+  .foot { position: absolute; bottom: 0; left: 0; right: 0; font-size: 7.4pt; color: #888; display: flex; justify-content: space-between; }
+  .pagare { border: 2px solid #2b2b2b; padding: 12px 16px; font-size: 9.5pt; line-height: 1.55; text-align: justify; }
+  .pagare .ttl { text-align: center; font-size: 15pt; font-weight: 800; letter-spacing: 2px; margin-bottom: 8px; }
+  .pagare .ln { display: inline-block; border-bottom: 1px solid #444; min-width: 120px; }
+  .pagare .ln.w { min-width: 260px; } .pagare .ln.s { min-width: 70px; }
+</style></head><body>
+
+<!-- ===================== PÁGINA 1 ===================== -->
+<div class="pg">
+  <div class="hdr"><img src="https://axiontools.mx/logo-axion.png" alt="Axion Tools">
+    <div class="t"><h1>SOLICITUD DE CRÉDITO</h1><div class="sub">Distribuidora Axion · Materiales para la construcción y ferretería · Franquicia Disensa</div></div></div>
+  <div class="meta"><span class="box">Formato <b>FO-CYC-SCR v2</b> · sep-2026</span><span class="box fill">Folio: <b>${e(v.folio)}</b></span><span class="box fill">Fecha de solicitud: ${e(v.fecha)}</span><span class="box fill">Vendedor que atiende: ${e(v.vendedor)}</span></div>
+  <p class="note">Llene con letra de molde. Toda la información se trata como confidencial y se usa únicamente para evaluar la línea de crédito. Si un espacio no aplica, escriba N/A.</p>
+
+  <h2>1. Crédito solicitado</h2>
+  <div class="g c4">
+    <div class="opts" style="font-size:8.6pt">${chk(v.tipo==='moral')}Persona moral<br>${chk(v.tipo==='fisica')}Persona física c/act. empresarial</div>
+    <div class="f"><label>Línea solicitada (MXN)</label>$ ${e(v.monto)}</div>
+    <div class="opts"><b class="small">Plazo:</b> ${chk(+v.plazo===15)}15 días ${chk(+v.plazo===30)}30 días ${chk(+v.plazo===45)}45 días</div>
+    <div class="f"><label>Compra mensual estimada</label>$ ${e(v.compra_mensual)}</div>
+  </div>
+  <div class="g c2">
+    <div class="f"><label>¿Para qué obra o negocio se usará el crédito?</label>${e(v.uso)}</div>
+    <div class="f"><label>¿Desde cuándo compra en Axion? / ¿Quién lo recomienda?</label>${e(v.desde)}</div>
+  </div>
+
+  <h2>2. Datos generales del solicitante</h2>
+  <div class="g c31"><div class="f"><label>Razón social / Nombre completo (como aparece en la Constancia de Situación Fiscal)</label>${e(v.razon)}</div><div class="f"><label>RFC</label>${e(v.rfc)}</div></div>
+  <div class="g c3"><div class="f"><label>Nombre comercial</label>${e(v.comercial)}</div><div class="f"><label>Giro / actividad principal</label>${e(v.giro)}</div><div class="f"><label>Años operando</label>${e(v.anios)}</div></div>
+  <div class="g c3"><div class="f"><label>Teléfono oficina</label>${e(v.tel)}</div><div class="f"><label>Correo para facturas y estados de cuenta</label>${e(v.correo)}</div><div class="f"><label>Sitio web / redes</label>${e(v.web)}</div></div>
+
+  <h2>3. Domicilios</h2>
+  <div class="g c211"><div class="f"><label>Domicilio fiscal — calle</label>${e(v.calle)}</div><div class="f"><label>No. exterior</label>${e(v.next)}</div><div class="f"><label>No. interior</label>${e(v.nint)}</div></div>
+  <div class="g c4"><div class="f"><label>Colonia</label>${e(v.colonia)}</div><div class="f"><label>C.P.</label>${e(v.cp)}</div><div class="f"><label>Municipio</label>${e(v.municipio)}</div><div class="f"><label>Estado</label>${e(v.estado)}</div></div>
+  <div class="g c21"><div class="f"><label>Domicilio de entrega / obra (si es distinto)</label>${e(v.entrega)}</div><div class="f"><label>Horario de recepción</label>${e(v.horario)}</div></div>
+
+  <h2>4. Contactos</h2>
+  <table>
+    <tr><th style="width:24%">Función</th><th style="width:30%">Nombre</th><th style="width:22%">Teléfono / WhatsApp</th><th>Correo</th></tr>
+    <tr><td>Representante legal / dueño</td><td class="h">${e(v.rep_nombre)}</td><td>${e(v.rep_tel)}</td><td>${e(v.rep_correo)}</td></tr>
+    <tr><td>Compras (quien pide material)</td><td class="h">${e(v.compras_nombre)}</td><td>${e(v.compras_tel)}</td><td>${e(v.compras_correo)}</td></tr>
+    <tr><td>Pagos / cuentas por pagar</td><td class="h">${e(v.pagos_nombre)}</td><td>${e(v.pagos_tel)}</td><td>${e(v.pagos_correo)}</td></tr>
+    <tr><td>Recepción en obra</td><td class="h"></td><td></td><td></td></tr>
+  </table>
+  <div class="g c3" style="margin-top:4px"><div class="f"><label>Identificación del representante legal (INE/pasaporte) — No.</label>${e(v.rep_id)}</div><div class="f"><label>Día de revisión de facturas</label>${e(v.dia_revision)}</div><div class="f"><label>Día de pago</label>${e(v.dia_pago)}</div></div>
+
+  <h2>5. Datos de constitución (solo personas morales)</h2>
+  <div class="g c4"><div class="f"><label>Escritura pública No.</label></div><div class="f"><label>Fecha (dd/mm/aaaa)</label></div><div class="f"><label>Notario No. y nombre</label></div><div class="f"><label>Ciudad</label></div></div>
+  <div class="g c3"><div class="f"><label>Folio mercantil (RPPC)</label></div><div class="f"><label>Poder del representante — escritura No.</label></div><div class="f"><label>Objeto social (resumen)</label></div></div>
+
+  <h2>6. Aval / obligado solidario</h2>
+  <div class="g c31"><div class="f"><label>Nombre completo</label>${e(v.aval_nombre)}</div><div class="f"><label>RFC</label>${e(v.aval_rfc)}</div></div>
+  <div class="g c211"><div class="f"><label>Domicilio (calle, número, colonia, C.P., municipio)</label>${e(v.aval_dom)}</div><div class="f"><label>Teléfono</label>${e(v.aval_tel)}</div><div class="f"><label>Relación con el solicitante</label>${e(v.aval_rel)}</div></div>
+  <h2>7. Referencias bancarias</h2>
+  <table>
+    <tr><th>Banco</th><th>Sucursal / plaza</th><th>Tipo de cuenta</th><th>Antigüedad</th><th>Ejecutivo y teléfono</th></tr>
+    <tr><td class="h"></td><td></td><td></td><td></td><td></td></tr>
+    <tr><td class="h"></td><td></td><td></td><td></td><td></td></tr>
+  </table>
+  <p class="note">No escriba números de cuenta. Se verificarán con los estados de cuenta que anexe.</p>
+
+  <h2>8. Referencias comerciales (proveedores que le dan crédito)</h2>
+  <table>
+    <tr><th>Proveedor (razón social)</th><th>Contacto y teléfono de oficina</th><th>Plazo</th><th>Línea (MXN)</th><th>Antigüedad</th></tr>
+    <tr><td class="h">${e(v.ref1_prov)}</td><td>${e(v.ref1_contacto)}</td><td>${e(v.ref1_plazo)}</td><td>${e(v.ref1_linea)}</td><td>${e(v.ref1_ant)}</td></tr>
+    <tr><td class="h">${e(v.ref2_prov)}</td><td>${e(v.ref2_contacto)}</td><td>${e(v.ref2_plazo)}</td><td>${e(v.ref2_linea)}</td><td>${e(v.ref2_ant)}</td></tr>
+    <tr><td class="h">${e(v.ref3_prov)}</td><td>${e(v.ref3_contacto)}</td><td>${e(v.ref3_plazo)}</td><td>${e(v.ref3_linea)}</td><td>${e(v.ref3_ant)}</td></tr>
+  </table>
+
+  <div class="foot"><span>Distribuidora Axion · Av. Fidel Velázquez 788, Santa Elena Estadio, Guadalajara, Jal. · compras@axiontools.mx · axiontools.mx</span><span>Página 1 de 3</span></div>
+</div>
+
+<!-- ===================== PÁGINA 2 ===================== -->
+<div class="pg">
+  <div class="hdr"><img src="https://axiontools.mx/logo-axion.png" alt="Axion Tools">
+    <div class="t"><h1>SOLICITUD DE CRÉDITO</h1><div class="sub">Referencias · documentación · condiciones</div></div></div>
+
+  <h2>9. Documentación que debe anexar</h2>
+  <table class="docs">
+    <tr><th>✓</th><th>Documento</th><th style="width:26%">Requisito</th><th style="width:16%">Uso interno: verificado</th></tr>
+    <tr><td><span class="chk"></span></td><td><b>Constancia de Situación Fiscal</b> (SAT)</td><td>No mayor a 3 meses</td><td></td></tr>
+    <tr><td><span class="chk"></span></td><td><b>Opinión de cumplimiento de obligaciones fiscales</b> (SAT, 32-D)</td><td>Positiva, no mayor a 1 mes</td><td></td></tr>
+    <tr><td><span class="chk"></span></td><td><b>Comprobante de domicilio</b> fiscal (luz, agua, teléfono o predial)</td><td>No mayor a 3 meses</td><td></td></tr>
+    <tr><td><span class="chk"></span></td><td><b>Identificación oficial vigente</b> del representante legal o dueño (INE / pasaporte)</td><td>Ambos lados, legible</td><td></td></tr>
+    <tr><td><span class="chk"></span></td><td><b>Estados de cuenta bancarios</b> de los últimos 3 meses (carátula y movimientos)</td><td>Cuenta de la empresa</td><td></td></tr>
+    <tr><td><span class="chk"></span></td><td><b>Acta constitutiva</b> y <b>poder</b> del representante legal (personas morales)</td><td>Copia completa</td><td></td></tr>
+    <tr><td><span class="chk"></span></td><td><b>Identificación y comprobante de domicilio del aval</b></td><td>No mayor a 3 meses</td><td></td></tr>
+    <tr><td><span class="chk"></span></td><td><b>Pagaré</b> firmado por el representante legal y el aval (página 3)</td><td>Por el monto de la línea</td><td></td></tr>
+    <tr><td><span class="chk"></span></td><td>Estados financieros del último ejercicio (opcional; mejora el límite)</td><td>Firmados</td><td></td></tr>
+    <tr><td><span class="chk"></span></td><td>Autorización para consulta de referencias y buró (sección 10)</td><td>Firmada</td><td></td></tr>
+  </table>
+  <p class="note">Puede enviar los documentos en PDF o foto legible a <b>compras@axiontools.mx</b> o por WhatsApp. La solicitud se evalúa en un máximo de 5 días hábiles a partir de que el expediente esté completo.</p>
+
+  <h2>10. Declaraciones, autorizaciones y condiciones del crédito</h2>
+  <ol class="cond">
+    <li>Declaro bajo protesta de decir verdad que la información y los documentos entregados son verídicos y autorizo a Distribuidora Axion a verificarlos, a consultar mis referencias bancarias y comerciales, y a consultar mi historial crediticio en sociedades de información crediticia (buró) cuantas veces lo considere necesario mientras la relación comercial esté vigente.</li>
+    <li>La línea de crédito es <b>revolvente</b>, por el límite y plazo que Axion autorice por escrito; Axion puede reducirla, suspenderla o cancelarla en cualquier momento, en especial por atraso en el pago. Las compras que excedan el límite se pagan de contado.</li>
+    <li>El plazo cuenta a partir de la fecha de cada factura. Los pagos se hacen por transferencia a la cuenta que Axion indique en la factura; no se aceptan pagos a personal en efectivo salvo recibo oficial.</li>
+    <li>El atraso en el pago genera <b>interés moratorio del 3% mensual</b> sobre el saldo vencido, más los gastos de cobranza, y suspende automáticamente la línea hasta regularizar.</li>
+    <li>La mercancía es propiedad de Axion hasta su pago total. Las devoluciones se aceptan en un máximo de 15 días, en su empaque original y con nota de crédito.</li>
+    <li>Cualquier cambio en razón social, domicilio, representante legal o contactos debe notificarse por escrito en un plazo de 5 días.</li>
+    <li>He leído el <b>Aviso de Privacidad</b> de Distribuidora Axion (axiontools.mx/privacidad) y acepto el tratamiento de mis datos para los fines descritos.</li>
+  </ol>
+  <div class="firmas">
+    <div class="firma"><b>Solicitante / representante legal</b><br>Nombre y firma · Fecha</div>
+    <div class="firma"><b>Aval / obligado solidario</b><br>Nombre y firma · Fecha</div>
+  </div>
+
+  <div class="interno">
+    <h3>Uso exclusivo de Axion</h3>
+    <div class="g c4" style="background:transparent">
+      <div class="f"><label>Fecha de recepción</label></div><div class="f"><label>Expediente completo (fecha)</label></div><div class="f"><label>Referencias verificadas por</label></div><div class="f"><label>Opinión SAT / buró</label></div>
+    </div>
+    <div class="g c4">
+      <div class="opts" style="white-space:nowrap;font-size:8.4pt"><span class="chk"></span>Autorizado &nbsp;<span class="chk"></span>Condicionado &nbsp;<span class="chk"></span>Rechazado</div>
+      <div class="f"><label>Límite autorizado</label>$ ${e(v.aut_limite)}</div><div class="f"><label>Plazo autorizado (días)</label>${e(v.aut_plazo)}</div><div class="f"><label>Día de revisión / día de pago</label></div>
+    </div>
+    <div class="g c3">
+      <div class="f"><label>Vigencia (revisión anual)</label></div><div class="f"><label>Autorizó (nombre)</label>${e(v.aut_por)}</div><div class="f"><label>Firma de autorización</label></div>
+    </div>
+  </div>
+  <div class="foot"><span>Distribuidora Axion · Av. Fidel Velázquez 788, Santa Elena Estadio, Guadalajara, Jal. · compras@axiontools.mx · axiontools.mx</span><span>Página 2 de 3</span></div>
+</div>
+
+<!-- ===================== PÁGINA 3: PAGARÉ ===================== -->
+<div class="pg">
+  <div class="hdr"><img src="https://axiontools.mx/logo-axion.png" alt="Axion Tools">
+    <div class="t"><h1>PAGARÉ</h1><div class="sub">Garantía de la línea de crédito · anexo a la solicitud FO-CYC-SCR</div></div></div>
+  <div class="pagare">
+    <div class="ttl">P A G A R É</div>
+    <p>Bueno por: $ <span class="ln s"></span> M.N. &nbsp;&nbsp;&nbsp;&nbsp; No. <span class="ln s"></span> &nbsp;&nbsp;&nbsp;&nbsp; Lugar y fecha: <span class="ln w"></span></p>
+    <p>Debo(emos) y pagaré(mos) incondicionalmente por este pagaré a la orden de <b>ADMINISTRADORA DE PRODUCTIVIDAD, S.A. DE C.V.</b> (Distribuidora Axion), en Guadalajara, Jalisco, o en cualquier otro lugar que se me(nos) requiera, el día <span class="ln w"></span>, la cantidad de:</p><p style="margin:4px 0">$ <span class="ln"></span> &nbsp;(<span class="ln w"></span><span class="ln w"></span> pesos <span class="ln s"></span>/100 M.N.)</p><p>Valor recibido en mercancía a mi(nuestra) entera satisfacción.</p>
+    <p>Este pagaré forma parte de una línea de crédito revolvente y garantiza el saldo insoluto de las facturas que se emitan al amparo de la misma. En caso de no pagarse a su vencimiento, causará <b>intereses moratorios a razón del 3% (tres por ciento) mensual</b> sobre el saldo vencido, desde la fecha de su vencimiento hasta su total liquidación, sin que ello implique prórroga del plazo. Para todo lo relativo a la interpretación y cumplimiento de este documento, el suscriptor y el aval se someten a la jurisdicción de los tribunales competentes de Guadalajara, Jalisco, renunciando al fuero de su domicilio presente o futuro.</p>
+    <div class="g c2" style="margin-top:10px">
+      <div><b>Suscriptor (deudor)</b><br>Nombre: <span class="ln w"></span><br>RFC: <span class="ln"></span><br>Domicilio: <span class="ln w"></span><br><span class="ln w"></span><br><br><br><div class="firma">Firma</div></div>
+      <div><b>Aval / obligado solidario</b><br>Nombre: <span class="ln w"></span><br>RFC: <span class="ln"></span><br>Domicilio: <span class="ln w"></span><br><span class="ln w"></span><br><br><br><div class="firma">Firma</div></div>
+    </div>
+  </div>
+  <p class="note" style="margin-top:8px">Llenar con tinta, sin tachaduras. El monto del pagaré debe ser igual o mayor al límite de crédito autorizado. Axion conserva el original y entrega copia sellada al suscriptor. Al cancelar la línea y liquidar el saldo, el pagaré se devuelve cancelado.</p>
+  <div class="foot"><span>Distribuidora Axion · Av. Fidel Velázquez 788, Santa Elena Estadio, Guadalajara, Jal. · compras@axiontools.mx · axiontools.mx</span><span>Página 3 de 3</span></div>
+</div>
+</body></html>
+`; }
+
+// ===== v187: CRÉDITO A CLIENTES — expediente (solicitud + documentos), autorización y candados =====
+const CR_DOCS = [
+  {k:'solicitud', t:'Solicitud de crédito firmada (FO-CYC-SCR)', req:true, meses:0},
+  {k:'csf', t:'Constancia de Situación Fiscal (SAT)', req:true, meses:3},
+  {k:'opinion', t:'Opinión de cumplimiento de obligaciones fiscales (32-D) — positiva', req:true, meses:1},
+  {k:'domicilio', t:'Comprobante de domicilio fiscal', req:true, meses:3},
+  {k:'ine', t:'Identificación oficial del representante legal / dueño', req:true, meses:0},
+  {k:'edos_cuenta', t:'Estados de cuenta bancarios — últimos 3 meses', req:true, meses:3},
+  {k:'acta', t:'Acta constitutiva y poder del representante (personas morales)', req:false, meses:0},
+  {k:'aval', t:'Identificación y comprobante de domicilio del aval', req:true, meses:3},
+  {k:'pagare', t:'Pagaré firmado (representante legal y aval)', req:true, meses:0},
+  {k:'edos_fin', t:'Estados financieros del último ejercicio (opcional)', req:false, meses:0},
+];
+const CR_ESTADOS = {sin:'Sin crédito', tramite:'En trámite', autorizado:'Autorizado', suspendido:'Suspendido', rechazado:'Rechazado'};
+const CR_BADGE = {sin:'b-gris', tramite:'b-ambar', autorizado:'b-verde', suspendido:'b-rojo', rechazado:'b-rojo'};
+function crDocEstado(d, doc){ // {txt, cls}
+  if(!d || !d.ok) return {txt:'falta', cls:'b-gris'};
+  if(doc.meses && d.fecha){ const lim = new Date(d.fecha+'T00:00:00'); lim.setMonth(lim.getMonth()+doc.meses); const hoy = new Date();
+    if(lim < hoy) return {txt:'VENCIDO ('+fecha(d.fecha)+')', cls:'b-rojo'};
+    const dias = Math.round((lim-hoy)/864e5); if(dias<=10) return {txt:'vence en '+dias+' d', cls:'b-ambar'}; }
+  return {txt:'ok'+(d.fecha?' · '+fecha(d.fecha):''), cls:'b-verde'};
+}
+function crCompleto(c){ const docs = c.credito_docs||{}; return CR_DOCS.filter(d=>d.req).every(d=>crDocEstado(docs[d.k], d).cls==='b-verde' || crDocEstado(docs[d.k], d).cls==='b-ambar'); }
+function crBadgeCliente(c){
+  const est = c.credito_estado||'sin';
+  if(est==='sin') return '';
+  const lim = +c.credito_limite||0;
+  return `<span class="badge ${CR_BADGE[est]}" title="Crédito">💳 ${CR_ESTADOS[est]}${est==='autorizado'?' · '+fmt(lim)+' · '+(+c.credito_plazo||0)+' d':''}</span>`;
+}
+async function expedienteCredito(id){
+  const {data:c, error} = await sb.from('clientes').select('*').eq('id', id).single();
+  if(error||!c){ toast('No encontré al cliente', true); return; }
+  const s = c.credito_solicitud||{}, docs = c.credito_docs||{};
+  let saldo = 0, venc = 0;
+  try{ const r1 = await sb.rpc('saldo_credito_cliente', {p_cliente_id:id}); saldo = +(r1.data||0); const r2 = await sb.rpc('vencidas_credito_cliente', {p_cliente_id:id}); venc = +(r2.data||0); }catch(e){}
+  const est = c.credito_estado||'sin';
+  const F = (k, label, w) => `<div class="field" ${w?`style="grid-column:span ${w}"`:''}><label>${label}</label><input id="cs-${k}" value="${esc(s[k]||'')}"></div>`;
+  abrirModal(`<h3>💳 Expediente de crédito — ${esc(c.nombre)}</h3>
+    <div class="card" style="padding:10px;margin-bottom:10px;background:${est==='autorizado'?'#f0fdf4':(est==='tramite'?'#fffbeb':'#f8fafc')}">
+      <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center">
+        <span>${crBadgeCliente(c)||'<span class="badge b-gris">Sin crédito</span>'}</span>
+        ${est==='autorizado'?`<span class="small">Debe <b style="color:${saldo>0?'#b91c1c':'inherit'}">${fmt(saldo)}</b> · disponible <b>${fmt(Math.max(0,(+c.credito_limite||0)-saldo))}</b>${venc?` · <b style="color:#b91c1c">${venc} venta(s) VENCIDA(S)</b>`:''}</span>`:''}
+        ${c.credito_autorizado_at?`<span class="small muted">autorizado ${fecha(c.credito_autorizado_at)}${c.credito_autorizado_por?' por '+esc(c.credito_autorizado_por):''}</span>`:''}
+        <span class="small muted">Folio ${esc(c.credito_folio||('SC-'+String(c.id).padStart(4,'0')))}</span>
+      </div>
+    </div>
+    <details open><summary style="cursor:pointer;font-weight:700;margin-bottom:6px">📋 Solicitud (datos del cliente)</summary>
+      <div class="frow" style="grid-template-columns:repeat(4,1fr)">
+        <div class="field"><label>Tipo</label><select id="cs-tipo"><option value="moral" ${s.tipo==='moral'?'selected':''}>Persona moral</option><option value="fisica" ${s.tipo==='fisica'?'selected':''}>Física c/act. empresarial</option></select></div>
+        ${F('monto','Línea solicitada (MXN)')}
+        <div class="field"><label>Plazo solicitado</label><select id="cs-plazo">${[15,30,45].map(d=>`<option value="${d}" ${+s.plazo===d?'selected':''}>${d} días</option>`).join('')}</select></div>
+        ${F('compra_mensual','Compra mensual estimada')}
+      </div>
+      <div class="frow" style="grid-template-columns:2fr 1fr 1fr">${F('razon','Razón social / nombre (como en la CSF)')}${F('rfc','RFC')}${F('giro','Giro')}</div>
+      <div class="frow" style="grid-template-columns:2fr 1fr 1fr 1fr">${F('calle','Domicilio fiscal — calle y número')}${F('colonia','Colonia')}${F('cp','C.P.')}${F('municipio','Municipio / estado')}</div>
+      <div class="frow" style="grid-template-columns:2fr 1fr 1fr">${F('entrega','Domicilio de entrega / obra')}${F('correo','Correo facturas y estados de cuenta')}${F('tel','Teléfono oficina')}</div>
+      <div class="frow" style="grid-template-columns:repeat(3,1fr)">${F('rep_nombre','Representante legal / dueño')}${F('rep_tel','Tel. representante')}${F('rep_id','INE / pasaporte No.')}</div>
+      <div class="frow" style="grid-template-columns:repeat(4,1fr)">${F('compras_nombre','Contacto compras')}${F('compras_tel','Tel. compras')}${F('pagos_nombre','Contacto pagos')}${F('pagos_tel','Tel. pagos')}</div>
+      <div class="frow" style="grid-template-columns:repeat(4,1fr)">${F('aval_nombre','Aval — nombre')}${F('aval_rfc','Aval — RFC')}${F('aval_tel','Aval — teléfono')}${F('aval_rel','Relación con el solicitante')}</div>
+      ${[1,2,3].map(i=>`<div class="frow" style="grid-template-columns:2fr 2fr 1fr 1fr 1fr">${F('ref'+i+'_prov','Referencia comercial '+i+' — proveedor')}${F('ref'+i+'_contacto','Contacto y teléfono')}${F('ref'+i+'_plazo','Plazo')}${F('ref'+i+'_linea','Línea')}${F('ref'+i+'_ant','Antigüedad')}</div>`).join('')}
+      <div class="frow" style="grid-template-columns:2fr 1fr 1fr">${F('uso','¿Para qué se usará el crédito?')}${F('dia_revision','Día de revisión')}${F('dia_pago','Día de pago')}</div>
+    </details>
+    <details open style="margin-top:8px"><summary style="cursor:pointer;font-weight:700;margin-bottom:6px">📎 Documentos del expediente ${crCompleto(c)?'<span class="badge b-verde">completo</span>':'<span class="badge b-ambar">incompleto</span>'}</summary>
+      <div class="tbl-scroll"><table><thead><tr><th>Documento</th><th>Estado</th><th>Fecha del documento</th><th></th></tr></thead><tbody>
+      ${CR_DOCS.map(d=>{ const x = docs[d.k]||{}; const st = crDocEstado(x, d); return `<tr>
+        <td>${d.req?'<b>':''}${esc(d.t)}${d.req?'</b>':' <span class="small muted">(opcional)</span>'}${d.meses?` <span class="small muted">· vigencia ${d.meses} mes${d.meses>1?'es':''}</span>`:''}</td>
+        <td><span class="badge ${st.cls}">${st.txt}</span></td>
+        <td><input type="date" id="cd-f-${d.k}" value="${esc(x.fecha||'')}" style="padding:4px" onchange="crDocFecha(${id},'${d.k}',this.value)"></td>
+        <td style="white-space:nowrap">${x.path?`<button class="btn sm sec" onclick="verPdfFactura('${esc(x.path)}')">📄 Ver</button> `:''}<label class="btn sm ${x.path?'sec':''}" style="cursor:pointer">${x.path?'↻ Reemplazar':'📎 Subir'}<input type="file" accept="image/*,application/pdf" style="display:none" onchange="crSubirDoc(${id},'${d.k}',this)"></label>${x.ok?` <button class="btn sm sec" title="Marcar como faltante" onclick="crDocQuitar(${id},'${d.k}')">✕</button>`:(x.path?'':` <button class="btn sm sec" title="Lo tengo en papel, sin archivo" onclick="crDocOk(${id},'${d.k}')">✓ en papel</button>`)}</td></tr>`; }).join('')}
+      </tbody></table></div>
+      <p class="small muted" style="margin:6px 0 0">Los archivos quedan en el expediente del cliente (solo admin y contador los ven). La opinión de cumplimiento debe ser positiva y de este mes; CSF, domicilio y estados de cuenta de menos de 3 meses.</p>
+    </details>
+    ${esAdmin()?`<details open style="margin-top:8px"><summary style="cursor:pointer;font-weight:700;margin-bottom:6px">✅ Autorización (solo admin)</summary>
+      <div class="frow" style="grid-template-columns:repeat(5,1fr)">
+        <div class="field"><label>Estado</label><select id="cr-estado">${Object.entries(CR_ESTADOS).map(([k,t])=>`<option value="${k}" ${est===k?'selected':''}>${t}</option>`).join('')}</select></div>
+        <div class="field"><label>Límite (MXN, con IVA)</label><input id="cr-limite" type="number" step="100" value="${+c.credito_limite||''}"></div>
+        <div class="field"><label>Plazo (días)</label><select id="cr-plazo"><option value="0">—</option>${[7,15,30,45,60].map(d=>`<option value="${d}" ${+c.credito_plazo===d?'selected':''}>${d}</option>`).join('')}</select></div>
+        <div class="field"><label>Día de pago</label><input id="cr-diapago" value="${esc(c.credito_dia_pago||'')}" placeholder="Ej. viernes / día 15"></div>
+        <div class="field"><label>Próxima revisión</label><input id="cr-revision" type="date" value="${esc(c.credito_revision||'')}"></div>
+      </div>
+      <div class="frow" style="grid-template-columns:1fr 2fr"><div class="field"><label>Aval (nombre)</label><input id="cr-aval" value="${esc(c.credito_aval||s.aval_nombre||'')}"></div><div class="field"><label>Notas internas (referencias verificadas, opinión SAT, buró…)</label><input id="cr-notas" value="${esc(c.credito_notas||'')}"></div></div>
+      ${!crCompleto(c)?'<p class="small" style="color:#b45309;margin:0 0 6px">⚠️ El expediente no está completo. Puedes autorizar de todos modos, pero queda registrado.</p>':''}
+    </details>`:''}
+    <div class="acciones" style="margin-top:10px">
+      <button class="btn sec" onclick="imprimirSolicitudCredito(${id})">🖨️ Imprimir solicitud</button>
+      <button class="btn sec" onclick="cerrarModal()">Cerrar</button>
+      <button class="btn" onclick="guardarExpedienteCredito(${id})">💾 Guardar</button>
+    </div>`, true);
+}
+function crLeerSolicitud(){
+  const s = {}; document.querySelectorAll('[id^="cs-"]').forEach(el=>{ s[el.id.slice(3)] = (el.value||'').trim(); }); return s;
+}
+async function guardarExpedienteCredito(id){
+  const s = crLeerSolicitud();
+  const obj = {credito_solicitud:s};
+  if(esAdmin() && $('cr-estado')){
+    obj.credito_estado = $('cr-estado').value; obj.credito_limite = +($('cr-limite').value||0); obj.credito_plazo = +($('cr-plazo').value||0);
+    obj.credito_dia_pago = ($('cr-diapago').value||'').trim()||null; obj.credito_revision = $('cr-revision').value||null;
+    obj.credito_aval = ($('cr-aval').value||'').trim()||null; obj.credito_notas = ($('cr-notas').value||'').trim()||null;
+    if(obj.credito_estado==='autorizado'){
+      if(!(obj.credito_limite>0) || !(obj.credito_plazo>0)){ toast('Para autorizar pon límite y plazo', true); return; }
+      obj.credito_autorizado_por = (typeof perfil!=='undefined'&&perfil)?(perfil.nombre||perfil.correo):'';
+      if(!obj.credito_revision){ const d = new Date(); d.setFullYear(d.getFullYear()+1); obj.credito_revision = d.toISOString().slice(0,10); }
+    }
+  }
+  // si la solicitud trae razón social / RFC y el cliente no, se copian
+  const c = cliData.find(x=>x.id===id)||{}; if(s.rfc && !c.rfc) obj.rfc = s.rfc; if(s.correo && !c.correo) obj.correo = s.correo; if(s.tel && !c.telefono) obj.telefono = s.tel;
+  if(!c.credito_folio) obj.credito_folio = 'SC-'+String(id).padStart(4,'0');
+  const {error} = await sb.from('clientes').update(obj).eq('id', id);
+  if(error){ toast(errMsg(error), true); return; }
+  logEv('credito', 'expediente '+(c.nombre||id)+(obj.credito_estado?' → '+obj.credito_estado+(obj.credito_limite?' '+fmt(obj.credito_limite)+' '+obj.credito_plazo+'d':''):''));
+  toast('💾 Expediente guardado'+(obj.credito_estado==='autorizado'?' — crédito AUTORIZADO':''));
+  cerrarModal(); if(document.querySelector('#v-clientes')) vClientes();
+}
+async function crSubirDoc(id, k, inp){
+  const f = inp.files && inp.files[0]; if(!f) return;
+  const ext = (f.name.split('.').pop()||'pdf').toLowerCase();
+  const path = `clientes/${id}/${k}_${Date.now()}.${ext}`;
+  toast('Subiendo…');
+  const up = await sb.storage.from('facturas').upload(path, f, {upsert:true});
+  if(up.error){ toast('No se pudo subir: '+errMsg(up.error), true); return; }
+  const {data:c} = await sb.from('clientes').select('credito_docs').eq('id', id).single();
+  const docs = (c&&c.credito_docs)||{}; const fechaEl = $('cd-f-'+k);
+  docs[k] = Object.assign({}, docs[k]||{}, {path, ok:true, fecha:(fechaEl&&fechaEl.value)||(docs[k]&&docs[k].fecha)||hoyMX(), subido:new Date().toISOString(), nombre:f.name});
+  const {error} = await sb.from('clientes').update({credito_docs:docs}).eq('id', id);
+  if(error){ toast(errMsg(error), true); return; }
+  logEv('credito', 'doc '+k+' cliente '+id); toast('📎 Documento guardado'); expedienteCredito(id);
+}
+async function crDocFecha(id, k, val){
+  const {data:c} = await sb.from('clientes').select('credito_docs').eq('id', id).single();
+  const docs = (c&&c.credito_docs)||{}; docs[k] = Object.assign({}, docs[k]||{}, {fecha: val||null});
+  const {error} = await sb.from('clientes').update({credito_docs:docs}).eq('id', id); if(error) toast(errMsg(error), true);
+}
+async function crDocOk(id, k){
+  const {data:c} = await sb.from('clientes').select('credito_docs').eq('id', id).single();
+  const docs = (c&&c.credito_docs)||{}; const fechaEl = $('cd-f-'+k);
+  docs[k] = Object.assign({}, docs[k]||{}, {ok:true, fecha:(fechaEl&&fechaEl.value)||(docs[k]&&docs[k].fecha)||hoyMX(), papel:true});
+  const {error} = await sb.from('clientes').update({credito_docs:docs}).eq('id', id); if(error){ toast(errMsg(error), true); return; } expedienteCredito(id);
+}
+async function crDocQuitar(id, k){
+  const {data:c} = await sb.from('clientes').select('credito_docs').eq('id', id).single();
+  const docs = (c&&c.credito_docs)||{}; docs[k] = Object.assign({}, docs[k]||{}, {ok:false});
+  const {error} = await sb.from('clientes').update({credito_docs:docs}).eq('id', id); if(error){ toast(errMsg(error), true); return; } expedienteCredito(id);
+}
+async function imprimirSolicitudCredito(id){
+  const s = document.querySelector('[id^="cs-"]') ? crLeerSolicitud() : null;
+  const {data:c} = await sb.from('clientes').select('*').eq('id', id).single(); if(!c) return;
+  const q = Object.assign({}, c.credito_solicitud||{}, s||{});
+  const v = Object.assign({}, q, {
+    razon: q.razon||c.nombre, rfc: q.rfc||c.rfc, tel: q.tel||c.telefono, correo: q.correo||c.correo, calle: q.calle||c.direccion,
+    folio: c.credito_folio||('SC-'+String(c.id).padStart(4,'0')), fecha: fecha(new Date()), vendedor: (typeof perfil!=='undefined'&&perfil)?(perfil.nombre||''):'',
+    aval_nombre: q.aval_nombre||c.credito_aval, aut_limite: c.credito_estado==='autorizado'?fmt(c.credito_limite).replace('$',''):'', aut_plazo: c.credito_estado==='autorizado'?c.credito_plazo:'', aut_por: c.credito_autorizado_por||''
+  });
+  const w = window.open('', '_blank'); if(!w){ toast('El navegador bloqueó la ventana de impresión — permite ventanas emergentes para axiontools.mx', true); return; }
+  w.document.open(); w.document.write(solCreditoHtml(v)); w.document.close();
+  setTimeout(()=>{ try{ w.focus(); w.print(); }catch(e){} }, 900);
+  logEv('credito', 'imprimir solicitud cliente '+id);
+}
+// POS: aviso claro antes de que la base rechace la venta a crédito
+async function crValidarVentaCredito(clienteId, total){
+  const c = (cliCache||[]).find(x=>x.id===clienteId); if(!c) return 'Elige al cliente';
+  if((c.credito_estado||'sin')!=='autorizado') return `${c.nombre} no tiene crédito autorizado (${CR_ESTADOS[c.credito_estado||'sin']}). Se vende de contado, o Andrés le autoriza crédito en Clientes → 💳.`;
+  try{
+    const r1 = await sb.rpc('saldo_credito_cliente', {p_cliente_id:clienteId}); const saldo = +(r1.data||0);
+    if(saldo + total > +c.credito_limite + 0.005) return `${c.nombre} debe ${fmt(saldo)} y su límite es ${fmt(c.credito_limite)}: esta venta de ${fmt(total)} se pasa por ${fmt(saldo+total-c.credito_limite)}. Cobra la diferencia de contado.`;
+    const r2 = await sb.rpc('vencidas_credito_cliente', {p_cliente_id:clienteId}); if(+(r2.data||0)>0) return `${c.nombre} tiene ${r2.data} venta(s) a crédito VENCIDA(S). No se le da más crédito hasta que pague.`;
+  }catch(e){}
+  return null;
+}
+
 async function vClientes(){
   if(puedeVender()) $('vtools').innerHTML = `<button class="btn" onclick="editarCliente(null)">+ Cliente</button>`;
   const {data, error} = await sb.from('clientes').select('*').order('nombre');
@@ -3695,7 +4052,7 @@ async function vClientes(){
       <label class="small"><input type="checkbox" id="cl-solo-maestros" onchange="pintarClientes()"> Solo maestros 🔧</label>
     </div>
     <div class="card"><div class="tbl-scroll"><table>
-      <thead><tr><th>Nombre</th><th>Oficio</th><th>Teléfono</th><th>Correo</th><th>RFC</th><th>Notas</th><th></th></tr></thead>
+      <thead><tr><th>Nombre</th><th>Oficio</th><th>💳 Crédito</th><th>Teléfono</th><th>Correo</th><th>RFC</th><th>Notas</th><th></th></tr></thead>
       <tbody id="cl-body"></tbody></table></div>
       <p class="small muted" id="cl-pie" style="margin-top:10px"></p></div>`;
   pintarClientes();
@@ -3709,12 +4066,13 @@ function pintarClientes(){
   $('cl-body').innerHTML = rows.map(c=>`<tr>
     <td><b>${esc(c.nombre)}</b></td>
     <td>${c.oficio?`<span class="badge b-azul">🔧 ${esc(c.oficio)}</span>${+c.desc_pct>0?` <span class="badge b-verde">−${+c.desc_pct}%</span>`:''}`:''}</td>
+    <td>${crBadgeCliente(c)||'<span class="small muted">—</span>'}</td>
     <td>${esc(c.telefono)}</td><td>${esc(c.correo)}</td>
     <td>${esc(c.rfc)}</td><td class="small muted">${esc(c.notas)}</td>
-    <td>${puedeVender()?`<button class="btn sec sm" onclick="editarCliente(${c.id})">Editar</button>`:''}</td></tr>`).join('')
-    || '<tr><td colspan="7" class="muted">Aún no hay clientes. Los clientes son opcionales: puedes vender a "Mostrador".</td></tr>';
-  const nM = cliData.filter(c=>c.oficio).length;
-  $('cl-pie').textContent = `${rows.length} cliente(s) · ${nM} maestro(s) registrados 🔧`;
+    <td style="white-space:nowrap">${puedeVender()?`<button class="btn sec sm" onclick="editarCliente(${c.id})">Editar</button> <button class="btn sec sm" title="Expediente de crédito" onclick="expedienteCredito(${c.id})">💳</button>`:''}</td></tr>`).join('')
+    || '<tr><td colspan="8" class="muted">Aún no hay clientes. Los clientes son opcionales: puedes vender a "Mostrador".</td></tr>';
+  const nM = cliData.filter(c=>c.oficio).length, nC = cliData.filter(c=>c.credito_estado==='autorizado').length, nT = cliData.filter(c=>c.credito_estado==='tramite').length;
+  $('cl-pie').textContent = `${rows.length} cliente(s) · ${nM} maestro(s) registrados 🔧 · ${nC} con crédito autorizado 💳${nT?` · ${nT} en trámite`:''}`;
 }
 function editarCliente(id){
   const c = id ? cliData.find(x=>x.id===id) : {nombre:'',telefono:'',correo:'',rfc:'',direccion:'',notas:'',oficio:'',desc_pct:0};
@@ -5703,7 +6061,7 @@ async function guardarPagoFijo(id){
 // v135: cobranza de ventas a crédito
 async function pintarCobranza(){
   const el = $('cobrar-panel'); if(!el) return;
-  const vs = (await sb.from('ventas').select('id,folio,fecha,total,cancelada,clientes(nombre)').eq('metodo_pago','credito').eq('cancelada',false).order('fecha',{ascending:false}).limit(200)).data||[];
+  const vs = (await sb.from('ventas').select('id,folio,fecha,total,cancelada,clientes(nombre,credito_plazo)').eq('metodo_pago','credito').eq('cancelada',false).order('fecha',{ascending:false}).limit(200)).data||[];
   const rc = await sb.from('cobros_credito').select('venta_id,monto,fecha,metodo');
   if(rc.error){ el.innerHTML = '<p class="small muted">Para activar la cobranza corre 42_cobranza_credito.sql en Supabase.</p>'; return; }
   const C = {}; (rc.data||[]).forEach(function(c){ C[c.venta_id]=(C[c.venta_id]||0)+ +c.monto; });
@@ -5711,9 +6069,9 @@ async function pintarCobranza(){
   const tot = rows.reduce(function(s,v){ return s+v.saldo; },0);
   el.innerHTML = rows.length ? `<p class="small" style="margin:0 0 6px">Nos deben <b>${fmt(tot)}</b> en ${rows.length} venta(s) a crédito.</p>
     <div class="tbl-scroll"><table><thead><tr><th>Folio</th><th>Fecha</th><th>Cliente</th><th class="num">Total</th><th class="num">Cobrado</th><th class="num">Debe</th><th></th></tr></thead>
-    <tbody>${rows.map(v=>`<tr><td><b>#${v.folio}</b></td><td class="small">${fecha(v.fecha)}</td><td>${esc((v.clientes&&v.clientes.nombre)||'—')}</td>
+    <tbody>${rows.map(v=>{ const pl = +((v.clientes&&v.clientes.credito_plazo)||0); const ven = new Date(v.fecha); ven.setDate(ven.getDate()+pl); const dv = Math.floor((new Date()-ven)/864e5); return `<tr><td><b>#${v.folio}</b></td><td class="small">${fecha(v.fecha)}${pl?`<br><span class="badge ${dv>0?'b-rojo':(dv>-4?'b-ambar':'b-gris')}">${dv>0?'vencida hace '+dv+' d':'vence '+fecha(ven)}</span>`:''}</td><td>${esc((v.clientes&&v.clientes.nombre)||'—')}</td>
       <td class="num">${fmt(v.total)}</td><td class="num" style="color:#15803d">${fmt(v.cobrado)}</td><td class="num"><b style="color:#b91c1c">${fmt(v.saldo)}</b></td>
-      <td><button class="btn sm" onclick="cobrarCredito(${v.id},${v.saldo},'${esc((v.clientes&&v.clientes.nombre)||'')}')">💰 Cobrar</button></td></tr>`).join('')}</tbody></table></div>`
+      <td><button class="btn sm" onclick="cobrarCredito(${v.id},${v.saldo},'${esc((v.clientes&&v.clientes.nombre)||'')}')">💰 Cobrar</button></td></tr>`; }).join('')}</tbody></table></div>`
     : '<p class="small muted">Nadie nos debe — no hay ventas a crédito pendientes ✓ (cuando el POS cobre a crédito, aquí aparece quién debe y cuánto)</p>';
 }
 function cobrarCredito(vid, saldo, cli){
