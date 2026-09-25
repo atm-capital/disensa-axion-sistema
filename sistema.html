@@ -2960,6 +2960,7 @@ async function pintarCatalogoTruper(agregar){
       : `<b>${fmt(pubI)}</b><br><span class="small muted">público Truper${esFinanzas()?` · costo ${fmt(co)} (${m!==null?Math.round(m*100)+'%':'—'})`:''}</span>`;
     const obj = {c:p.clave, d:p.descripcion, pr:(mio&&+mio.precio>0)?+mio.precio:pubI, co:(mio&&+mio.costo>0)?+mio.costo:co, su:pubI, pid:mio?mio.id:undefined, tr:p.codigo};
     return `<div class="card" style="margin:0;padding:12px;${sel?'outline:2px solid var(--rojo)':''}">
+      <a href="https://www.truper.com/CatVigente/buscador?palabra=${encodeURIComponent(p.clave)}" target="_blank" title="Ver en el catálogo Truper"><img src="https://www.truper.com/admin/images/ch/${encodeURIComponent(p.codigo)}.jpg" style="width:100%;height:110px;object-fit:contain" onerror="this.style.display='none'" loading="lazy"></a>
       <div class="small" style="min-height:58px"><b>${esc(p.clave)}</b> <span class="badge b-gris">${esc(p.marca||'')}</span>${p.alta_rotacion?' <span class="badge b-azul" title="Alta rotación según Truper">🔥</span>':''}<br>${esc(p.descripcion||'')}<br><span class="muted">${esc(p.familia_desc||'')}${p.inner_pack?` · inner ${+p.inner_pack}`:''}${p.unidad?` · ${esc(p.unidad)}`:''}</span></div>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;gap:6px">
         <div>${precioHtml}</div>
@@ -2983,7 +2984,8 @@ async function altaProductoTruper(codigo){
   toast('✅ '+p.clave+' dado de alta a '+fmt(precio)); pintarCatalogo(false);
 }
 async function catMarcasTruper(){
-  try{ const r = await sb.from('lista_truper').select('marca').not('marca','is',null).limit(20000); const c = {}; (r.data||[]).forEach(x=>{ c[x.marca] = (c[x.marca]||0)+1; }); return Object.entries(c).sort((a,b)=>b[1]-a[1]).map(([marca,n])=>({marca,n})); }catch(e){ return []; }
+  if(window._trMarcas) return window._trMarcas;
+  try{ const rows = await traerTodo(()=>sb.from('lista_truper').select('codigo,marca').order('codigo')); const c = {}; (rows||[]).forEach(x=>{ if(x.marca) c[x.marca] = (c[x.marca]||0)+1; }); window._trMarcas = Object.entries(c).sort((a,b)=>b[1]-a[1]).map(([marca,n])=>({marca,n})); return window._trMarcas; }catch(e){ return []; }
 }
 async function catCambiarProv(){
   const tr = ($('cat-prov')?.value==='truper');
