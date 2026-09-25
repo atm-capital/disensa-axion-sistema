@@ -83,8 +83,8 @@ const DOCS = [
   {k:'acta', t:'Acta constitutiva y poder del representante', req:false, why:'Personas morales (empresas): acta constitutiva y el poder del representante legal.'},
   {k:'aval', t:'Identificación y comprobante de domicilio del aval', req:false, why:'INE y comprobante de domicilio del aval que pones en la sección 5.'},
   {k:'edos_fin', t:'Estados financieros del último ejercicio', req:false, why:'Balance y estado de resultados del último ejercicio. Ayudan a autorizar una línea más alta.'},
-  {k:'solicitud', t:'Solicitud firmada', req:false, firma:true, why:'La imprimimos nosotros con estos datos y la firmas en la tienda o te la mandamos. Si ya la firmaste, súbela aquí.'},
-  {k:'pagare', t:'Pagaré firmado', req:false, firma:true, why:'Se firma junto con la solicitud (representante y aval).'},
+  {k:'solicitud', t:'Solicitud firmada', req:false, firma:true, descarga:true, why:'Descárgala ya llena con tus datos (botón 📄), fírmala el representante legal y súbela aquí en foto o PDF. El original nos lo entregas con el pagaré.'},
+  {k:'pagare', t:'Pagaré firmado', req:false, firma:true, why:'Lo prepara Axion Tools con el monto de la línea autorizada; lo firman en original el representante y el aval en la tienda o en la primera entrega. Si ya lo firmaste, sube aquí la copia.'},
 ];
 const OBLIG = ['razon','rfc','giro','calle','colonia','cp','municipio','correo','tel','rep_nombre','rep_tel','monto','plazo'];
 function F(k, label, opts){ opts=opts||{}; const v = (D.solicitud&&D.solicitud[k])||''; const req = OBLIG.includes(k);
@@ -99,7 +99,7 @@ function docHtml(d){
   const x = (D.docs&&D.docs[d.k])||{}; const ok = !!x.ok;
   const st = ok ? `<span class="badge b-verde">✓ recibido${x.nombre?' · '+esc(x.nombre):''}${x.fecha?' · '+esc(fechaMX(x.fecha)):''}</span>` : '<span class="badge b-ambar">falta</span>';
   return `<div class="doc" id="doc-${d.k}"><div><b>${esc(d.t)}${d.req?' <span style="color:var(--naranja)">*</span>':''}</b><div class="why">${esc(d.why)}</div><div class="st">${st}</div><div class="prog" id="pg-${d.k}" style="display:none"><i></i></div></div>
-    <div><label class="up ${ok?'ok':''}">${ok?'↻ Cambiar':'📎 Subir'}<input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,.heic,application/pdf,image/*" ${d.multi?'multiple':''} onchange="subir('${d.k}', this)"></label></div></div>`;
+    <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">${d.descarga?`<button class="btn sec" style="padding:8px 12px;font-size:14px" onclick="descargarSolicitud()">📄 Descargar llena</button>`:''}<label class="up ${ok?'ok':''}">${ok?'↻ Cambiar':'📎 Subir'}<input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,.heic,application/pdf,image/*" ${d.multi?'multiple':''} onchange="subir('${d.k}', this)"></label></div></div>`;
 }
 function pintar(){
   const s = D.solicitud||{};
@@ -258,6 +258,211 @@ async function guardar(enviar){
   } else {
     toast('💾 Avance guardado. Puedes regresar con esta misma liga.'); $('estado-guardado').textContent = 'Avance guardado ahora';
   }
+}
+function solCreditoHtml(v){ const e = x => esc(x==null?'':String(x)); const chk = on => `<span class="chk" style="${on?'background:#2b2b2b':''}"></span>`; return `<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><title>Solicitud de crédito · Axion Tools</title>
+<style>
+  @page { size: letter; margin: 12mm 12mm 14mm 12mm; }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI", Arial, Helvetica, sans-serif; color: #2b2b2b; font-size: 9.6pt; margin: 0; }
+  .pg { page-break-after: always; position: relative; height: 252mm; overflow: hidden; }
+  .pg:last-child { page-break-after: auto; }
+  .hdr { display: flex; align-items: center; justify-content: space-between; border-bottom: 3px solid #E8790F; padding-bottom: 6px; margin-bottom: 8px; }
+  .hdr img { height: 44px; }
+  .hdr .t { text-align: right; }
+  .hdr .t h1 { margin: 0; font-size: 17pt; letter-spacing: .5px; color: #2b2b2b; }
+  .hdr .t .sub { font-size: 8.5pt; color: #666; margin-top: 2px; }
+  .pg2 h2 { margin-top: 6px; }
+  .meta { display: flex; gap: 10px; font-size: 8.5pt; color: #555; margin: 0 0 6px; }
+  .meta b { color: #2b2b2b; }
+  .meta .box { border: 1px solid #ccc; border-radius: 4px; padding: 3px 8px; }
+  .meta .box.fill { min-width: 150px; }
+  h2 { background: #2b2b2b; color: #fff; font-size: 9.1pt; font-weight: 700; letter-spacing: .4px; padding: 2px 8px; margin: 6px 0 3px; border-left: 5px solid #E8790F; text-transform: uppercase; }
+  .g { display: grid; gap: 4px 8px; margin-bottom: 2px; }
+  .c2 { grid-template-columns: 1fr 1fr; } .c3 { grid-template-columns: 1fr 1fr 1fr; } .c4 { grid-template-columns: 1fr 1fr 1fr 1fr; }
+  .c21 { grid-template-columns: 2fr 1fr; } .c31 { grid-template-columns: 3fr 1fr; } .c211 { grid-template-columns: 2fr 1fr 1fr; } .c121 { grid-template-columns: 1fr 2fr 1fr; }
+  .f { border-bottom: 1px solid #9a9a9a; padding: 8px 4px 1px; min-height: 20px; position: relative; }
+  .f label { position: absolute; top: 1px; left: 3px; font-size: 6.6pt; color: #777; text-transform: uppercase; letter-spacing: .3px; }
+  .f.tall { min-height: 30px; }
+  .chk { display: inline-block; width: 10px; height: 10px; border: 1.3px solid #555; border-radius: 2px; vertical-align: -1px; margin-right: 4px; }
+  .opts { padding: 8px 4px 2px; }
+  .opts span { margin-right: 12px; white-space: nowrap; }
+  .note { font-size: 7.8pt; color: #666; margin: 2px 0 4px; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { border: 1px solid #bbb; padding: 3px 6px; font-size: 8.5pt; vertical-align: top; }
+  th { background: #f4f4f4; text-align: left; font-weight: 700; }
+  td.h { height: 21px; }
+  .docs td:first-child { width: 22px; text-align: center; }
+  .small { font-size: 8pt; color: #555; }
+  .cond { font-size: 8.2pt; line-height: 1.35; text-align: justify; }
+  .cond li { margin-bottom: 2px; }
+  .firmas { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 26px; }
+  .firma { border-top: 1px solid #444; padding-top: 4px; text-align: center; font-size: 8pt; }
+  .interno { border: 2px dashed #E8790F; border-radius: 6px; padding: 6px 8px; margin-top: 8px; background: #fff8f1; }
+  .interno .g { grid-template-columns: 1.3fr 1fr 1fr 1fr; }
+  .interno h3 { margin: 0 0 4px; font-size: 9pt; color: #E8790F; text-transform: uppercase; }
+  .foot { position: absolute; bottom: 0; left: 0; right: 0; font-size: 7.4pt; color: #888; display: flex; justify-content: space-between; }
+  .pagare { border: 2px solid #2b2b2b; padding: 12px 16px; font-size: 9.5pt; line-height: 1.55; text-align: justify; }
+  .pagare .ttl { text-align: center; font-size: 15pt; font-weight: 800; letter-spacing: 2px; margin-bottom: 8px; }
+  .pagare .ln { display: inline-block; border-bottom: 1px solid #444; min-width: 120px; }
+  .pagare .ln.w { min-width: 260px; } .pagare .ln.s { min-width: 70px; }
+</style></head><body>
+
+<!-- ===================== PÁGINA 1 ===================== -->
+<div class="pg">
+  <div class="hdr"><img src="https://axiontools.mx/logo-axion.png" alt="Axion Tools">
+    <div class="t"><h1>SOLICITUD DE CRÉDITO</h1><div class="sub">Distribuidora Axion · Materiales para la construcción y ferretería · Franquicia Disensa</div></div></div>
+  <div class="meta"><span class="box">Formato <b>FO-CYC-SCR v2</b> · sep-2026</span><span class="box fill">Folio: <b>${e(v.folio)}</b></span><span class="box fill">Fecha de solicitud: ${e(v.fecha)}</span><span class="box fill">Vendedor que atiende: ${e(v.vendedor)}</span></div>
+  <p class="note">Llene con letra de molde. Toda la información se trata como confidencial y se usa únicamente para evaluar la línea de crédito. Si un espacio no aplica, escriba N/A.</p>
+
+  <h2>1. Crédito solicitado</h2>
+  <div class="g c4">
+    <div class="opts" style="font-size:8.6pt">${chk(v.tipo==='moral')}Persona moral<br>${chk(v.tipo==='fisica')}Persona física c/act. empresarial</div>
+    <div class="f"><label>Línea solicitada (MXN)</label>$ ${e(v.monto)}</div>
+    <div class="opts"><b class="small">Plazo:</b> ${chk(+v.plazo===15)}15 días ${chk(+v.plazo===30)}30 días</div>
+    <div class="f"><label>Compra mensual estimada</label>$ ${e(v.compra_mensual)}</div>
+  </div>
+  <div class="g c2">
+    <div class="f"><label>¿Para qué obra o negocio se usará el crédito?</label>${e(v.uso)}</div>
+    <div class="f"><label>¿Desde cuándo compra en Axion? / ¿Quién lo recomienda?</label>${e(v.desde)}</div>
+  </div>
+
+  <h2>2. Datos generales del solicitante</h2>
+  <div class="g c31"><div class="f"><label>Razón social / Nombre completo (como aparece en la Constancia de Situación Fiscal)</label>${e(v.razon)}</div><div class="f"><label>RFC</label>${e(v.rfc)}</div></div>
+  <div class="g c3"><div class="f"><label>Nombre comercial</label>${e(v.comercial)}</div><div class="f"><label>Giro / actividad principal</label>${e(v.giro)}</div><div class="f"><label>Años operando</label>${e(v.anios)}</div></div>
+  <div class="g c3"><div class="f"><label>Teléfono oficina</label>${e(v.tel)}</div><div class="f"><label>Correo para facturas y estados de cuenta</label>${e(v.correo)}</div><div class="f"><label>Sitio web / redes</label>${e(v.web)}</div></div>
+
+  <h2>3. Domicilios</h2>
+  <div class="g c211"><div class="f"><label>Domicilio fiscal — calle</label>${e(v.calle)}</div><div class="f"><label>No. exterior</label>${e(v.next)}</div><div class="f"><label>No. interior</label>${e(v.nint)}</div></div>
+  <div class="g c4"><div class="f"><label>Colonia</label>${e(v.colonia)}</div><div class="f"><label>C.P.</label>${e(v.cp)}</div><div class="f"><label>Municipio</label>${e(v.municipio)}</div><div class="f"><label>Estado</label>${e(v.estado)}</div></div>
+  <div class="g c21"><div class="f"><label>Domicilio de entrega / obra (si es distinto)</label>${e(v.entrega)}</div><div class="f"><label>Horario de recepción</label>${e(v.horario)}</div></div>
+
+  <h2>4. Contactos</h2>
+  <table>
+    <tr><th style="width:24%">Función</th><th style="width:30%">Nombre</th><th style="width:22%">Teléfono / WhatsApp</th><th>Correo</th></tr>
+    <tr><td>Representante legal / dueño</td><td class="h">${e(v.rep_nombre)}</td><td>${e(v.rep_tel)}</td><td>${e(v.rep_correo)}</td></tr>
+    <tr><td>Compras (quien pide material)</td><td class="h">${e(v.compras_nombre)}</td><td>${e(v.compras_tel)}</td><td>${e(v.compras_correo)}</td></tr>
+    <tr><td>Pagos / cuentas por pagar</td><td class="h">${e(v.pagos_nombre)}</td><td>${e(v.pagos_tel)}</td><td>${e(v.pagos_correo)}</td></tr>
+    <tr><td>Recepción en obra</td><td class="h"></td><td></td><td></td></tr>
+  </table>
+  <div class="g c3" style="margin-top:4px"><div class="f"><label>Identificación del representante legal (INE/pasaporte) — No.</label>${e(v.rep_id)}</div><div class="f"><label>Día de revisión de facturas</label>${e(v.dia_revision)}</div><div class="f"><label>Día de pago</label>${e(v.dia_pago)}</div></div>
+
+  <h2>5. Datos de constitución (solo personas morales)</h2>
+  <div class="g c4"><div class="f"><label>Escritura pública No.</label></div><div class="f"><label>Fecha (dd/mm/aaaa)</label></div><div class="f"><label>Notario No. y nombre</label></div><div class="f"><label>Ciudad</label></div></div>
+  <div class="g c3"><div class="f"><label>Folio mercantil (RPPC)</label></div><div class="f"><label>Poder del representante — escritura No.</label></div><div class="f"><label>Objeto social (resumen)</label></div></div>
+
+  <h2>6. Aval / obligado solidario</h2>
+  <div class="g c31"><div class="f"><label>Nombre completo</label>${e(v.aval_nombre)}</div><div class="f"><label>RFC</label>${e(v.aval_rfc)}</div></div>
+  <div class="g c211"><div class="f"><label>Domicilio (calle, número, colonia, C.P., municipio)</label>${e(v.aval_dom)}</div><div class="f"><label>Teléfono</label>${e(v.aval_tel)}</div><div class="f"><label>Relación con el solicitante</label>${e(v.aval_rel)}</div></div>
+  <h2>7. Referencias bancarias</h2>
+  <table>
+    <tr><th>Banco</th><th>Sucursal / plaza</th><th>Tipo de cuenta</th><th>Antigüedad</th><th>Ejecutivo y teléfono</th></tr>
+    <tr><td class="h"></td><td></td><td></td><td></td><td></td></tr>
+    <tr><td class="h"></td><td></td><td></td><td></td><td></td></tr>
+  </table>
+  <p class="note">No escriba números de cuenta. Se verificarán con los estados de cuenta que anexe.</p>
+
+  <h2>8. Referencias comerciales (proveedores que le dan crédito)</h2>
+  <table>
+    <tr><th>Proveedor (razón social)</th><th>Contacto y teléfono de oficina</th><th>Plazo</th><th>Línea (MXN)</th><th>Antigüedad</th></tr>
+    <tr><td class="h">${e(v.ref1_prov)}</td><td>${e(v.ref1_contacto)}</td><td>${e(v.ref1_plazo)}</td><td>${e(v.ref1_linea)}</td><td>${e(v.ref1_ant)}</td></tr>
+    <tr><td class="h">${e(v.ref2_prov)}</td><td>${e(v.ref2_contacto)}</td><td>${e(v.ref2_plazo)}</td><td>${e(v.ref2_linea)}</td><td>${e(v.ref2_ant)}</td></tr>
+    <tr><td class="h">${e(v.ref3_prov)}</td><td>${e(v.ref3_contacto)}</td><td>${e(v.ref3_plazo)}</td><td>${e(v.ref3_linea)}</td><td>${e(v.ref3_ant)}</td></tr>
+  </table>
+
+  <div class="foot"><span>Distribuidora Axion · Av. Fidel Velázquez 788, Santa Elena Estadio, Guadalajara, Jal. · compras@axiontools.mx · axiontools.mx</span><span>Página 1 de 3</span></div>
+</div>
+
+<!-- ===================== PÁGINA 2 ===================== -->
+<div class="pg">
+  <div class="hdr"><img src="https://axiontools.mx/logo-axion.png" alt="Axion Tools">
+    <div class="t"><h1>SOLICITUD DE CRÉDITO</h1><div class="sub">Referencias · documentación · condiciones</div></div></div>
+
+  <h2>9. Documentación que debe anexar</h2>
+  <table class="docs">
+    <tr><th>✓</th><th>Documento</th><th style="width:26%">Requisito</th><th style="width:16%">Uso interno: verificado</th></tr>
+    <tr><td><span class="chk"></span></td><td><b>Constancia de Situación Fiscal</b> (SAT)</td><td>No mayor a 3 meses</td><td></td></tr>
+    <tr><td><span class="chk"></span></td><td><b>Opinión de cumplimiento de obligaciones fiscales</b> (SAT, 32-D)</td><td>Positiva, no mayor a 1 mes</td><td></td></tr>
+    <tr><td><span class="chk"></span></td><td><b>Comprobante de domicilio</b> fiscal (luz, agua, teléfono o predial)</td><td>No mayor a 3 meses</td><td></td></tr>
+    <tr><td><span class="chk"></span></td><td><b>Identificación oficial vigente</b> del representante legal o dueño (INE / pasaporte)</td><td>Ambos lados, legible</td><td></td></tr>
+    <tr><td><span class="chk"></span></td><td><b>Estados de cuenta bancarios</b> de los últimos 3 meses (carátula y movimientos)</td><td>Cuenta de la empresa</td><td></td></tr>
+    <tr><td><span class="chk"></span></td><td><b>Acta constitutiva</b> y <b>poder</b> del representante legal (personas morales)</td><td>Copia completa</td><td></td></tr>
+    <tr><td><span class="chk"></span></td><td><b>Identificación y comprobante de domicilio del aval</b></td><td>No mayor a 3 meses</td><td></td></tr>
+    <tr><td><span class="chk"></span></td><td><b>Pagaré</b> firmado por el representante legal y el aval (página 3)</td><td>Por el monto de la línea</td><td></td></tr>
+    <tr><td><span class="chk"></span></td><td>Estados financieros del último ejercicio (opcional; mejora el límite)</td><td>Firmados</td><td></td></tr>
+    <tr><td><span class="chk"></span></td><td>Autorización para consulta de referencias y buró (sección 10)</td><td>Firmada</td><td></td></tr>
+  </table>
+  <p class="note">Puede enviar los documentos en PDF o foto legible a <b>compras@axiontools.mx</b> o por WhatsApp. La solicitud se evalúa en un máximo de 5 días hábiles a partir de que el expediente esté completo.</p>
+
+  <h2>10. Declaraciones, autorizaciones y condiciones del crédito</h2>
+  <ol class="cond">
+    <li>Declaro bajo protesta de decir verdad que la información y los documentos entregados son verídicos y autorizo a Distribuidora Axion a verificarlos, a consultar mis referencias bancarias y comerciales, y a consultar mi historial crediticio en sociedades de información crediticia (buró) cuantas veces lo considere necesario mientras la relación comercial esté vigente.</li>
+    <li>La línea de crédito es <b>revolvente</b>, por el límite y plazo que Axion autorice por escrito; Axion puede reducirla, suspenderla o cancelarla en cualquier momento, en especial por atraso en el pago. Las compras que excedan el límite se pagan de contado.</li>
+    <li>El plazo cuenta a partir de la fecha de cada factura. Los pagos se hacen por transferencia a la cuenta que Axion indique en la factura; no se aceptan pagos a personal en efectivo salvo recibo oficial.</li>
+    <li>El atraso en el pago genera <b>interés moratorio del 3% mensual</b> sobre el saldo vencido, más los gastos de cobranza, y suspende automáticamente la línea hasta regularizar.</li>
+    <li>La mercancía es propiedad de Axion hasta su pago total. Las devoluciones se aceptan en un máximo de 15 días, en su empaque original y con nota de crédito.</li>
+    <li>Cualquier cambio en razón social, domicilio, representante legal o contactos debe notificarse por escrito en un plazo de 5 días.</li>
+    <li>He leído el <b>Aviso de Privacidad</b> de Distribuidora Axion (axiontools.mx/privacidad) y acepto el tratamiento de mis datos para los fines descritos.</li>
+  </ol>
+  <div class="firmas">
+    <div class="firma"><b>Solicitante / representante legal</b><br>Nombre y firma · Fecha</div>
+    <div class="firma"><b>Aval / obligado solidario</b><br>Nombre y firma · Fecha</div>
+  </div>
+
+  <div class="interno">
+    <h3>Uso exclusivo de Axion</h3>
+    <div class="g c4" style="background:transparent">
+      <div class="f"><label>Fecha de recepción</label></div><div class="f"><label>Expediente completo (fecha)</label></div><div class="f"><label>Referencias verificadas por</label></div><div class="f"><label>Opinión SAT / buró</label></div>
+    </div>
+    <div class="g c4">
+      <div class="opts" style="white-space:nowrap;font-size:8.4pt"><span class="chk"></span>Autorizado &nbsp;<span class="chk"></span>Condicionado &nbsp;<span class="chk"></span>Rechazado</div>
+      <div class="f"><label>Límite autorizado</label>$ ${e(v.aut_limite)}</div><div class="f"><label>Plazo autorizado (días)</label>${e(v.aut_plazo)}</div><div class="f"><label>Día de revisión / día de pago</label></div>
+    </div>
+    <div class="g c3">
+      <div class="f"><label>Vigencia (revisión anual)</label></div><div class="f"><label>Autorizó (nombre)</label>${e(v.aut_por)}</div><div class="f"><label>Firma de autorización</label></div>
+    </div>
+  </div>
+  <div class="foot"><span>Distribuidora Axion · Av. Fidel Velázquez 788, Santa Elena Estadio, Guadalajara, Jal. · compras@axiontools.mx · axiontools.mx</span><span>Página 2 de 3</span></div>
+</div>
+
+<!-- ===================== PÁGINA 3: PAGARÉ ===================== -->
+<div class="pg">
+  <div class="hdr"><img src="https://axiontools.mx/logo-axion.png" alt="Axion Tools">
+    <div class="t"><h1>PAGARÉ</h1><div class="sub">Garantía de la línea de crédito · anexo a la solicitud FO-CYC-SCR</div></div></div>
+  <div class="pagare">
+    <div class="ttl">P A G A R É</div>
+    <p>Bueno por: $ <span class="ln s"></span> M.N. &nbsp;&nbsp;&nbsp;&nbsp; No. <span class="ln s"></span> &nbsp;&nbsp;&nbsp;&nbsp; Lugar y fecha: <span class="ln w"></span></p>
+    <p>Debo(emos) y pagaré(mos) incondicionalmente por este pagaré a la orden de <b>ADMINISTRADORA DE PRODUCTIVIDAD, S.A. DE C.V.</b> (Distribuidora Axion), en Guadalajara, Jalisco, o en cualquier otro lugar que se me(nos) requiera, el día <span class="ln w"></span>, la cantidad de:</p><p style="margin:4px 0">$ <span class="ln"></span> &nbsp;(<span class="ln w"></span><span class="ln w"></span> pesos <span class="ln s"></span>/100 M.N.)</p><p>Valor recibido en mercancía a mi(nuestra) entera satisfacción.</p>
+    <p>Este pagaré forma parte de una línea de crédito revolvente y garantiza el saldo insoluto de las facturas que se emitan al amparo de la misma. En caso de no pagarse a su vencimiento, causará <b>intereses moratorios a razón del 3% (tres por ciento) mensual</b> sobre el saldo vencido, desde la fecha de su vencimiento hasta su total liquidación, sin que ello implique prórroga del plazo. Para todo lo relativo a la interpretación y cumplimiento de este documento, el suscriptor y el aval se someten a la jurisdicción de los tribunales competentes de Guadalajara, Jalisco, renunciando al fuero de su domicilio presente o futuro.</p>
+    <div class="g c2" style="margin-top:10px">
+      <div><b>Suscriptor (deudor)</b><br>Nombre: <span class="ln w"></span><br>RFC: <span class="ln"></span><br>Domicilio: <span class="ln w"></span><br><span class="ln w"></span><br><br><br><div class="firma">Firma</div></div>
+      <div><b>Aval / obligado solidario</b><br>Nombre: <span class="ln w"></span><br>RFC: <span class="ln"></span><br>Domicilio: <span class="ln w"></span><br><span class="ln w"></span><br><br><br><div class="firma">Firma</div></div>
+    </div>
+  </div>
+  <p class="note" style="margin-top:8px">Llenar con tinta, sin tachaduras. El monto del pagaré debe ser igual o mayor al límite de crédito autorizado. Axion conserva el original y entrega copia sellada al suscriptor. Al cancelar la línea y liquidar el saldo, el pagaré se devuelve cancelado.</p>
+  <div class="foot"><span>Distribuidora Axion · Av. Fidel Velázquez 788, Santa Elena Estadio, Guadalajara, Jal. · compras@axiontools.mx · axiontools.mx</span><span>Página 3 de 3</span></div>
+</div>
+</body></html>
+`; }
+
+function descargarSolicitud(){
+  const s = Object.assign({}, D.solicitud||{}, leer());
+  const v = Object.assign({}, s, {folio: D.folio, fecha: fechaMX(new Date()), vendedor: '', aut_limite:'', aut_plazo:'', aut_por:''});
+  let html = solCreditoHtml(v);
+  // solo las 2 páginas de la solicitud: el pagaré lo prepara Axion con el monto autorizado
+  const doc = new DOMParser().parseFromString(html, 'text/html'); const pgs = doc.querySelectorAll('.pg'); if(pgs.length > 2) pgs[pgs.length-1].remove();
+  const aviso = doc.createElement('div'); aviso.setAttribute('style','position:fixed;top:0;left:0;right:0;background:#E8790F;color:#fff;font:14px system-ui;padding:10px 14px;text-align:center;z-index:9');
+  aviso.className = 'noprint'; aviso.innerHTML = 'Imprime esta solicitud o guárdala como PDF (Ctrl+P / Compartir → Imprimir), fírmala y súbela en el portal. &nbsp; <button onclick="window.print()" style="font:inherit;font-weight:700;padding:6px 12px;border-radius:6px;border:0;background:#fff;color:#E8790F;cursor:pointer">🖨️ Imprimir / Guardar PDF</button>';
+  const st = doc.createElement('style'); st.textContent = '@media print{.noprint{display:none!important}} @media screen{body{padding-top:48px}}';
+  doc.head.appendChild(st); doc.body.insertBefore(aviso, doc.body.firstChild);
+  html = '<!doctype html>' + doc.documentElement.outerHTML;
+  let w = null; try{ w = window.open('', '_blank'); }catch(e){}
+  if(w){ w.document.open(); w.document.write(html); w.document.close(); setTimeout(()=>{ try{ w.focus(); w.print(); }catch(e){} }, 900); }
+  else { // ventana bloqueada: se abre en esta misma pestaña (con botón para regresar)
+    const blob = new Blob([html.replace('</body>', '<div class="noprint" style="position:fixed;bottom:12px;left:12px"><button onclick="history.back()" style="font:14px system-ui;padding:8px 12px;border-radius:6px;border:1px solid #ccc;background:#fff">← Regresar al portal</button></div></body>')], {type:'text/html'});
+    location.href = URL.createObjectURL(blob);
+  }
+  sb.rpc('portal_solicitud_guardar', {p_token: token, p_solicitud: leer(), p_docs: {}, p_enviar: false}).then(()=>{ dirty=false; });
 }
 cargar();
 </script>
