@@ -4178,65 +4178,95 @@ async function svDatos(ini, fin){
   const pedidos = (pr.data||[]).filter(p=>{ const f = pedFechaYmd(p); return f>=yi && f<yf; });
   return {ventas, util, costo, pedidos};
 }
-function svResumenDia(datos, d){
-  const d2 = new Date(d); d2.setDate(d2.getDate()+1);
-  const vs = datos.ventas.filter(v=>{ const f=new Date(v.fecha); return f>=d && f<d2; });
+function svResumenRango(datos, d1, d2){
+  const vs = datos.ventas.filter(v=>{ const f=new Date(v.fecha); return f>=d1 && f<d2; });
   return { n: vs.length, total: vs.reduce((s,v)=>s+ +v.total,0), util: vs.reduce((s,v)=>s+ (datos.util[v.id]||0),0), costo: vs.reduce((s,v)=>s+ (datos.costo[v.id]||0),0) };
 }
-function svMover(dias){ const l = window._svLunes || lunesDe(new Date()); l.setDate(l.getDate()+dias); window._svLunes = lunesDe(l); pintarSemanaVsSemana(); }
+function svResumenDia(datos, d){ const d2 = new Date(d); d2.setDate(d2.getDate()+1); return svResumenRango(datos, d, d2); }
+// v193: semana / mes / año
+function svIni(modo, d){ const x = new Date(d); x.setHours(0,0,0,0); if(modo==='mes'){ x.setDate(1); return x; } if(modo==='anio'){ x.setMonth(0,1); return x; } return lunesDe(x); }
+function svSumar(modo, d, n){ const x = new Date(d);
+  if(modo==='mes'){ const dia = x.getDate(); x.setDate(1); x.setMonth(x.getMonth()+n); x.setDate(Math.min(dia, new Date(x.getFullYear(), x.getMonth()+1, 0).getDate())); }
+  else if(modo==='anio'){ const m = x.getMonth(), dia = x.getDate(); x.setDate(1); x.setFullYear(x.getFullYear()+n); x.setMonth(m, Math.min(dia, new Date(x.getFullYear(), m+1, 0).getDate())); }
+  else x.setDate(x.getDate()+7*n);
+  return x; }
+function svEtiqueta(modo, ini){ if(modo==='anio') return String(ini.getFullYear()); if(modo==='mes'){ const t = ini.toLocaleDateString('es-MX',{month:'long',year:'numeric'}); return t.charAt(0).toUpperCase()+t.slice(1); } return 'Semana del '+fechaCorta(ini); }
+function svMover(n){ const modo = window._svModo||'semana'; window._svIni = svSumar(modo, svIni(modo, window._svIni||new Date()), n); pintarSemanaVsSemana(); }
+function svModo(m){ window._svModo = m; window._svIni = null; window._svVs = 1; pintarSemanaVsSemana(); }
 async function pintarSemanaVsSemana(){
   const el = $('res-semana'); if(!el) return;
   const hoy = new Date(); hoy.setHours(0,0,0,0);
-  const lunA = window._svLunes ? lunesDe(window._svLunes) : lunesDe(hoy); window._svLunes = lunA;
-  const vsSem = +(window._svVs||1);
-  const lunB = new Date(lunA); lunB.setDate(lunB.getDate()-7*vsSem);
-  const finA = new Date(lunA); finA.setDate(finA.getDate()+7); const finB = new Date(lunB); finB.setDate(finB.getDate()+7);
-  el.innerHTML = '<div class="card" style="margin-bottom:12px"><span class="small muted">📅 Calculando semana vs semana…</span></div>';
-  let A, B; try{ [A, B] = await Promise.all([svDatos(lunA, finA), svDatos(lunB, finB)]); }catch(e){ el.innerHTML = '<div class="card" style="margin-bottom:12px">No pude calcular la comparación: '+esc(errMsg(e))+'</div>'; return; }
+  const modo = window._svModo||'semana';
+  const iniA = svIni(modo, window._svIni||hoy); window._svIni = iniA;
+  const vs = +(window._svVs||1);
+  const iniB = svSumar(modo, iniA, -vs);
+  const finA = svSumar(modo, iniA, 1), finB = svSumar(modo, iniB, 1);
+  const lunA = iniA, lunB = iniB;
+  el.innerHTML = '<div class="card" style="margin-bottom:12px"><span class="small muted">📅 Calculando la comparación'+(modo==='anio'?' del año (puede tardar unos segundos)':'')+'…</span></div>';
+  let A, B; try{ [A, B] = await Promise.all([svDatos(iniA, finA), svDatos(iniB, finB)]); }catch(e){ el.innerHTML = '<div class="card" style="margin-bottom:12px">No pude calcular la comparación: '+esc(errMsg(e))+'</div>'; return; }
   const fin = esFinanzas();
-  const DIAS = ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'];
-  const filas = DIAS.map((nom,i)=>{ const dA = new Date(lunA); dA.setDate(dA.getDate()+i); const dB = new Date(lunB); dB.setDate(dB.getDate()+i);
-    return {nom, dA, dB, a: svResumenDia(A, dA), b: svResumenDia(B, dB), futuroA: dA > hoy, futuroB: dB > hoy}; });
-  window._svFilas = filas; window._svRangos = {lunA, finA, lunB, finB, A, B};
-  const TA = { n: filas.reduce((s,x)=>s+x.a.n,0), total: filas.reduce((s,x)=>s+x.a.total,0), util: filas.reduce((s,x)=>s+x.a.util,0), costo: filas.reduce((s,x)=>s+x.a.costo,0) };
-  // para comparar parejo: la semana anterior solo hasta el mismo día de la semana que hoy (si la semana A está en curso)
-  const enCurso = finA > hoy; const diasConDatos = enCurso ? Math.min(7, Math.round((hoy - lunA)/864e5) + 1) : 7;
-  const TBp = filas.slice(0, diasConDatos).reduce((s,x)=>({n:s.n+x.b.n, total:s.total+x.b.total, util:s.util+x.b.util, costo:s.costo+x.b.costo}), {n:0,total:0,util:0,costo:0});
-  const TB = filas.reduce((s,x)=>({n:s.n+x.b.n, total:s.total+x.b.total, util:s.util+x.b.util, costo:s.costo+x.b.costo}), {n:0,total:0,util:0,costo:0});
+  const cero = {n:0,total:0,util:0,costo:0};
+  let filas = [];
+  if(modo==='semana'){
+    filas = ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'].map((nom,i)=>{ const dA = new Date(iniA); dA.setDate(dA.getDate()+i); const dB = new Date(iniB); dB.setDate(dB.getDate()+i);
+      return {nom, dA, dB, etA: fechaCorta(dA), etB: fechaCorta(dB), a: svResumenDia(A, dA), b: svResumenDia(B, dB), futuroA: dA > hoy, futuroB: dB > hoy}; });
+  } else if(modo==='mes'){
+    const nd = Math.max(new Date(iniA.getFullYear(), iniA.getMonth()+1, 0).getDate(), new Date(iniB.getFullYear(), iniB.getMonth()+1, 0).getDate());
+    for(let i=0;i<nd;i++){ const dA = new Date(iniA); dA.setDate(dA.getDate()+i); const dB = new Date(iniB); dB.setDate(dB.getDate()+i);
+      const okA = dA < finA, okB = dB < finB;
+      filas.push({nom: 'Día '+(i+1), dA, dB, etA: okA?dA.toLocaleDateString('es-MX',{weekday:'short'}):'', etB: okB?dB.toLocaleDateString('es-MX',{weekday:'short'}):'', a: okA?svResumenDia(A, dA):cero, b: okB?svResumenDia(B, dB):cero, futuroA: !okA || dA > hoy, futuroB: !okB || dB > hoy}); }
+  } else {
+    for(let m=0;m<12;m++){ const dA = new Date(iniA.getFullYear(), m, 1), dA2 = new Date(iniA.getFullYear(), m+1, 1), dB = new Date(iniB.getFullYear(), m, 1), dB2 = new Date(iniB.getFullYear(), m+1, 1);
+      const nom = dA.toLocaleDateString('es-MX',{month:'long'});
+      filas.push({nom: nom.charAt(0).toUpperCase()+nom.slice(1), dA, dB, etA: String(dA.getFullYear()), etB: String(dB.getFullYear()), a: svResumenRango(A, dA, dA2), b: svResumenRango(B, dB, dB2), futuroA: dA > hoy, futuroB: dB > hoy}); }
+  }
+  window._svFilas = filas; window._svRangos = {lunA, finA, lunB, finB, A, B, modo};
+  const suma = arr => arr.reduce((s,x)=>({n:s.n+x.n, total:s.total+x.total, util:s.util+x.util, costo:s.costo+x.costo}), {...cero});
+  const TA = suma(filas.map(f=>f.a)), TB = suma(filas.map(f=>f.b));
+  const enCurso = finA > hoy; const corteA = new Date(hoy); corteA.setDate(corteA.getDate()+1);
+  const corteB = enCurso ? new Date(Math.min(+svSumar(modo, corteA, -vs), +finB)) : finB;
+  const TBp = enCurso ? svResumenRango(B, iniB, corteB) : TB;
   const dif = (a,b) => b>0 ? Math.round((a-b)/b*100) : (a>0?100:0);
   const pct = (a,b) => { const p = dif(a,b); return `<span style="font-weight:700;color:${p>0?'#15803d':(p<0?'#b91c1c':'inherit')}">${p>0?'+':''}${p}%</span>`; };
-  const nomB = vsSem===1 ? 'Semana anterior' : `Hace ${vsSem} semanas`;
+  const nomA = svEtiqueta(modo, iniA), nomB = svEtiqueta(modo, iniB);
   const rango = (l,f) => fechaCorta(l)+' – '+fechaCorta(new Date(f-864e5));
   const pedTot = P => P.pedidos.reduce((s,p)=>s+ +p.total,0);
   const porProv = P => { const m={}; P.pedidos.forEach(p=>{ const k=(p.proveedores&&p.proveedores.nombre)||'—'; if(!m[k]) m[k]={n:0,t:0}; m[k].n++; m[k].t+= +p.total; }); return Object.entries(m).sort((x,y)=>y[1].t-x[1].t); };
+  const sel = 'padding:6px;border:1px solid var(--linea);border-radius:8px';
+  const opcVs = modo==='semana' ? [[1,'la semana anterior'],[2,'hace 2 semanas'],[4,'hace 4 semanas']] : (modo==='mes' ? [[1,'el mes anterior'],[12,'el mismo mes del año pasado']] : [[1,'el año anterior']]);
+  const selector = modo==='semana' ? `<input type="date" value="${ymdLocal(iniA)}" onchange="window._svIni = new Date(this.value+'T12:00:00'); pintarSemanaVsSemana()" style="${sel}">`
+    : modo==='mes' ? `<input type="month" value="${ymdLocal(iniA).slice(0,7)}" onchange="window._svIni = new Date(this.value+'-01T12:00:00'); pintarSemanaVsSemana()" style="${sel}">`
+    : `<input type="number" min="2025" max="${hoy.getFullYear()}" value="${iniA.getFullYear()}" onchange="window._svIni = new Date(+this.value, 0, 1); pintarSemanaVsSemana()" style="${sel};width:90px">`;
+  const quien = {semana:'semana', mes:'mes', anio:'año'}[modo];
   el.innerHTML = `<div class="card" style="margin-bottom:12px">
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
-      <b>📅 Semana vs semana</b>
-      <button class="btn sm sec" onclick="svMover(-7)" title="Semana anterior">◀</button>
-      <input type="date" value="${ymdLocal(lunA)}" onchange="window._svLunes = lunesDe(new Date(this.value+'T12:00:00')); pintarSemanaVsSemana()" style="padding:6px;border:1px solid var(--linea);border-radius:8px">
-      <button class="btn sm sec" onclick="svMover(7)" title="Semana siguiente" ${finA>hoy?'disabled':''}>▶</button>
-      <span class="small muted">semana del <b>${rango(lunA, finA)}</b>${enCurso?' (en curso)':''}</span>
+      <b>📅 Comparar</b>
+      <select onchange="svModo(this.value)" style="${sel};font-weight:700">${[['semana','Semana vs semana'],['mes','Mes vs mes'],['anio','Año vs año']].map(([v,n])=>`<option value="${v}" ${modo===v?'selected':''}>${n}</option>`).join('')}</select>
+      <button class="btn sm sec" onclick="svMover(-1)" title="${quien} anterior">◀</button>
+      ${selector}
+      <button class="btn sm sec" onclick="svMover(1)" title="${quien} siguiente" ${finA>hoy?'disabled':''}>▶</button>
+      <span class="small muted"><b>${esc(nomA)}</b> (${rango(iniA, finA)})${enCurso?' · en curso':''}</span>
       <span class="small">contra</span>
-      <select onchange="window._svVs=+this.value; pintarSemanaVsSemana()" style="padding:6px;border:1px solid var(--linea);border-radius:8px">${[1,2,4].map(n=>`<option value="${n}" ${vsSem===n?'selected':''}>${n===1?'la semana anterior':'hace '+n+' semanas'}</option>`).join('')}</select>
-      <span class="small muted">(${rango(lunB, finB)})</span>
+      <select onchange="window._svVs=+this.value; pintarSemanaVsSemana()" style="${sel}">${opcVs.map(([n,t])=>`<option value="${n}" ${vs===n?'selected':''}>${t}</option>`).join('')}</select>
+      <span class="small muted">(${esc(nomB)})</span>
       <button class="btn sm sec" style="margin-left:auto" onclick="exportarSemanaExcel()">📥 Excel</button>
     </div>
     <div class="kpis" style="margin-bottom:8px">
-      <div class="kpi"><div class="l">Ventas ${enCurso?(diasConDatos===1?'(solo el lunes)':'(mismos '+diasConDatos+' días)'):'de la semana'}</div><div class="v">${fmt(TA.total)}</div><div class="s">${nomB.toLowerCase()}: ${fmt(TBp.total)} · ${pct(TA.total, TBp.total)}</div></div>
-      <div class="kpi"><div class="l">Tickets</div><div class="v">${TA.n}</div><div class="s">${nomB.toLowerCase()}: ${TBp.n} · ${pct(TA.n, TBp.n)}</div></div>
-      <div class="kpi"><div class="l">Ticket promedio</div><div class="v">${fmt(TA.n?TA.total/TA.n:0)}</div><div class="s">${nomB.toLowerCase()}: ${fmt(TBp.n?TBp.total/TBp.n:0)}</div></div>
-      ${fin?`<div class="kpi"><div class="l">Utilidad (sin IVA)</div><div class="v" style="color:${TA.util>=0?'#15803d':'#b91c1c'}">${fmt(TA.util)}</div><div class="s">${nomB.toLowerCase()}: ${fmt(TBp.util)} · ${pct(TA.util, TBp.util)} · margen ${TA.total>0?Math.round(TA.util/(TA.total/1.16)*100):0}%</div></div>`:''}
+      <div class="kpi"><div class="l">Ventas ${enCurso?'(hasta hoy)':'del '+quien}</div><div class="v">${fmt(TA.total)}</div><div class="s">${esc(nomB)}: ${fmt(TBp.total)} · ${pct(TA.total, TBp.total)}</div></div>
+      <div class="kpi"><div class="l">Tickets</div><div class="v">${TA.n}</div><div class="s">${esc(nomB)}: ${TBp.n} · ${pct(TA.n, TBp.n)}</div></div>
+      <div class="kpi"><div class="l">Ticket promedio</div><div class="v">${fmt(TA.n?TA.total/TA.n:0)}</div><div class="s">${esc(nomB)}: ${fmt(TBp.n?TBp.total/TBp.n:0)}</div></div>
+      ${fin?`<div class="kpi"><div class="l">Utilidad (sin IVA)</div><div class="v" style="color:${TA.util>=0?'#15803d':'#b91c1c'}">${fmt(TA.util)}</div><div class="s">${esc(nomB)}: ${fmt(TBp.util)} · ${pct(TA.util, TBp.util)} · margen ${TA.total>0?Math.round(TA.util/(TA.total/1.16)*100):0}%</div></div>`:''}
     </div>
-    <div class="tbl-scroll"><table>
-      <thead><tr><th>Día</th><th>${esc(nomB)}</th><th class="num">Ventas</th><th class="num">Tickets</th>${fin?'<th class="num">Utilidad</th>':''}<th>Esta semana</th><th class="num">Ventas</th><th class="num">Tickets</th>${fin?'<th class="num">Utilidad</th>':''}<th class="num">Diferencia</th><th class="num">%</th></tr></thead>
+    <div class="tbl-scroll" style="${modo==='mes'?'max-height:520px;overflow:auto':''}"><table>
+      <thead><tr><th>${modo==='anio'?'Mes':'Día'}</th><th>${esc(nomB)}</th><th class="num">Ventas</th><th class="num">Tickets</th>${fin?'<th class="num">Utilidad</th>':''}<th>${esc(nomA)}</th><th class="num">Ventas</th><th class="num">Tickets</th>${fin?'<th class="num">Utilidad</th>':''}<th class="num">Diferencia</th><th class="num">%</th></tr></thead>
       <tbody>${filas.map(f=>{ const d = f.a.total - f.b.total; const fut = f.futuroA;
         return `<tr style="${fut?'opacity:.5':''}"><td><b>${f.nom}</b></td>
-          <td class="small">${fechaCorta(f.dB)}</td><td class="num">${f.futuroB?'—':fmt(f.b.total)}</td><td class="num">${f.futuroB?'—':f.b.n}</td>${fin?`<td class="num">${f.futuroB?'—':fmt(f.b.util)}</td>`:''}
-          <td class="small">${fechaCorta(f.dA)}</td><td class="num"><b>${fut?'—':fmt(f.a.total)}</b></td><td class="num">${fut?'—':f.a.n}</td>${fin?`<td class="num">${fut?'—':fmt(f.a.util)}</td>`:''}
+          <td class="small">${f.etB}</td><td class="num">${f.futuroB?'—':fmt(f.b.total)}</td><td class="num">${f.futuroB?'—':f.b.n}</td>${fin?`<td class="num">${f.futuroB?'—':fmt(f.b.util)}</td>`:''}
+          <td class="small">${f.etA}</td><td class="num"><b>${fut?'—':fmt(f.a.total)}</b></td><td class="num">${fut?'—':f.a.n}</td>${fin?`<td class="num">${fut?'—':fmt(f.a.util)}</td>`:''}
           <td class="num" style="color:${d>0?'#15803d':(d<0?'#b91c1c':'inherit')}">${fut?'—':(d>0?'+':'')+fmt(d)}</td><td class="num">${fut?'—':pct(f.a.total, f.b.total)}</td></tr>`; }).join('')}
         <tr style="font-weight:700;background:#f8fafc"><td>Total</td><td></td><td class="num">${fmt(TB.total)}</td><td class="num">${TB.n}</td>${fin?`<td class="num">${fmt(TB.util)}</td>`:''}<td></td><td class="num">${fmt(TA.total)}</td><td class="num">${TA.n}</td>${fin?`<td class="num">${fmt(TA.util)}</td>`:''}<td class="num">${(TA.total-TB.total>0?'+':'')+fmt(TA.total-TB.total)}</td><td class="num">${pct(TA.total, TB.total)}</td></tr>
       </tbody></table></div>
-    ${enCurso?`<p class="small muted" style="margin:6px 0 0">Los KPIs de arriba comparan <b>${diasConDatos===1?'solo el lunes':'los mismos '+diasConDatos+' días (lunes a '+DIAS[diasConDatos-1].toLowerCase()+')'}</b> de las dos semanas, para que sea parejo; la fila Total de la tabla trae la semana anterior completa.</p>`:''}
+    ${enCurso?`<p class="small muted" style="margin:6px 0 0">Los KPIs de arriba comparan <b>hasta la misma fecha</b> (${esc(nomB)} hasta el ${fechaCorta(new Date(corteB-864e5))}), para que sea parejo; la fila Total de la tabla trae ${esc(nomB)} completo.</p>`:''}
     <details style="margin-top:10px" open><summary style="cursor:pointer;font-weight:700">🚚 ¿Compramos más de lo que vendemos? (ventas vs pedidos, mismo periodo)</summary>
       ${(()=>{ const bloque = (P, T, titulo, cls) => { const ped = pedTot(P), cv = T.costo*1.16, dif = ped - cv, ratio = T.total>0 ? Math.round(ped/T.total*100) : null;
           const frase = !fin ? '' : (P.pedidos.length===0 ? `No se hizo ningún pedido; se vendió mercancía que ya estaba en el anaquel (${fmt(cv)} a costo): el inventario <b style="color:#15803d">bajó ${fmt(-dif)}</b>.`
@@ -4246,13 +4276,13 @@ async function pintarSemanaVsSemana(){
             <table style="margin-top:6px;width:100%"><colgroup><col style="width:58%"><col></colgroup><tbody>
               <tr><td>Vendimos <span class="small muted">(a precio de venta, con IVA)</span></td><td class="num"><b>${fmt(T.total)}</b> <span class="small muted">${T.n} tickets</span></td></tr>
               ${fin?`<tr><td>Nos costó esa mercancía <span class="small muted">(a costo, con IVA)</span></td><td class="num">${fmt(cv)} <span class="small muted">${T.total>0?Math.round(cv/T.total*100)+'% de la venta':''}</span></td></tr>`:''}
-              <tr><td>Compramos a proveedores <span class="small muted">(pedidos de la semana, con IVA)</span></td><td class="num">${fin?'<b>'+fmt(ped)+'</b>':''} <span class="small muted">${P.pedidos.length} pedido(s)</span>${porProv(P).length?`<div class="small muted" style="white-space:normal">${porProv(P).map(([k,g])=>esc(k)+': '+g.n+(fin?' · '+fmt(g.t):'')).join('<br>')}</div>`:''}</td></tr>
+              <tr><td>Compramos a proveedores <span class="small muted">(pedidos del periodo, con IVA)</span></td><td class="num">${fin?'<b>'+fmt(ped)+'</b>':''} <span class="small muted">${P.pedidos.length} pedido(s)</span>${porProv(P).length?`<div class="small muted" style="white-space:normal">${porProv(P).map(([k,g])=>esc(k)+': '+g.n+(fin?' · '+fmt(g.t):'')).join('<br>')}</div>`:''}</td></tr>
               ${fin?`<tr style="font-weight:700"><td>Inventario: entró − salió</td><td class="num" style="color:${dif>0?'#b45309':'#15803d'}">${dif>0?'+':''}${fmt(dif)} ${dif>0?'⬆️ creció':'⬇️ bajó'}</td></tr>
               <tr><td>Por cada $100 vendidos, compramos</td><td class="num">${ratio===null?'—':'<b>$'+ratio+'</b>'} <span class="small muted">(reponer justo lo vendido ≈ $${T.total>0?Math.round(cv/T.total*100):70})</span></td></tr>`:''}
             </tbody></table>
             ${frase?`<p class="small" style="margin:8px 0 0">${frase}</p>`:''}</div>`; };
-        return `<div class="grid2" style="margin-top:6px">${bloque(B, TB, esc(nomB)+' · '+rango(lunB, finB), '')}${bloque(A, TA, 'Esta semana · '+rango(lunA, finA)+(enCurso?' (en curso)':''), 'border:2px solid var(--rojo)')}</div>`; })()}
-      <p class="small muted" style="margin:6px 0 0">Regla de bolsillo: si semana tras semana compras arriba de lo que te cuesta lo que vendes, el dinero se va quedando en mercancía. Pedidos por la fecha en que se hicieron (sin cancelados). Lista y Excel: <a href="#" onclick="window._pedPer={tipo:'rango', desde:'${ymdLocal(lunA)}', hasta:'${ymdLocal(new Date(finA-864e5))}'}; irA('pedidos'); return false">Pedidos a proveedor → periodo</a>.</p>
+        return `<div class="grid2" style="margin-top:6px">${bloque(B, TB, esc(nomB)+' · '+rango(lunB, finB), '')}${bloque(A, TA, esc(nomA)+' · '+rango(lunA, finA)+(enCurso?' (en curso)':''), 'border:2px solid var(--rojo)')}</div>`; })()}
+      <p class="small muted" style="margin:6px 0 0">Regla de bolsillo: si periodo tras periodo compras arriba de lo que te cuesta lo que vendes, el dinero se va quedando en mercancía. Pedidos por la fecha en que se hicieron (sin cancelados). Lista y Excel: <a href="#" onclick="window._pedPer={tipo:'rango', desde:'${ymdLocal(lunA)}', hasta:'${ymdLocal(new Date(finA-864e5))}'}; irA('pedidos'); return false">Pedidos a proveedor → periodo</a>.</p>
     </details>
   </div>`;
 }
@@ -4260,17 +4290,17 @@ async function exportarSemanaExcel(){
   if(!(await asegurarXLSX())) return;
   const F = window._svFilas||[], R = window._svRangos; if(!F.length||!R){ toast('Primero calcula la comparación', true); return; }
   const fin = esFinanzas();
-  const h1 = F.map(f=>{ const o = {'Día':f.nom, 'Fecha anterior':ymdLocal(f.dB), 'Ventas anterior':Math.round(f.b.total*100)/100, 'Tickets anterior':f.b.n};
+  const h1 = F.map(f=>{ const o = {'Día / mes':f.nom, 'Fecha anterior':ymdLocal(f.dB), 'Ventas anterior':Math.round(f.b.total*100)/100, 'Tickets anterior':f.b.n};
     if(fin) o['Utilidad anterior'] = Math.round(f.b.util*100)/100;
-    o['Fecha semana'] = ymdLocal(f.dA); o['Ventas semana'] = f.futuroA?null:Math.round(f.a.total*100)/100; o['Tickets semana'] = f.futuroA?null:f.a.n;
-    if(fin) o['Utilidad semana'] = f.futuroA?null:Math.round(f.a.util*100)/100;
+    o['Fecha actual'] = ymdLocal(f.dA); o['Ventas actual'] = f.futuroA?null:Math.round(f.a.total*100)/100; o['Tickets actual'] = f.futuroA?null:f.a.n;
+    if(fin) o['Utilidad actual'] = f.futuroA?null:Math.round(f.a.util*100)/100;
     o['Diferencia'] = f.futuroA?null:Math.round((f.a.total-f.b.total)*100)/100; o['Diferencia %'] = f.futuroA?null:(f.b.total>0?Math.round((f.a.total-f.b.total)/f.b.total*100):null); return o; });
-  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(h1), 'Semana vs semana');
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(h1), 'Comparación');
   const ped = P => P.pedidos.map(p=>({ 'Folio':p.folio_externo||('#'+p.id), 'Proveedor':(p.proveedores&&p.proveedores.nombre)||'', 'Fecha':pedFechaYmd(p), 'Estado':p.estado, 'Total':fin?+p.total:undefined }));
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([...ped(R.A).map(x=>Object.assign({'Semana':'esta'},x)), ...ped(R.B).map(x=>Object.assign({'Semana':'anterior'},x))]), 'Pedidos');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([...ped(R.A).map(x=>Object.assign({'Periodo':'actual'},x)), ...ped(R.B).map(x=>Object.assign({'Periodo':'anterior'},x))]), 'Pedidos');
   const vt = P => P.ventas.map(v=>{ const o = {'Fecha':new Date(v.fecha).toLocaleString('es-MX'), 'Total':+v.total, 'Descuento':+(v.descuento||0)}; if(fin){ o['Utilidad sin IVA']=Math.round((P.util[v.id]||0)*100)/100; o['Costo sin IVA']=Math.round((P.costo[v.id]||0)*100)/100; } return o; });
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([...vt(R.A).map(x=>Object.assign({'Semana':'esta'},x)), ...vt(R.B).map(x=>Object.assign({'Semana':'anterior'},x))]), 'Ventas');
-  XLSX.writeFile(wb, 'Semana_'+ymdLocal(R.lunA)+'_vs_'+ymdLocal(R.lunB)+'.xlsx');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([...vt(R.A).map(x=>Object.assign({'Periodo':'actual'},x)), ...vt(R.B).map(x=>Object.assign({'Periodo':'anterior'},x))]), 'Ventas');
+  XLSX.writeFile(wb, 'Comparacion_'+(R.modo||'semana')+'_'+ymdLocal(R.lunA)+'_vs_'+ymdLocal(R.lunB)+'.xlsx');
   logEv('descarga', 'Excel semana vs semana '+ymdLocal(R.lunA)); toast('Excel descargado ✓');
 }
 
