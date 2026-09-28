@@ -869,6 +869,7 @@ async function vResumen(){
   const promDia = ventasMes.data.length ? totMes/diasMes : 0;
 
   setTimeout(()=>{ if(esFinanzas()) pintarVentasRevisar(); }, 0); // v181
+  setTimeout(()=>{ pintarSemanaVsSemana(); }, 0); // v191
   $('v-resumen').innerHTML = alertaCxp + '<div id="res-revisar"></div>' + `
     <div class="card" style="padding:10px;margin-bottom:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
       <b>📅 Mes:</b>
@@ -891,6 +892,7 @@ async function vResumen(){
       <div class="kpi" style="cursor:pointer" title="Ir a Finanzas" onclick="irA('finanzas')"><div class="l">Por pagar</div><div class="v">${fmt(porPagar)}</div>
         <div class="s">${prox ? 'próximo: '+fecha(prox.fecha_vencimiento) : 'sin pendientes'}</div></div>
     </div>
+    <div id="res-semana"></div>
     <div class="grid2">
       <div class="card"><h3>${esTodo?'Ventas mes por mes · histórico completo':'Ventas día por día · '+esc(nombreMes)}</h3><canvas id="ch-ventas" height="190"></canvas></div>
       <div class="card"><h3>Cuentas por pagar próximas</h3>
@@ -4147,6 +4149,179 @@ async function guardarCliente(id){
 /* ============================================================
    VISTA: PEDIDOS A PROVEEDOR
 ============================================================ */
+// ===== v191: SEMANA vs SEMANA (lunes contra lunes) y VENTAS vs PEDIDOS del mismo periodo — Resumen =====
+function lunesDe(d){ const x = new Date(d); x.setHours(0,0,0,0); const dow = (x.getDay()+6)%7; x.setDate(x.getDate()-dow); return x; }
+function ymdLocal(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function fechaCorta(d){ return d.toLocaleDateString('es-MX',{day:'2-digit',month:'short'}); }
+async function asegurarXLSX(){
+  if(window.XLSX) return true;
+  try{ await new Promise((res,rej)=>{ const s=document.createElement('scr'+'ipt'); s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'; s.onload=res; s.onerror=()=>rej(new Error('sin internet')); document.head.appendChild(s); }); return true; }
+  catch(e){ toast('No pude cargar el generador de Excel (revisa el internet)', true); return false; }
+}
+// fecha de un pedido como YYYY-MM-DD local (sirva date o timestamp)
+function pedFechaYmd(p){ const f = String(p.fecha||''); return f.includes('T') ? ymdLocal(new Date(f)) : f.slice(0,10); }
+// ventas de [ini, fin) sin canceladas ni CONSUMO PROPIO; con utilidad y costo por venta si es finanzas
+async function svDatos(ini, fin){
+  const vs = await traerTodo(()=>sb.from('ventas').select('id,fecha,total,descuento,cancelada,notas').gte('fecha', ini.toISOString()).lt('fecha', fin.toISOString()).eq('cancelada', false).order('id'));
+  const ventas = (vs||[]).filter(v=>!/CONSUMO PROPIO/i.test(v.notas||''));
+  const util = {}, costo = {};
+  if(esFinanzas() && ventas.length){
+    const ids = ventas.map(v=>v.id); let its = [];
+    for(let i=0;i<ids.length;i+=200){ const r = await traerTodo(()=>sb.from('venta_items').select('venta_id,cantidad,precio_unit,costo_unit').in('venta_id', ids.slice(i,i+200)).order('id')); its = its.concat(r||[]); }
+    its.forEach(i=>{ util[i.venta_id] = (util[i.venta_id]||0) + (+i.precio_unit/1.16 - +(i.costo_unit||0)) * +i.cantidad; costo[i.venta_id] = (costo[i.venta_id]||0) + +(i.costo_unit||0) * +i.cantidad; });
+    ventas.forEach(v=>{ util[v.id] = (util[v.id]||0) - (+(v.descuento||0))/1.16; });
+  }
+  // pedidos a proveedor con fecha en el rango (sin cancelados)
+  const ini1 = new Date(ini); ini1.setDate(ini1.getDate()-1); const fin1 = new Date(fin); fin1.setDate(fin1.getDate()+1);
+  const pr = await sb.from('pedidos_compra').select('id,fecha,estado,total,subtotal,folio_externo,proveedores(nombre)').gte('fecha', ymdLocal(ini1)).lte('fecha', ymdLocal(fin1)).neq('estado','cancelado').order('fecha');
+  const yi = ymdLocal(ini), yf = ymdLocal(fin);
+  const pedidos = (pr.data||[]).filter(p=>{ const f = pedFechaYmd(p); return f>=yi && f<yf; });
+  return {ventas, util, costo, pedidos};
+}
+function svResumenDia(datos, d){
+  const d2 = new Date(d); d2.setDate(d2.getDate()+1);
+  const vs = datos.ventas.filter(v=>{ const f=new Date(v.fecha); return f>=d && f<d2; });
+  return { n: vs.length, total: vs.reduce((s,v)=>s+ +v.total,0), util: vs.reduce((s,v)=>s+ (datos.util[v.id]||0),0), costo: vs.reduce((s,v)=>s+ (datos.costo[v.id]||0),0) };
+}
+function svMover(dias){ const l = window._svLunes || lunesDe(new Date()); l.setDate(l.getDate()+dias); window._svLunes = lunesDe(l); pintarSemanaVsSemana(); }
+async function pintarSemanaVsSemana(){
+  const el = $('res-semana'); if(!el) return;
+  const hoy = new Date(); hoy.setHours(0,0,0,0);
+  const lunA = window._svLunes ? lunesDe(window._svLunes) : lunesDe(hoy); window._svLunes = lunA;
+  const vsSem = +(window._svVs||1);
+  const lunB = new Date(lunA); lunB.setDate(lunB.getDate()-7*vsSem);
+  const finA = new Date(lunA); finA.setDate(finA.getDate()+7); const finB = new Date(lunB); finB.setDate(finB.getDate()+7);
+  el.innerHTML = '<div class="card" style="margin-bottom:12px"><span class="small muted">📅 Calculando semana vs semana…</span></div>';
+  let A, B; try{ [A, B] = await Promise.all([svDatos(lunA, finA), svDatos(lunB, finB)]); }catch(e){ el.innerHTML = '<div class="card" style="margin-bottom:12px">No pude calcular la comparación: '+esc(errMsg(e))+'</div>'; return; }
+  const fin = esFinanzas();
+  const DIAS = ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'];
+  const filas = DIAS.map((nom,i)=>{ const dA = new Date(lunA); dA.setDate(dA.getDate()+i); const dB = new Date(lunB); dB.setDate(dB.getDate()+i);
+    return {nom, dA, dB, a: svResumenDia(A, dA), b: svResumenDia(B, dB), futuroA: dA > hoy, futuroB: dB > hoy}; });
+  window._svFilas = filas; window._svRangos = {lunA, finA, lunB, finB, A, B};
+  const TA = { n: filas.reduce((s,x)=>s+x.a.n,0), total: filas.reduce((s,x)=>s+x.a.total,0), util: filas.reduce((s,x)=>s+x.a.util,0), costo: filas.reduce((s,x)=>s+x.a.costo,0) };
+  // para comparar parejo: la semana anterior solo hasta el mismo día de la semana que hoy (si la semana A está en curso)
+  const enCurso = finA > hoy; const diasConDatos = enCurso ? Math.min(7, Math.round((hoy - lunA)/864e5) + 1) : 7;
+  const TBp = filas.slice(0, diasConDatos).reduce((s,x)=>({n:s.n+x.b.n, total:s.total+x.b.total, util:s.util+x.b.util, costo:s.costo+x.b.costo}), {n:0,total:0,util:0,costo:0});
+  const TB = filas.reduce((s,x)=>({n:s.n+x.b.n, total:s.total+x.b.total, util:s.util+x.b.util, costo:s.costo+x.b.costo}), {n:0,total:0,util:0,costo:0});
+  const dif = (a,b) => b>0 ? Math.round((a-b)/b*100) : (a>0?100:0);
+  const pct = (a,b) => { const p = dif(a,b); return `<span style="font-weight:700;color:${p>0?'#15803d':(p<0?'#b91c1c':'inherit')}">${p>0?'+':''}${p}%</span>`; };
+  const nomB = vsSem===1 ? 'Semana anterior' : `Hace ${vsSem} semanas`;
+  const rango = (l,f) => fechaCorta(l)+' – '+fechaCorta(new Date(f-864e5));
+  const pedTot = P => P.pedidos.reduce((s,p)=>s+ +p.total,0);
+  const porProv = P => { const m={}; P.pedidos.forEach(p=>{ const k=(p.proveedores&&p.proveedores.nombre)||'—'; if(!m[k]) m[k]={n:0,t:0}; m[k].n++; m[k].t+= +p.total; }); return Object.entries(m).sort((x,y)=>y[1].t-x[1].t); };
+  el.innerHTML = `<div class="card" style="margin-bottom:12px">
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+      <b>📅 Semana vs semana</b>
+      <button class="btn sm sec" onclick="svMover(-7)" title="Semana anterior">◀</button>
+      <input type="date" value="${ymdLocal(lunA)}" onchange="window._svLunes = lunesDe(new Date(this.value+'T12:00:00')); pintarSemanaVsSemana()" style="padding:6px;border:1px solid var(--linea);border-radius:8px">
+      <button class="btn sm sec" onclick="svMover(7)" title="Semana siguiente" ${finA>hoy?'disabled':''}>▶</button>
+      <span class="small muted">semana del <b>${rango(lunA, finA)}</b>${enCurso?' (en curso)':''}</span>
+      <span class="small">contra</span>
+      <select onchange="window._svVs=+this.value; pintarSemanaVsSemana()" style="padding:6px;border:1px solid var(--linea);border-radius:8px">${[1,2,4].map(n=>`<option value="${n}" ${vsSem===n?'selected':''}>${n===1?'la semana anterior':'hace '+n+' semanas'}</option>`).join('')}</select>
+      <span class="small muted">(${rango(lunB, finB)})</span>
+      <button class="btn sm sec" style="margin-left:auto" onclick="exportarSemanaExcel()">📥 Excel</button>
+    </div>
+    <div class="kpis" style="margin-bottom:8px">
+      <div class="kpi"><div class="l">Ventas ${enCurso?(diasConDatos===1?'(solo el lunes)':'(mismos '+diasConDatos+' días)'):'de la semana'}</div><div class="v">${fmt(TA.total)}</div><div class="s">${nomB.toLowerCase()}: ${fmt(TBp.total)} · ${pct(TA.total, TBp.total)}</div></div>
+      <div class="kpi"><div class="l">Tickets</div><div class="v">${TA.n}</div><div class="s">${nomB.toLowerCase()}: ${TBp.n} · ${pct(TA.n, TBp.n)}</div></div>
+      <div class="kpi"><div class="l">Ticket promedio</div><div class="v">${fmt(TA.n?TA.total/TA.n:0)}</div><div class="s">${nomB.toLowerCase()}: ${fmt(TBp.n?TBp.total/TBp.n:0)}</div></div>
+      ${fin?`<div class="kpi"><div class="l">Utilidad (sin IVA)</div><div class="v" style="color:${TA.util>=0?'#15803d':'#b91c1c'}">${fmt(TA.util)}</div><div class="s">${nomB.toLowerCase()}: ${fmt(TBp.util)} · ${pct(TA.util, TBp.util)} · margen ${TA.total>0?Math.round(TA.util/(TA.total/1.16)*100):0}%</div></div>`:''}
+    </div>
+    <div class="tbl-scroll"><table>
+      <thead><tr><th>Día</th><th>${esc(nomB)}</th><th class="num">Ventas</th><th class="num">Tickets</th>${fin?'<th class="num">Utilidad</th>':''}<th>Esta semana</th><th class="num">Ventas</th><th class="num">Tickets</th>${fin?'<th class="num">Utilidad</th>':''}<th class="num">Diferencia</th><th class="num">%</th></tr></thead>
+      <tbody>${filas.map(f=>{ const d = f.a.total - f.b.total; const fut = f.futuroA;
+        return `<tr style="${fut?'opacity:.5':''}"><td><b>${f.nom}</b></td>
+          <td class="small">${fechaCorta(f.dB)}</td><td class="num">${f.futuroB?'—':fmt(f.b.total)}</td><td class="num">${f.futuroB?'—':f.b.n}</td>${fin?`<td class="num">${f.futuroB?'—':fmt(f.b.util)}</td>`:''}
+          <td class="small">${fechaCorta(f.dA)}</td><td class="num"><b>${fut?'—':fmt(f.a.total)}</b></td><td class="num">${fut?'—':f.a.n}</td>${fin?`<td class="num">${fut?'—':fmt(f.a.util)}</td>`:''}
+          <td class="num" style="color:${d>0?'#15803d':(d<0?'#b91c1c':'inherit')}">${fut?'—':(d>0?'+':'')+fmt(d)}</td><td class="num">${fut?'—':pct(f.a.total, f.b.total)}</td></tr>`; }).join('')}
+        <tr style="font-weight:700;background:#f8fafc"><td>Total</td><td></td><td class="num">${fmt(TB.total)}</td><td class="num">${TB.n}</td>${fin?`<td class="num">${fmt(TB.util)}</td>`:''}<td></td><td class="num">${fmt(TA.total)}</td><td class="num">${TA.n}</td>${fin?`<td class="num">${fmt(TA.util)}</td>`:''}<td class="num">${(TA.total-TB.total>0?'+':'')+fmt(TA.total-TB.total)}</td><td class="num">${pct(TA.total, TB.total)}</td></tr>
+      </tbody></table></div>
+    ${enCurso?`<p class="small muted" style="margin:6px 0 0">Los KPIs de arriba comparan <b>${diasConDatos===1?'solo el lunes':'los mismos '+diasConDatos+' días (lunes a '+DIAS[diasConDatos-1].toLowerCase()+')'}</b> de las dos semanas, para que sea parejo; la fila Total de la tabla trae la semana anterior completa.</p>`:''}
+    <details style="margin-top:10px" open><summary style="cursor:pointer;font-weight:700">🚚 Ventas vs pedidos a proveedor (mismo periodo)</summary>
+      <div class="tbl-scroll"><table style="margin-top:6px">
+        <thead><tr><th></th><th class="num">${esc(nomB)} <span class="small muted">(${rango(lunB, finB)})</span></th><th class="num">Esta semana <span class="small muted">(${rango(lunA, finA)})</span></th></tr></thead>
+        <tbody>
+          <tr><td>Vendido (con IVA)</td><td class="num">${fmt(TB.total)}</td><td class="num"><b>${fmt(TA.total)}</b></td></tr>
+          ${fin?`<tr><td>Costo de lo vendido (con IVA)</td><td class="num">${fmt(TB.costo*1.16)}</td><td class="num">${fmt(TA.costo*1.16)}</td></tr>`:''}
+          <tr><td>Pedido a proveedores (con IVA)</td><td class="num">${fin?fmt(pedTot(B)):''} <span class="small muted">${B.pedidos.length} pedido(s)</span></td><td class="num"><b>${fin?fmt(pedTot(A)):''}</b> <span class="small muted">${A.pedidos.length} pedido(s)</span></td></tr>
+          <tr><td class="small">Por proveedor</td><td class="small">${porProv(B).map(([k,g])=>`${esc(k)}: ${g.n}${fin?' · '+fmt(g.t):''}`).join('<br>')||'—'}</td><td class="small">${porProv(A).map(([k,g])=>`${esc(k)}: ${g.n}${fin?' · '+fmt(g.t):''}`).join('<br>')||'—'}</td></tr>
+          ${fin?`<tr style="font-weight:700"><td>Pedido − costo vendido <span class="small muted">(+ = creció el inventario)</span></td><td class="num" style="color:${pedTot(B)-TB.costo*1.16>0?'#b45309':'#15803d'}">${(pedTot(B)-TB.costo*1.16>0?'+':'')+fmt(pedTot(B)-TB.costo*1.16)}</td><td class="num" style="color:${pedTot(A)-TA.costo*1.16>0?'#b45309':'#15803d'}">${(pedTot(A)-TA.costo*1.16>0?'+':'')+fmt(pedTot(A)-TA.costo*1.16)}</td></tr>
+          <tr><td>Pedido ÷ vendido</td><td class="num">${TB.total>0?Math.round(pedTot(B)/TB.total*100)+'%':'—'}</td><td class="num">${TA.total>0?Math.round(pedTot(A)/TA.total*100)+'%':'—'}</td></tr>`:''}
+        </tbody></table></div>
+      <p class="small muted" style="margin:6px 0 0">Pedidos por la fecha en que se hicieron (sin cancelados). Para ver la lista y bajarla a Excel: <a href="#" onclick="window._pedPer={tipo:'rango', desde:'${ymdLocal(lunA)}', hasta:'${ymdLocal(new Date(finA-864e5))}'}; irA('pedidos'); return false">Pedidos a proveedor → periodo</a>.</p>
+    </details>
+  </div>`;
+}
+async function exportarSemanaExcel(){
+  if(!(await asegurarXLSX())) return;
+  const F = window._svFilas||[], R = window._svRangos; if(!F.length||!R){ toast('Primero calcula la comparación', true); return; }
+  const fin = esFinanzas();
+  const h1 = F.map(f=>{ const o = {'Día':f.nom, 'Fecha anterior':ymdLocal(f.dB), 'Ventas anterior':Math.round(f.b.total*100)/100, 'Tickets anterior':f.b.n};
+    if(fin) o['Utilidad anterior'] = Math.round(f.b.util*100)/100;
+    o['Fecha semana'] = ymdLocal(f.dA); o['Ventas semana'] = f.futuroA?null:Math.round(f.a.total*100)/100; o['Tickets semana'] = f.futuroA?null:f.a.n;
+    if(fin) o['Utilidad semana'] = f.futuroA?null:Math.round(f.a.util*100)/100;
+    o['Diferencia'] = f.futuroA?null:Math.round((f.a.total-f.b.total)*100)/100; o['Diferencia %'] = f.futuroA?null:(f.b.total>0?Math.round((f.a.total-f.b.total)/f.b.total*100):null); return o; });
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(h1), 'Semana vs semana');
+  const ped = P => P.pedidos.map(p=>({ 'Folio':p.folio_externo||('#'+p.id), 'Proveedor':(p.proveedores&&p.proveedores.nombre)||'', 'Fecha':pedFechaYmd(p), 'Estado':p.estado, 'Total':fin?+p.total:undefined }));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([...ped(R.A).map(x=>Object.assign({'Semana':'esta'},x)), ...ped(R.B).map(x=>Object.assign({'Semana':'anterior'},x))]), 'Pedidos');
+  const vt = P => P.ventas.map(v=>{ const o = {'Fecha':new Date(v.fecha).toLocaleString('es-MX'), 'Total':+v.total, 'Descuento':+(v.descuento||0)}; if(fin){ o['Utilidad sin IVA']=Math.round((P.util[v.id]||0)*100)/100; o['Costo sin IVA']=Math.round((P.costo[v.id]||0)*100)/100; } return o; });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([...vt(R.A).map(x=>Object.assign({'Semana':'esta'},x)), ...vt(R.B).map(x=>Object.assign({'Semana':'anterior'},x))]), 'Ventas');
+  XLSX.writeFile(wb, 'Semana_'+ymdLocal(R.lunA)+'_vs_'+ymdLocal(R.lunB)+'.xlsx');
+  logEv('descarga', 'Excel semana vs semana '+ymdLocal(R.lunA)); toast('Excel descargado ✓');
+}
+
+// ===== v191: PEDIDOS A PROVEEDOR por periodo + Excel =====
+function pedRango(per){ // {ini, fin} en YYYY-MM-DD (fin exclusivo) o null = todos
+  const hoy = new Date(); hoy.setHours(0,0,0,0); const t = (per&&per.tipo)||'todo';
+  const ymd = ymdLocal, mas = (d,n)=>{ const x=new Date(d); x.setDate(x.getDate()+n); return x; };
+  if(t==='semana'){ const l = lunesDe(hoy); return {ini:ymd(l), fin:ymd(mas(l,7))}; }
+  if(t==='semana_pasada'){ const l = mas(lunesDe(hoy),-7); return {ini:ymd(l), fin:ymd(mas(l,7))}; }
+  if(t==='mes'){ const m = new Date(hoy.getFullYear(), hoy.getMonth(), 1); return {ini:ymd(m), fin:ymd(new Date(hoy.getFullYear(), hoy.getMonth()+1, 1))}; }
+  if(t==='mes_pasado'){ return {ini:ymd(new Date(hoy.getFullYear(), hoy.getMonth()-1, 1)), fin:ymd(new Date(hoy.getFullYear(), hoy.getMonth(), 1))}; }
+  if(t==='30'){ return {ini:ymd(mas(hoy,-29)), fin:ymd(mas(hoy,1))}; }
+  if(t==='rango'){ if(!per.desde && !per.hasta) return null; return {ini: per.desde||'2000-01-01', fin: per.hasta ? ymd(mas(new Date(per.hasta+'T12:00:00'),1)) : '2100-01-01'}; }
+  return null;
+}
+function pedPerNombre(per){ const t=(per&&per.tipo)||'todo'; const rg = pedRango(per);
+  const n = {semana:'Esta semana', semana_pasada:'Semana pasada', mes:'Este mes', mes_pasado:'Mes pasado', '30':'Últimos 30 días', rango:'Rango'}[t]||'Todos';
+  if(!rg) return n; const f = new Date(rg.fin+'T12:00:00'); f.setDate(f.getDate()-1);
+  return n+' · '+fecha(rg.ini)+' a '+fecha(ymdLocal(f)); }
+function pedCambiarPeriodo(tipo){ const per = window._pedPer||{}; window._pedPer = Object.assign({}, per, {tipo}); if(tipo!=='rango') vPedidos(); else { const d=$('ped-desde'), h=$('ped-hasta'); if(d) d.style.display=''; if(h) h.style.display=''; if(per.desde||per.hasta) vPedidos(); } }
+function pedRangoManual(){ const d=($('ped-desde')||{}).value, h=($('ped-hasta')||{}).value; window._pedPer = {tipo:'rango', desde:d||'', hasta:h||''}; if(d||h) vPedidos(); }
+function pedPeriodoHtml(){ const per = window._pedPer||{tipo:'todo'}; const t = per.tipo||'todo';
+  return `<span style="margin-left:auto"></span><label class="small muted" style="margin:0">Periodo</label>
+    <select id="ped-per" onchange="pedCambiarPeriodo(this.value)" style="padding:7px;border:1px solid var(--linea);border-radius:8px">${[['todo','Todos'],['semana','Esta semana'],['semana_pasada','Semana pasada'],['mes','Este mes'],['mes_pasado','Mes pasado'],['30','Últimos 30 días'],['rango','Rango de fechas…']].map(([v,n])=>`<option value="${v}" ${t===v?'selected':''}>${n}</option>`).join('')}</select>
+    <input type="date" id="ped-desde" value="${esc(per.desde||'')}" onchange="pedRangoManual()" style="padding:6px;border:1px solid var(--linea);border-radius:8px;${t==='rango'?'':'display:none'}" title="Desde">
+    <input type="date" id="ped-hasta" value="${esc(per.hasta||'')}" onchange="pedRangoManual()" style="padding:6px;border:1px solid var(--linea);border-radius:8px;${t==='rango'?'':'display:none'}" title="Hasta">
+    <button class="btn sm sec" onclick="exportarPedidosExcel()" title="Baja a Excel los pedidos que se ven (con sus partidas)">📥 Excel</button>`;
+}
+async function exportarPedidosExcel(){
+  const rows = window._pedDataF||[]; if(!rows.length){ toast('No hay pedidos que exportar con ese filtro', true); return; }
+  if(!(await asegurarXLSX())) return;
+  const fin = esFinanzas(); const st = window._pp||{}; const fx = window._pfac||{};
+  const avance = p => { const partes = Object.values(st[p.id]||{}).filter(x=>!(x.n>0 && x.canc>=x.n)); const ped = partes.reduce((s,x)=>s+x.ped,0), rec = partes.reduce((s,x)=>s+x.rec,0); return ped>0 ? Math.round(rec/ped*100) : null; };
+  const hoja1 = rows.map(p=>{ const o = {'Folio':p.folio_externo||('#'+p.id), 'Proveedor':(p.proveedores&&p.proveedores.nombre)||'', 'Fecha pedido':pedFechaYmd(p), 'Fecha recibido':p.fecha_recibido?String(p.fecha_recibido).slice(0,10):'', 'Estado':p.estado, 'Plazo (días)':+(p.plazo_dias||0), 'Partes':Object.keys(st[p.id]||{}).filter(Boolean).join(' · '), 'Recibido %':avance(p), 'Facturas':(fx[p.id]||[]).join(' · ')};
+    if(fin){ o['Subtotal'] = +(p.subtotal||0); o['IVA'] = +(p.iva||0); o['Total'] = +(p.total||0); }
+    o['Notas'] = p.notas||''; return o; });
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hoja1), 'Pedidos');
+  // por proveedor
+  const pp = {}; rows.filter(p=>p.estado!=='cancelado').forEach(p=>{ const k=(p.proveedores&&p.proveedores.nombre)||'—'; if(!pp[k]) pp[k]={n:0,t:0}; pp[k].n++; pp[k].t+= +(p.total||0); });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(Object.entries(pp).sort((a,b)=>b[1].t-a[1].t).map(([k,g])=>{ const o={'Proveedor':k,'Pedidos':g.n}; if(fin) o['Total']=Math.round(g.t*100)/100; return o; })), 'Por proveedor');
+  // partidas
+  try{
+    const ids = rows.map(p=>p.id); let its = [];
+    for(let i=0;i<ids.length;i+=100){ const r = await traerTodo(()=>sb.from('pedido_compra_items').select('pedido_id,parte,cantidad,cantidad_recibida,cantidad_facturada,costo_unit,importe,cancelada,productos(codigo,descripcion)').in('pedido_id', ids.slice(i,i+100)).order('id')); its = its.concat(r||[]); }
+    const P = {}; rows.forEach(p=>{ P[p.id]=p; });
+    const hoja3 = its.map(i=>{ const p = P[i.pedido_id]||{}; const o = {'Folio':p.folio_externo||('#'+i.pedido_id), 'Proveedor':(p.proveedores&&p.proveedores.nombre)||'', 'Fecha pedido':pedFechaYmd(p), 'Parte':i.parte||'', 'Código':(i.productos&&i.productos.codigo)||'', 'Producto':(i.productos&&i.productos.descripcion)||'', 'Pedido':+i.cantidad, 'Recibido':+(i.cantidad_recibida||0), 'Facturado':+(i.cantidad_facturada||0), 'Cancelada':i.cancelada?'sí':''};
+      if(fin){ o['Costo unit (sin IVA)'] = +(i.costo_unit||0); o['Importe'] = i.importe!=null ? +i.importe : Math.round(+i.cantidad * +(i.costo_unit||0)*100)/100; }
+      return o; });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hoja3), 'Partidas');
+  }catch(e){}
+  const per = window._pedPer||{tipo:'todo'}; const rg = pedRango(per);
+  XLSX.writeFile(wb, 'Pedidos_Axion_'+(rg?rg.ini+'_a_'+rg.fin:'todos')+'.xlsx');
+  logEv('descarga', 'Excel de pedidos: '+rows.length+' ('+pedPerNombre(per)+')'); toast('Excel descargado: '+rows.length+' pedido(s) con sus partidas ✓');
+}
+
 async function vPedidos(){
   const {data, error} = await sb.from('pedidos_compra').select('*, proveedores(nombre)').order('fecha',{ascending:false});
   if(error) throw error;
@@ -4183,16 +4358,19 @@ async function vPedidos(){
   data.forEach(p=>{ const c=clase(p); cl[c]=(cl[c]||0)+1; });
   const fEst = window._pedFiltro, fCla = window._pedClase;
   let dataF = data;
+  const perP = window._pedPer||{tipo:'todo'}, rgP = pedRango(perP); // v191
+  if(rgP) dataF = dataF.filter(p=>{ const f = pedFechaYmd(p); return f>=rgP.ini && f<rgP.fin; });
   if(fEst) dataF = dataF.filter(p=>p.estado===fEst);
   if(fCla==='condev') dataF = dataF.filter(p=>window._pdev && window._pdev[p.id]);
   else if(fCla) dataF = dataF.filter(p=>clase(p)===fCla);
+  window._pedDataF = dataF; // v191: lo que se ve es lo que se exporta
   $('v-pedidos').innerHTML = `
     <div class="kpis">
       ${['enviado','parcial','recibido','borrador','cancelado'].filter(e=>porEstado[e]).map(e=>`
         <div class="kpi" style="cursor:pointer;${window._pedFiltro===e?'outline:2px solid var(--naranja,#e8862d)':''}" title="Clic para filtrar" onclick="window._pedFiltro = window._pedFiltro==='${e}'?null:'${e}'; vPedidos()"><div class="l">${e} (${porEstado[e].n})</div><div class="v">${esFinanzas()?fmt(porEstado[e].t):porEstado[e].n+' 📦'}</div></div>`).join('')}
       <div class="kpi" style="cursor:pointer;${!window._pedFiltro?'':'opacity:.75'}" title="Ver todos" onclick="window._pedFiltro=null; vPedidos()"><div class="l">Total pedidos (${data.filter(p=>p.estado!=='cancelado').length})</div><div class="v">${esFinanzas()?fmt(totalGral):data.filter(p=>p.estado!=='cancelado').length+' 📦'}</div></div>
     </div>` + `
-    <div class="card"><h3>Pedidos de compra${window._pedFiltro?` · filtro: <span class="badge ${badges[window._pedFiltro]}">${window._pedFiltro}</span>`:''}</h3>
+    <div class="card"><h3>Pedidos de compra${window._pedFiltro?` · filtro: <span class="badge ${badges[window._pedFiltro]}">${window._pedFiltro}</span>`:''}${rgP?` · <span class="badge b-azul">${esc(pedPerNombre(perP))}</span> <span class="small muted">${dataF.length} pedido(s)${esFinanzas()?' · '+fmt(dataF.filter(p=>p.estado!=='cancelado').reduce((s,p)=>s+ +p.total,0)):''}</span>`:''}</h3>
     <div class="toolbar" style="margin-bottom:8px">
       <input type="search" id="ped-q" placeholder="🔍 Busca CUALQUIER número del papel: pedido, parte (sales order) o factura…" oninput="filtrarPedidos()" style="flex:1;min-width:280px;font-size:15px;padding:11px 13px">
       <span class="small muted" id="ped-qn"></span>
@@ -4205,6 +4383,7 @@ async function vPedidos(){
       <button class="btn ${fCla==='difs'?'':'sec'} sm" onclick="window._pedClase='difs'; vPedidos()">⚠️ Sin factura (${cl.difs||0})</button>
       <button class="btn ${fCla==='completo'?'':'sec'} sm" onclick="window._pedClase='completo'; vPedidos()">✅ Completos (${cl.completo||0})</button>
       ${Object.keys(window._pdev||{}).length?`<button class="btn ${fCla==='condev'?'':'sec'} sm" onclick="window._pedClase='condev'; vPedidos()">↩️ Con devolución (${Object.keys(window._pdev).length})</button>`:''}
+      ${pedPeriodoHtml()}
     </div>
     ${puedeVender()?`<button class="btn sm" style="float:right;margin-left:10px" onclick="buscarFolio()">🔍 ¿Qué me están entregando?</button>`:''}
     <button class="btn sm" style="float:right;margin-left:10px" onclick="syncIndar()">🔄 Actualizar estatus Indar</button><button class="btn sm sec" style="float:right" onclick="traerFacturasIndar()">🧾 Traer facturas de Indar</button><p class="small muted" style="margin-bottom:10px">Los pedidos se capturan en el portal del proveedor (Indar / Holcim) y aquí se registran para dar seguimiento. Al marcar <b>Recibido</b>, las cantidades se suman al inventario automáticamente.</p>
