@@ -4237,18 +4237,22 @@ async function pintarSemanaVsSemana(){
         <tr style="font-weight:700;background:#f8fafc"><td>Total</td><td></td><td class="num">${fmt(TB.total)}</td><td class="num">${TB.n}</td>${fin?`<td class="num">${fmt(TB.util)}</td>`:''}<td></td><td class="num">${fmt(TA.total)}</td><td class="num">${TA.n}</td>${fin?`<td class="num">${fmt(TA.util)}</td>`:''}<td class="num">${(TA.total-TB.total>0?'+':'')+fmt(TA.total-TB.total)}</td><td class="num">${pct(TA.total, TB.total)}</td></tr>
       </tbody></table></div>
     ${enCurso?`<p class="small muted" style="margin:6px 0 0">Los KPIs de arriba comparan <b>${diasConDatos===1?'solo el lunes':'los mismos '+diasConDatos+' días (lunes a '+DIAS[diasConDatos-1].toLowerCase()+')'}</b> de las dos semanas, para que sea parejo; la fila Total de la tabla trae la semana anterior completa.</p>`:''}
-    <details style="margin-top:10px" open><summary style="cursor:pointer;font-weight:700">🚚 Ventas vs pedidos a proveedor (mismo periodo)</summary>
-      <div class="tbl-scroll"><table style="margin-top:6px">
-        <thead><tr><th></th><th class="num">${esc(nomB)} <span class="small muted">(${rango(lunB, finB)})</span></th><th class="num">Esta semana <span class="small muted">(${rango(lunA, finA)})</span></th></tr></thead>
-        <tbody>
-          <tr><td>Vendido (con IVA)</td><td class="num">${fmt(TB.total)}</td><td class="num"><b>${fmt(TA.total)}</b></td></tr>
-          ${fin?`<tr><td>Costo de lo vendido (con IVA)</td><td class="num">${fmt(TB.costo*1.16)}</td><td class="num">${fmt(TA.costo*1.16)}</td></tr>`:''}
-          <tr><td>Pedido a proveedores (con IVA)</td><td class="num">${fin?fmt(pedTot(B)):''} <span class="small muted">${B.pedidos.length} pedido(s)</span></td><td class="num"><b>${fin?fmt(pedTot(A)):''}</b> <span class="small muted">${A.pedidos.length} pedido(s)</span></td></tr>
-          <tr><td class="small">Por proveedor</td><td class="small">${porProv(B).map(([k,g])=>`${esc(k)}: ${g.n}${fin?' · '+fmt(g.t):''}`).join('<br>')||'—'}</td><td class="small">${porProv(A).map(([k,g])=>`${esc(k)}: ${g.n}${fin?' · '+fmt(g.t):''}`).join('<br>')||'—'}</td></tr>
-          ${fin?`<tr style="font-weight:700"><td>Pedido − costo vendido <span class="small muted">(+ = creció el inventario)</span></td><td class="num" style="color:${pedTot(B)-TB.costo*1.16>0?'#b45309':'#15803d'}">${(pedTot(B)-TB.costo*1.16>0?'+':'')+fmt(pedTot(B)-TB.costo*1.16)}</td><td class="num" style="color:${pedTot(A)-TA.costo*1.16>0?'#b45309':'#15803d'}">${(pedTot(A)-TA.costo*1.16>0?'+':'')+fmt(pedTot(A)-TA.costo*1.16)}</td></tr>
-          <tr><td>Pedido ÷ vendido</td><td class="num">${TB.total>0?Math.round(pedTot(B)/TB.total*100)+'%':'—'}</td><td class="num">${TA.total>0?Math.round(pedTot(A)/TA.total*100)+'%':'—'}</td></tr>`:''}
-        </tbody></table></div>
-      <p class="small muted" style="margin:6px 0 0">Pedidos por la fecha en que se hicieron (sin cancelados). Para ver la lista y bajarla a Excel: <a href="#" onclick="window._pedPer={tipo:'rango', desde:'${ymdLocal(lunA)}', hasta:'${ymdLocal(new Date(finA-864e5))}'}; irA('pedidos'); return false">Pedidos a proveedor → periodo</a>.</p>
+    <details style="margin-top:10px" open><summary style="cursor:pointer;font-weight:700">🚚 ¿Compramos más de lo que vendemos? (ventas vs pedidos, mismo periodo)</summary>
+      ${(()=>{ const bloque = (P, T, titulo, cls) => { const ped = pedTot(P), cv = T.costo*1.16, dif = ped - cv, ratio = T.total>0 ? Math.round(ped/T.total*100) : null;
+          const frase = !fin ? '' : (P.pedidos.length===0 ? `No se hizo ningún pedido; se vendió mercancía que ya estaba en el anaquel (${fmt(cv)} a costo): el inventario <b style="color:#15803d">bajó ${fmt(-dif)}</b>.`
+            : dif >= 0 ? `Compramos <b>${fmt(ped)}</b> y vendimos mercancía que nos costó <b>${fmt(cv)}</b>: el inventario <b style="color:#b45309">creció ${fmt(dif)}</b> (entró más de lo que salió).`
+            : `Compramos <b>${fmt(ped)}</b> y vendimos mercancía que nos costó <b>${fmt(cv)}</b>: el inventario <b style="color:#15803d">bajó ${fmt(-dif)}</b> (salió más de lo que entró).`);
+          return `<div class="card" style="margin:6px 0;padding:10px;${cls}"><b>${titulo}</b>
+            <table style="margin-top:6px;width:100%"><colgroup><col style="width:58%"><col></colgroup><tbody>
+              <tr><td>Vendimos <span class="small muted">(a precio de venta, con IVA)</span></td><td class="num"><b>${fmt(T.total)}</b> <span class="small muted">${T.n} tickets</span></td></tr>
+              ${fin?`<tr><td>Nos costó esa mercancía <span class="small muted">(a costo, con IVA)</span></td><td class="num">${fmt(cv)} <span class="small muted">${T.total>0?Math.round(cv/T.total*100)+'% de la venta':''}</span></td></tr>`:''}
+              <tr><td>Compramos a proveedores <span class="small muted">(pedidos de la semana, con IVA)</span></td><td class="num">${fin?'<b>'+fmt(ped)+'</b>':''} <span class="small muted">${P.pedidos.length} pedido(s)</span>${porProv(P).length?`<div class="small muted" style="white-space:normal">${porProv(P).map(([k,g])=>esc(k)+': '+g.n+(fin?' · '+fmt(g.t):'')).join('<br>')}</div>`:''}</td></tr>
+              ${fin?`<tr style="font-weight:700"><td>Inventario: entró − salió</td><td class="num" style="color:${dif>0?'#b45309':'#15803d'}">${dif>0?'+':''}${fmt(dif)} ${dif>0?'⬆️ creció':'⬇️ bajó'}</td></tr>
+              <tr><td>Por cada $100 vendidos, compramos</td><td class="num">${ratio===null?'—':'<b>$'+ratio+'</b>'} <span class="small muted">(reponer justo lo vendido ≈ $${T.total>0?Math.round(cv/T.total*100):70})</span></td></tr>`:''}
+            </tbody></table>
+            ${frase?`<p class="small" style="margin:8px 0 0">${frase}</p>`:''}</div>`; };
+        return `<div class="grid2" style="margin-top:6px">${bloque(B, TB, esc(nomB)+' · '+rango(lunB, finB), '')}${bloque(A, TA, 'Esta semana · '+rango(lunA, finA)+(enCurso?' (en curso)':''), 'border:2px solid var(--rojo)')}</div>`; })()}
+      <p class="small muted" style="margin:6px 0 0">Regla de bolsillo: si semana tras semana compras arriba de lo que te cuesta lo que vendes, el dinero se va quedando en mercancía. Pedidos por la fecha en que se hicieron (sin cancelados). Lista y Excel: <a href="#" onclick="window._pedPer={tipo:'rango', desde:'${ymdLocal(lunA)}', hasta:'${ymdLocal(new Date(finA-864e5))}'}; irA('pedidos'); return false">Pedidos a proveedor → periodo</a>.</p>
     </details>
   </div>`;
 }
