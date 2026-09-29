@@ -8949,7 +8949,7 @@ function dormPagina(prods, pag, npag){
     x.fillStyle = '#dc2626'; x.beginPath(); x.roundRect ? x.roundRect(cx+cw-130, cy+18, 112, 50, 25) : x.rect(cx+cw-130,cy+18,112,50); x.fill();
     x.fillStyle = '#fff'; x.font = `800 30px ${F}`; x.textAlign = 'center'; x.fillText('-'+pct+'%', cx+cw-74, cy+54);
     x.textAlign = 'left'; x.fillStyle = TIN; x.font = `700 30px ${F}`;
-    dormLineas(x, f.desc, cw-60, 3).forEach((l,k)=>x.fillText(l, cx+28, cy+ (k===0?105:105+k*38)));
+    dormLineas(x, f.desc, cw-60, 2).forEach((l,k)=>x.fillText(l, cx+28, cy+105+k*38));
     x.font = `500 22px ${F}`; x.fillStyle = '#6b7280'; x.fillText('Código '+f.cod, cx+28, cy+ch-110);
     const antes = 'Antes $'+f.precio.toFixed(2); x.font = `500 28px ${F}`; x.fillStyle = '#6b7280'; x.fillText(antes, cx+28, cy+ch-62);
     const aw = x.measureText(antes).width; x.strokeStyle = '#dc2626'; x.lineWidth = 3; x.beginPath(); x.moveTo(cx+24, cy+ch-72); x.lineTo(cx+32+aw, cy+ch-72); x.stroke();
