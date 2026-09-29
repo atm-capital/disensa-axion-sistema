@@ -5213,7 +5213,7 @@ function akFondeo(){
       <div class="field"><label>Monto depositado</label><input id="af-monto" type="number" step="0.01" min="0" placeholder="500.00"></div>
       <div class="field"><label>Fecha</label><input id="af-fecha" type="date" value="${hoyMX()}"></div>
     </div>
-    <div class="field"><label>¿De dónde salió el dinero?</label><select id="af-origen">
+    <div class="field"><label>¿De dónde salió el dinero?</label><select id="af-origen" style="border:2px solid #d97706"><option value="">— elige de dónde salió —</option>
       <option value="banco">🏦 Transferencia desde el banco</option>
       <option value="cajon">🗄️ Efectivo del cajón (lo cobrado a clientes) — se registra la salida para que cuadre el corte</option>
       <option value="chica">🏠 Efectivo de la caja fuerte / caja chica</option></select></div>
@@ -5239,7 +5239,8 @@ async function guardarAkFondeo(){
     if(up.error){ toast('No se pudo subir el comprobante: '+errMsg(up.error), true); btn.disabled=false; btn.textContent='Guardar fondeo'; return; }
   }
   const nom = (typeof perfil!=='undefined'&&perfil?perfil.nombre:''), uid = sesion.user.id;
-  const origen = ($('af-origen')&&$('af-origen').value)||'banco'; // v156: banco | cajon | chica
+  const origen = ($('af-origen')&&$('af-origen').value)||''; // v156: banco | cajon | chica
+  if(!origen){ toast('Dinos DE DÓNDE salió el dinero del fondeo', true); return; } // v194
   let cajaMovId = null;
   if(origen!=='banco'){ // el efectivo sale del cajón (origen akpago: cuenta en el corte, no va a caja chica) o de la caja chica
     const mv = await sb.from('caja_movs').insert({fecha:fechaF, tipo:'retiro', monto:monto, concepto:'Fondeo monedero AK Pago'+(($('af-ref').value||'').trim()?' · '+($('af-ref').value||'').trim():''), usuario_id:uid, nombre:nom, origen: origen==='chica'?'chica':'akpago', comprobante_path:path}).select('id').single();
@@ -5732,7 +5733,7 @@ async function pagarFacturaPedido(cuentaId){
     <p style="margin:0 0 10px">${esc(c.proveedores?.nombre||'')} · saldo <b>${fmt(c.saldo)}</b> · vence ${fecha(c.fecha_vencimiento)}</p>
     <div class="frow">
       <div class="field"><label>Monto pagado</label><input id="pf-monto" type="number" step="0.01" value="${c.saldo}"></div>
-      <div class="field"><label>¿De dónde salió?</label><select id="pf-origen">
+      <div class="field"><label>¿De dónde salió?</label><select id="pf-origen" style="border:2px solid #d97706"><option value="">— elige de dónde salió —</option>
         <option value="cajon">💵 Efectivo del cajón (ventas del día)</option><option value="chica">🏠 Efectivo de la caja fuerte</option>
         <option value="transferencia">🏦 Transferencia del banco</option></select></div>
     </div>
@@ -5742,6 +5743,7 @@ async function pagarFacturaPedido(cuentaId){
 async function confirmarPagoFacturaPedido(cuentaId){
   const monto = +($('pf-monto').value||0); if(!(monto>0)){ toast('Escribe el monto', true); return; }
   const origen = $('pf-origen').value, ref = ($('pf-ref').value||'').trim();
+  if(!origen){ toast('Dinos DE DÓNDE salió el pago: cajón, caja fuerte o transferencia', true); $('pf-origen').focus(); return; } // v194
   const btn = $('pf-btn'); btn.disabled = true;
   const {data:c} = await sb.from('cuentas_pagar').select('concepto, proveedores(nombre)').eq('id', cuentaId).single();
   const r = await sb.rpc('registrar_pago', {p_cuenta_id:cuentaId, p_monto:monto, p_metodo: origen==='transferencia'?'transferencia':'efectivo', p_referencia:(origen==='cajon'?'efectivo del cajón':origen==='chica'?'efectivo de caja fuerte':'transferencia')+(ref?' · '+ref:'')});
@@ -5894,7 +5896,7 @@ async function borrarMovCaja(id){
 function movCaja(){
   abrirModal(`<h3>Retiro, gasto o entrada de efectivo</h3>
     <label>Tipo</label><select id="mc-tipo"><option value="retiro">💸 Retiro (a bóveda / depósito)</option><option value="gasto">🧾 Gasto pagado de la caja</option><option value="entrada">➕ Entrada de efectivo</option></select>
-    <label>¿De dónde salió el dinero?</label><select id="mc-origen"><option value="cajon">🗄️ Del cajón (ventas del día) — cuenta en el corte</option><option value="chica">🏠 De la caja fuerte / caja chica — no toca el corte</option></select>
+    <label>¿De dónde salió el dinero?</label><select id="mc-origen" style="border:2px solid #d97706"><option value="">— elige: ¿cajón o caja fuerte? —</option><option value="cajon">🗄️ Del cajón (ventas del día) — cuenta en el corte</option><option value="chica">🏠 De la caja fuerte / caja chica — no toca el corte</option></select>
     <label>Monto</label><input type="number" id="mc-monto" step="0.01" min="0.01" placeholder="0.00">
     <label>Concepto</label><input id="mc-con" placeholder="Ej: depósito al banco, gasolina, cambio de $500">
     <label>¿Para qué se usó?</label><select id="mc-paraque"><option value="">— elige una opción —</option>
@@ -5909,6 +5911,7 @@ function movCaja(){
 async function guardarMovCaja(){
   const monto = +$('mc-monto').value||0;
   if(monto<=0){ toast('Escribe el monto', true); return; }
+  if($('mc-tipo').value!=='entrada' && $('mc-origen') && !$('mc-origen').value){ toast('Dinos DE DÓNDE salió el dinero: del cajón o de la caja fuerte', true); $('mc-origen').focus(); return; } // v194
   if($('mc-tipo').value!=='entrada' && $('mc-paraque') && !$('mc-paraque').value){ toast('Dinos PARA QUÉ se usó (elige una opción)', true); return; }
   let path = null;
   const f = $('mc-file') && $('mc-file').files && $('mc-file').files[0];
