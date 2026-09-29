@@ -8662,12 +8662,15 @@ async function vEstrella(){
         ${esFinanzas()?'<option value="utilidad">Ordenar: más utilidad</option>':''}
         <option value="dias">Ordenar: se acaban primero</option>
       </select>
+      <select id="est-prov" onchange="estPintar()"><option value="">Todos los proveedores</option></select>
       <select id="est-cat" onchange="estPintar()"><option value="">Todas las categorías</option></select>
       <select id="est-top" onchange="estPintar()"><option value="50">Top 50</option><option value="100">Top 100</option><option value="0">Todos</option></select>
       <input type="search" id="est-q" placeholder="Buscar código o descripción" oninput="estPintar()">
+      <label class="small" style="display:flex;gap:4px;align-items:center;margin:0" title="Agrega los productos con existencia que NO se vendieron en el periodo"><input type="checkbox" id="est-sinv" onchange="estPintar()"> incluir lo que no se vendió</label>
       <button class="btn sec sm" onclick="estExcel()">📥 Excel</button>
     </div>
     <div class="kpis" id="est-kpis"></div>
+    <details id="est-provbox" style="margin:0 0 10px" open><summary style="cursor:pointer;font-weight:700">🚚 Ventas por proveedor contra su inventario <span class="small muted">(clic en un proveedor para filtrar)</span></summary><div class="tbl-scroll" id="est-provtbl" style="margin-top:6px"></div></details>
     <p class="small muted" id="est-nota" style="margin:0 0 8px">Cargando ventas...</p>
     <div class="tbl-scroll"><table><thead><tr>
       <th>#</th><th>Producto</th><th class="num">Piezas</th><th class="num">Tickets</th><th class="num">Vendido</th><th class="num">% venta</th><th>Clase</th>
@@ -8681,10 +8684,14 @@ async function vEstrella(){
   else if(per!=='todo'){ dias = +per; desde = new Date(Date.now() - dias*864e5); }
   const mk = () => { let q = sb.from('venta_items').select('producto_id,cantidad,precio_unit,costo_unit,importe,venta_id,ventas!inner(fecha,cancelada,notas,total,descuento)').eq('ventas.cancelada', false);
     if(desde) q = q.gte('ventas.fecha', desde.toISOString()); return q.order('id'); }; // builder nuevo por página (traerTodo pagina)
-  const [items, prods] = await Promise.all([
+  const [items, prods, recs] = await Promise.all([
     traerTodo(mk),
-    traerTodo(()=>sb.from('productos').select('id,codigo,descripcion,categoria,stock,precio,costo,granel,unidad_venta').order('id')),
+    traerTodo(()=>sb.from('productos').select('id,codigo,descripcion,categoria,stock,precio,costo,granel,unidad_venta,activo').order('id')),
+    traerTodo(()=>sb.from('pedido_compra_items').select('producto_id,pedidos_compra(proveedores(nombre))').gt('cantidad_recibida', 0).order('id')), // v195
   ]);
+  const provMap = {}; (recs||[]).forEach(x=>{ const n = x.pedidos_compra && x.pedidos_compra.proveedores && x.pedidos_compra.proveedores.nombre; if(n) provMap[x.producto_id] = n; });
+  const provDe = id => provMap[id] || 'Indar (inventario inicial)';
+
   if(per==='todo'){ const f = (items||[]).reduce((m,x)=>{ const d = new Date(x.ventas.fecha); return (!m || d<m) ? d : m; }, null); dias = f ? Math.max(1, Math.ceil((hoy - f)/864e5)) : 1; }
   const P = new Map((prods||[]).map(p=>[p.id, p]));
   const agg = new Map();
@@ -8702,25 +8709,53 @@ async function vEstrella(){
   const filas = [...agg.values()].map(a=>{ const p = P.get(a.id)||{}; const neto = a.importe/1.16; const util = neto - a.costo;
     const ritmo = a.unidades/dias; const diasStock = ritmo>0 ? (+p.stock||0)/ritmo : null;
     totVenta += a.importe; totUtil += util;
-    return {id:a.id, cod:p.codigo||'?', desc:p.descripcion||'(producto borrado)', cat:p.categoria||'', unidades:a.unidades, tickets:a.tickets.size, importe:a.importe,
+    return {id:a.id, prov:provDe(a.id), costoU:+p.costo||0, cod:p.codigo||'?', desc:p.descripcion||'(producto borrado)', cat:p.categoria||'', unidades:a.unidades, tickets:a.tickets.size, importe:a.importe,
       utilidad:util, margen: neto>0 ? util/neto : null, stock:+p.stock||0, granel:!!p.granel, u:p.unidad_venta||'pza', dias:diasStock, ultima:a.ultima, precio:+p.precio||0}; });
   // clase ABC por importe acumulado
   filas.sort((a,b)=>b.importe-a.importe);
   let acum = 0; filas.forEach(f=>{ acum += f.importe; f.pct = totVenta>0 ? f.importe/totVenta : 0; f.acum = totVenta>0 ? acum/totVenta : 0; f.clase = f.acum<=0.80 ? 'A' : (f.acum<=0.95 ? 'B' : 'C'); });
   const nA = filas.filter(f=>f.clase==='A').length;
-  estData = {filas, totVenta, totUtil, dias, nProd: filas.length, nA, nVentas: new Set((items||[]).map(x=>x.venta_id)).size};
+  // v195: productos con existencia que no se vendieron (para "incluir lo que no se vendió" y el inventario por proveedor)
+  const sinVenta = (prods||[]).filter(p=>p.activo!==false && +p.stock>0 && !agg.has(p.id)).map(p=>({id:p.id, prov:provDe(p.id), costoU:+p.costo||0, cod:p.codigo||'?', desc:p.descripcion||'', cat:p.categoria||'', unidades:0, tickets:0, importe:0, utilidad:0, margen:null, stock:+p.stock||0, granel:!!p.granel, u:p.unidad_venta||'pza', dias:null, ultima:null, precio:+p.precio||0, pct:0, acum:1, clase:'—', sinVenta:true}));
+  const invProv = {}; (prods||[]).filter(p=>p.activo!==false && +p.stock>0).forEach(p=>{ const k = provDe(p.id); if(!invProv[k]) invProv[k]={n:0, valor:0}; invProv[k].n++; invProv[k].valor += (+p.stock)*(+p.costo||0); });
+  estData = {filas, sinVenta, invProv, totVenta, totUtil, dias, nProd: filas.length, nA, nVentas: new Set((items||[]).map(x=>x.venta_id)).size};
+  const provs = [...new Set([...filas.map(f=>f.prov), ...Object.keys(invProv)])].sort();
+  $('est-prov').innerHTML = '<option value="">Todos los proveedores</option>' + provs.map(c=>`<option value="${esc(c)}"${window._estProv===c?' selected':''}>${esc(c)}</option>`).join('');
   const cats = [...new Set(filas.map(f=>f.cat).filter(Boolean))].sort();
   $('est-cat').innerHTML = '<option value="">Todas las categorías</option>' + cats.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('');
   estPintar();
 }
+function estPintarProv(sel){ // v195
+  const el = $('est-provtbl'); if(!el || !estData) return; const D = estData, fin = esFinanzas();
+  const m = {}; D.filas.forEach(f=>{ if(!m[f.prov]) m[f.prov]={v:0,u:0,cv:0,n:0,pz:0}; const g=m[f.prov]; g.v+=f.importe; g.u+=f.utilidad; g.cv+=f.importe/1.16-f.utilidad; g.n++; g.pz+=f.unidades; });
+  Object.keys(D.invProv).forEach(k=>{ if(!m[k]) m[k]={v:0,u:0,cv:0,n:0,pz:0}; });
+  const rows = Object.entries(m).sort((a,b)=>b[1].v-a[1].v);
+  el.innerHTML = `<table><thead><tr><th>Proveedor</th><th class="num">Vendido</th><th class="num">% venta</th><th class="num">Prod. vendidos</th>${fin?'<th class="num">Utilidad</th><th class="num">Margen</th>':''}<th class="num">Con existencia</th>${fin?'<th class="num">Inventario a costo</th><th class="num">Días de inventario</th>':''}<th class="num">Sin venta</th></tr></thead><tbody>
+    ${rows.map(([k,g])=>{ const inv = D.invProv[k]||{n:0,valor:0}; const ns = D.sinVenta.filter(f=>f.prov===k).length; const di = g.cv>0 ? Math.round(inv.valor/(g.cv/D.dias)) : null;
+      return `<tr style="cursor:pointer;${sel===k?'background:#fff7ed;font-weight:700':''}" onclick="$('est-prov').value=${esc(JSON.stringify(sel===k?'':k))}; estPintar()">
+        <td>${esc(k)}</td><td class="num"><b>${fmt(g.v)}</b></td><td class="num small">${D.totVenta>0?(g.v/D.totVenta*100).toFixed(1):0}%</td><td class="num">${g.n}</td>
+        ${fin?`<td class="num">${fmt(g.u)}</td><td class="num">${g.v>0?Math.round(g.u/(g.v/1.16)*100)+'%':'—'}</td>`:''}
+        <td class="num">${inv.n}</td>${fin?`<td class="num">${fmt(inv.valor)}</td><td class="num">${di===null?'<span class="badge b-gris">sin venta</span>':`<span class="badge ${di>120?'b-rojo':(di>60?'b-ambar':'b-verde')}">${di} d</span>`}</td>`:''}
+        <td class="num">${ns}</td></tr>`; }).join('')}
+  </tbody></table><p class="small muted" style="margin:4px 0 0">Proveedor = el último que nos surtió cada producto (lo que no ha entrado por un pedido cuenta como "Indar (inventario inicial)"). Días de inventario = lo que tienes a costo ÷ lo que vendes a costo por día. Menos de 60 d bien, más de 120 d es mercancía que está durmiendo.</p>`;
+}
 function estPintar(){
   if(!estData) return;
   const D = estData, orden = $('est-orden').value, cat = $('est-cat').value, top = +$('est-top').value, q = String($('est-q').value||'').toLowerCase().trim();
-  let vis = D.filas.filter(f => (!cat || f.cat===cat) && (!q || codMatch(f.cod, q) || f.desc.toLowerCase().includes(q)));
+  const prov = ($('est-prov')||{}).value||''; window._estProv = prov; const conSin = ($('est-sinv')||{}).checked;
+  let vis = (conSin ? D.filas.concat(D.sinVenta) : D.filas).filter(f => (!prov || f.prov===prov) && (!cat || f.cat===cat) && (!q || codMatch(f.cod, q) || f.desc.toLowerCase().includes(q)));
+  estPintarProv(prov);
   const key = {importe:f=>f.importe, unidades:f=>f.unidades, tickets:f=>f.tickets, utilidad:f=>f.utilidad, dias:f=>-(f.dias===null?1e9:f.dias)}[orden] || (f=>f.importe);
   vis.sort((a,b)=>key(b)-key(a));
   const total = vis.length; if(top>0) vis = vis.slice(0, top);
   const kA = D.filas.filter(f=>f.clase==='A');
+  if(prov){ const fs = D.filas.filter(f=>f.prov===prov); const v = fs.reduce((s,f)=>s+f.importe,0), u = fs.reduce((s,f)=>s+f.utilidad,0), cv = fs.reduce((s,f)=>s+(f.importe/1.16-f.utilidad),0), inv = (D.invProv[prov]||{}).valor||0, ni = (D.invProv[prov]||{}).n||0, ns = D.sinVenta.filter(f=>f.prov===prov).length;
+    $('est-kpis').innerHTML = `
+    <div class="kpi"><div class="l">${esc(prov)} · vendido</div><div class="v">${fmt(v)}</div><div class="s">${fs.length} productos vendidos · ${D.totVenta>0?(v/D.totVenta*100).toFixed(1):0}% de toda la venta</div></div>
+    ${esFinanzas()?`<div class="kpi" style="border-top-color:var(--verde)"><div class="l">Utilidad</div><div class="v">${fmt(u)}</div><div class="s">margen ${v>0?Math.round(u/(v/1.16)*100):0}% s/venta sin IVA</div></div>
+    <div class="kpi" style="border-top-color:#2563eb"><div class="l">Inventario a costo (sin IVA)</div><div class="v">${fmt(inv)}</div><div class="s">${ni} productos con existencia · ${ns} sin venta en el periodo</div></div>
+    <div class="kpi" style="border-top-color:#d97706"><div class="l">Días de inventario</div><div class="v">${cv>0?Math.round(inv/(cv/D.dias))+' d':'—'}</div><div class="s">al ritmo de venta del periodo · vendido a costo ${fmt(cv)}</div></div>`:''}`;
+  } else
   $('est-kpis').innerHTML = `
     <div class="kpi"><div class="l">Vendido en el periodo</div><div class="v">${fmt(D.totVenta)}</div><div class="s">${D.nVentas} tickets · ${D.dias} días · ${fmt(D.totVenta/D.dias)}/día</div></div>
     <div class="kpi" style="border-top-color:#d97706"><div class="l">⭐ Productos clase A</div><div class="v">${D.nA}</div><div class="s">de ${D.nProd} vendidos · juntan el 80% de la venta</div></div>
@@ -8733,12 +8768,12 @@ function estPintar(){
     const bd = f.dias===null ? '' : (f.dias<7 ? 'b-rojo' : (f.dias<14 ? 'b-ambar' : ''));
     return `<tr>
       <td class="small muted">${i+1}</td>
-      <td><b>${esc(f.cod)}</b><div class="small muted">${esc(f.desc.slice(0,48))}${f.cat?' · '+esc(f.cat):''}</div></td>
+      <td><b>${esc(f.cod)}</b><div class="small muted">${esc(f.desc.slice(0,48))}${f.cat?' · '+esc(f.cat):''} · ${esc(f.prov||'')}</div></td>
       <td class="num">${Math.round(f.unidades*100)/100}${f.granel?' <span class="small muted">'+esc(f.u)+'</span>':''}</td>
       <td class="num">${f.tickets}</td>
       <td class="num"><b>${fmt(f.importe)}</b></td>
       <td class="num small">${(f.pct*100).toFixed(1)}%</td>
-      <td><span class="badge ${bC[f.clase]}">${f.clase}</span></td>
+      <td>${f.sinVenta?'<span class="badge b-rojo">sin venta</span>':`<span class="badge ${bC[f.clase]}">${f.clase}</span>`}</td>
       ${esFinanzas()?`<td class="num">${fmt(f.utilidad)}</td><td class="num"><span class="badge ${f.margen===null?'b-gris':(f.margen>=0.35?'b-verde':(f.margen>=0.25?'b-ambar':'b-rojo'))}">${f.margen===null?'—':Math.round(f.margen*100)+'%'}</span></td>`:''}
       <td class="num">${f.stock}${f.stock<=0?' <span class="badge b-rojo">agotado</span>':''}</td>
       <td class="num">${bd?`<span class="badge ${bd}">${dias}</span>`:dias}</td>
@@ -8747,12 +8782,16 @@ function estPintar(){
 function estExcel(){
   if(!estData || !estData.filas.length){ toast('No hay datos que exportar', true); return; }
   const fin = esFinanzas();
-  const rows = estData.filas.map((f,i)=>{ const r = {'#':i+1, 'Código':f.cod, 'Producto':f.desc, 'Categoría':f.cat, 'Piezas':Math.round(f.unidades*100)/100, 'Tickets':f.tickets,
+  const prov = ($('est-prov')||{}).value||'', conSin = ($('est-sinv')||{}).checked;
+  const base = (conSin ? estData.filas.concat(estData.sinVenta) : estData.filas).filter(f=>!prov || f.prov===prov);
+  const rows = base.map((f,i)=>{ const r = {'#':i+1, 'Código':f.cod, 'Producto':f.desc, 'Proveedor':f.prov, 'Categoría':f.cat, 'Piezas':Math.round(f.unidades*100)/100, 'Tickets':f.tickets,
     'Vendido (c/IVA)':Math.round(f.importe*100)/100, '% de la venta':Math.round(f.pct*1000)/10, '% acumulado':Math.round(f.acum*1000)/10, 'Clase':f.clase};
     if(fin){ r['Utilidad']=Math.round(f.utilidad*100)/100; r['Margen % s/venta']=f.margen===null?'':Math.round(f.margen*1000)/10; }
-    r['Stock']=f.stock; r['Se acaba en (días)']=f.dias===null?'':Math.round(f.dias); r['Última venta']=f.ultima?String(f.ultima).slice(0,10):''; r['Precio actual']=f.precio; return r; });
-  const ws = XLSX.utils.json_to_sheet(rows); const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Productos estrella');
-  XLSX.writeFile(wb, 'Productos_estrella_'+(window._estPer||'60')+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
+    r['Stock']=f.stock; if(fin) r['Inventario a costo']=Math.round(f.stock*(f.costoU||0)*100)/100; r['Se acaba en (días)']=f.dias===null?'':Math.round(f.dias); r['Última venta']=f.ultima?String(f.ultima).slice(0,10):''; r['Precio actual']=f.precio; return r; });
+  const ws = XLSX.utils.json_to_sheet(rows); const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Productos');
+  const m = {}; estData.filas.forEach(f=>{ if(!m[f.prov]) m[f.prov]={v:0,u:0,cv:0,n:0}; m[f.prov].v+=f.importe; m[f.prov].u+=f.utilidad; m[f.prov].cv+=f.importe/1.16-f.utilidad; m[f.prov].n++; }); Object.keys(estData.invProv).forEach(k=>{ if(!m[k]) m[k]={v:0,u:0,cv:0,n:0}; });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(Object.entries(m).sort((a,b)=>b[1].v-a[1].v).map(([k,g])=>{ const inv=estData.invProv[k]||{n:0,valor:0}; const o={'Proveedor':k,'Vendido (c/IVA)':Math.round(g.v*100)/100,'Productos vendidos':g.n,'Con existencia':inv.n,'Sin venta':estData.sinVenta.filter(f=>f.prov===k).length}; if(fin){ o['Utilidad']=Math.round(g.u*100)/100; o['Inventario a costo']=Math.round(inv.valor*100)/100; o['Días de inventario']=g.cv>0?Math.round(inv.valor/(g.cv/estData.dias)):''; } return o; })), 'Por proveedor');
+  XLSX.writeFile(wb, 'Productos_estrella_'+(prov?prov.replace(/[^A-Za-z0-9]+/g,'_')+'_':'')+(window._estPer||'60')+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
 }
 
 /* ============================================================
