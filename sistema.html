@@ -182,6 +182,7 @@ tr.oculto,tr.plegado{display:none}
       <div id="v-catalogo" class="view"></div>
       <div id="v-inventario" class="view"></div>
       <div id="v-estrella" class="view"></div>
+      <div id="v-dormida" class="view"></div>
       <div id="v-clientes" class="view"></div>
       <div id="v-pedidos" class="view"></div>
       <div id="v-apartados" class="view"></div>
@@ -338,6 +339,7 @@ const VISTAS = [
   {id:'catalogo',   icono:'🗂', titulo:'Catálogo',   roles:['admin','vendedor','consulta']},
   {id:'inventario', icono:'📦', titulo:'Inventario', roles:['admin','vendedor','consulta','contador']},
   {id:'estrella',   icono:'⭐', titulo:'Productos estrella', roles:['admin','vendedor','consulta','contador']}, // v172
+  {id:'dormida',    icono:'💤', titulo:'Mercancía dormida', roles:['admin','vendedor','consulta','contador']}, // v196
   {id:'clientes',   icono:'👥', titulo:'Clientes',   roles:['admin','vendedor','consulta']},
   {id:'pedidos',    icono:'🚚', titulo:'Pedidos a proveedor', roles:['admin','vendedor','consulta','contador']},
   {id:'apartados',  icono:'🔖', titulo:'Apartados',  roles:['admin','vendedor','consulta','contador']},
@@ -365,7 +367,7 @@ async function irA(id){
   $('sidebar').classList.remove('open');
   try{ localStorage.setItem('ax_vista', id); }catch(e){}
   logEv('vista', id);
-  try { await ({resumen:vResumen, ventas:vVentas, cotizaciones:vCotizaciones, catalogo:vCatalogo, inventario:vInventario, estrella:vEstrella, clientes:vClientes,
+  try { await ({resumen:vResumen, ventas:vVentas, cotizaciones:vCotizaciones, catalogo:vCatalogo, inventario:vInventario, estrella:vEstrella, dormida:vDormida, clientes:vClientes,
     pedidos:vPedidos, apartados:vApartados, devoluciones:vDevoluciones, caja:vCaja, finanzas:vFinanzas, usuarios:vUsuarios, importar:vImportar, actividad:vActividad})[id](); }
   catch(e){ toast(errMsg(e), true); }
 }
@@ -8792,6 +8794,194 @@ function estExcel(){
   const m = {}; estData.filas.forEach(f=>{ if(!m[f.prov]) m[f.prov]={v:0,u:0,cv:0,n:0}; m[f.prov].v+=f.importe; m[f.prov].u+=f.utilidad; m[f.prov].cv+=f.importe/1.16-f.utilidad; m[f.prov].n++; }); Object.keys(estData.invProv).forEach(k=>{ if(!m[k]) m[k]={v:0,u:0,cv:0,n:0}; });
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(Object.entries(m).sort((a,b)=>b[1].v-a[1].v).map(([k,g])=>{ const inv=estData.invProv[k]||{n:0,valor:0}; const o={'Proveedor':k,'Vendido (c/IVA)':Math.round(g.v*100)/100,'Productos vendidos':g.n,'Con existencia':inv.n,'Sin venta':estData.sinVenta.filter(f=>f.prov===k).length}; if(fin){ o['Utilidad']=Math.round(g.u*100)/100; o['Inventario a costo']=Math.round(inv.valor*100)/100; o['Días de inventario']=g.cv>0?Math.round(inv.valor/(g.cv/estData.dias)):''; } return o; })), 'Por proveedor');
   XLSX.writeFile(wb, 'Productos_estrella_'+(prov?prov.replace(/[^A-Za-z0-9]+/g,'_')+'_':'')+(window._estPer||'60')+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
+}
+
+/* ============================================================
+   VISTA: 💤 MERCANCÍA DORMIDA (v196, 29-sep-2026)
+   Lo que tiene existencia y no se vende: nunca vendido o N días sin venta.
+   Sugiere precio de promoción SIN bajar del costo (piso = costo + IVA + margen mínimo).
+   NO cambia precios: solo arma el folleto (imagen) y el texto para WhatsApp.
+   ============================================================ */
+let dormData = null;
+function dormExcl(){ try{ return new Set(JSON.parse(localStorage.getItem('ax_dorm_excl')||'[]')); }catch(e){ return new Set(); } }
+function dormExclToggle(id){ const s = dormExcl(); s.has(id) ? s.delete(id) : s.add(id); try{ localStorage.setItem('ax_dorm_excl', JSON.stringify([...s])); }catch(e){} if(window._dormSel) window._dormSel.delete(id); dormPintar(); }
+async function vDormida(){
+  if(!window._dormSel) window._dormSel = new Set();
+  const o = window._dormOpt || {min:'60', desc:'15', piso:'5'};
+  $('v-dormida').innerHTML = `<div class="card">
+    <div class="toolbar" style="margin-bottom:10px">
+      <select id="dm-min" onchange="dormPintar()">
+        <option value="nunca"${o.min==='nunca'?' selected':''}>Solo lo que NUNCA se ha vendido (30+ días en tienda)</option>
+        <option value="60"${o.min==='60'?' selected':''}>Sin venta 60+ días (y lo nunca vendido)</option>
+        <option value="90"${o.min==='90'?' selected':''}>Sin venta 90+ días (y lo nunca vendido)</option>
+        <option value="180"${o.min==='180'?' selected':''}>Sin venta 180+ días (y lo nunca vendido)</option>
+      </select>
+      <select id="dm-prov" onchange="dormPintar()"><option value="">Todos los proveedores</option></select>
+      <select id="dm-cat" onchange="dormPintar()"><option value="">Todas las categorías</option></select>
+      <input type="search" id="dm-q" placeholder="Buscar código o descripción" oninput="dormPintar()">
+      <label class="small muted" style="margin:0">Descuento</label>
+      <select id="dm-desc" onchange="dormPintar()">${[10,15,20,25,30,40,50].map(d=>`<option value="${d}"${+o.desc===d?' selected':''}>${d}%</option>`).join('')}</select>
+      <label class="small muted" style="margin:0" title="La promoción nunca baja de costo + IVA + este margen">Piso</label>
+      <select id="dm-piso" onchange="dormPintar()">${[0,5,10,15].map(d=>`<option value="${d}"${+o.piso===d?' selected':''}>costo +${d}%</option>`).join('')}</select>
+      <label class="small" style="display:flex;gap:4px;align-items:center;margin:0"><input type="checkbox" id="dm-verexcl" onchange="dormPintar()"> ver ocultos</label>
+    </div>
+    <div class="kpis" id="dm-kpis"></div>
+    <div class="toolbar" style="margin:8px 0">
+      <b id="dm-nsel">0 seleccionados</b>
+      <button class="btn sm" onclick="dormFolleto()">🖼 Folleto (imagen)</button>
+      <button class="btn sm sec" onclick="dormTextoWA()">💬 Texto para WhatsApp</button>
+      <button class="btn sm sec" onclick="dormSelTodo(true)">☑ Seleccionar los visibles</button>
+      <button class="btn sm sec" onclick="dormSelTodo(false)">☐ Quitar selección</button>
+      <button class="btn sm sec" onclick="dormExcel()">📥 Excel</button>
+    </div>
+    <p class="small muted" id="dm-nota" style="margin:0 0 8px">Cargando inventario y ventas...</p>
+    <div class="tbl-scroll"><table><thead><tr>
+      <th></th><th>Producto</th><th class="num">Stock</th>${esFinanzas()?'<th class="num">Inv. a costo</th>':''}<th>Última venta</th><th class="num">Días dormido</th>
+      <th class="num">Precio</th><th class="num">Promo sugerida</th>${esFinanzas()?'<th class="num">Margen promo</th>':''}<th></th></tr></thead>
+      <tbody id="dm-tbody"></tbody></table></div>
+  </div>`;
+  const [items, prods, recs] = await Promise.all([
+    traerTodo(()=>sb.from('venta_items').select('producto_id,ventas!inner(fecha,cancelada,notas)').eq('ventas.cancelada', false).not('producto_id','is',null).order('id')),
+    traerTodo(()=>sb.from('productos').select('id,codigo,descripcion,categoria,stock,precio,costo,granel,unidad_venta,activo').gt('stock', 0).order('id')),
+    traerTodo(()=>sb.from('pedido_compra_items').select('producto_id,pedidos_compra(fecha,fecha_recibido,proveedores(nombre))').gt('cantidad_recibida', 0).order('id')),
+  ]);
+  const ult = {}; let inicio = null;
+  (items||[]).forEach(x=>{ const v = x.ventas||{}; if(/CONSUMO PROPIO/i.test(v.notas||'')) return; if(!ult[x.producto_id] || v.fecha > ult[x.producto_id]) ult[x.producto_id] = v.fecha; if(!inicio || v.fecha < inicio) inicio = v.fecha; });
+  const ent = {}, prov = {};
+  (recs||[]).forEach(x=>{ const p = x.pedidos_compra||{}; const f = p.fecha_recibido || p.fecha; if(f && (!ent[x.producto_id] || f > ent[x.producto_id])){ ent[x.producto_id] = f; if(p.proveedores && p.proveedores.nombre) prov[x.producto_id] = p.proveedores.nombre; } });
+  const hoy = Date.now(), dd = f => Math.max(0, Math.floor((hoy - new Date(f).getTime())/864e5));
+  const filas = (prods||[]).filter(p=>p.activo!==false && +p.stock>0).map(p=>{
+    const u = ult[p.id] || null, e = ent[p.id] || null;
+    const ref = [u, e].filter(Boolean).sort().pop() || inicio; // dormido desde la última venta o la última entrada (lo más reciente)
+    return {id:p.id, cod:p.codigo||'?', desc:p.descripcion||'', cat:p.categoria||'', stock:+p.stock, precio:+p.precio||0, costo:+p.costo||0, granel:!!p.granel, u:p.unidad_venta||'pza',
+      prov: prov[p.id] || 'Indar (inventario inicial)', ultima:u, entrada:e, nunca:!u, dias: ref ? dd(ref) : null};
+  });
+  dormData = {filas, inicio};
+  const provs = [...new Set(filas.map(f=>f.prov))].sort(), cats = [...new Set(filas.map(f=>f.cat).filter(Boolean))].sort();
+  $('dm-prov').innerHTML = '<option value="">Todos los proveedores</option>' + provs.map(c=>`<option value="${esc(c)}"${o.prov===c?' selected':''}>${esc(c)}</option>`).join('');
+  $('dm-cat').innerHTML = '<option value="">Todas las categorías</option>' + cats.map(c=>`<option value="${esc(c)}"${o.cat===c?' selected':''}>${esc(c)}</option>`).join('');
+  dormPintar();
+}
+function dormRedondea(x, arriba){ const paso = x < 20 ? 0.5 : 1; return (arriba ? Math.ceil(x/paso - 1e-9) : Math.floor(x/paso + 1e-9)) * paso; }
+function dormPromo(f, desc, piso){ // precios con IVA; costo sin IVA
+  const minimo = f.costo > 0 ? dormRedondea(f.costo*1.16*(1+piso/100), true) : 0;
+  const propuesto = dormRedondea(f.precio*(1-desc/100), false);
+  if(!(f.precio > 0)) return {promo:null, estado:'sinprecio'};
+  if(minimo >= f.precio) return {promo:null, estado:'sinmargen', minimo};
+  if(propuesto < minimo) return {promo:minimo, estado:'topado', minimo};
+  return {promo:propuesto, estado:'ok', minimo};
+}
+function dormVisibles(){
+  if(!dormData) return [];
+  const min = $('dm-min').value, pv = $('dm-prov').value, cat = $('dm-cat').value, q = String($('dm-q').value||'').toLowerCase().trim();
+  const desc = +$('dm-desc').value, piso = +$('dm-piso').value, verEx = $('dm-verexcl').checked, ex = dormExcl();
+  window._dormOpt = {min, prov:pv, cat, desc:String(desc), piso:String(piso)};
+  const lim = min==='nunca' ? 30 : +min; // lo que nunca se ha vendido pero acaba de llegar (menos de 30 días) todavía no se promociona
+  return dormData.filas.filter(f => (f.nunca ? (f.dias===null || f.dias >= Math.min(30, lim)) : (min!=='nunca' && f.dias!==null && f.dias >= lim))
+      && (!pv || f.prov===pv) && (!cat || f.cat===cat) && (!q || codMatch(f.cod, q) || f.desc.toLowerCase().includes(q)) && (verEx ? ex.has(f.id) : !ex.has(f.id)))
+    .map(f=>Object.assign({}, f, dormPromo(f, desc, piso), {valor: f.stock*f.costo}))
+    .sort((a,b)=>b.valor-a.valor || (b.dias||0)-(a.dias||0));
+}
+function dormPintar(){
+  if(!dormData) return;
+  const vis = dormVisibles(), fin = esFinanzas(), sel = window._dormSel;
+  window._dormVis = vis;
+  const valor = vis.reduce((s,f)=>s+f.valor,0), nNunca = vis.filter(f=>f.nunca).length, vPromo = vis.filter(f=>f.promo).reduce((s,f)=>s+f.promo*f.stock,0);
+  const totInv = dormData.filas.reduce((s,f)=>s+f.stock*f.costo,0);
+  $('dm-kpis').innerHTML = `
+    <div class="kpi"><div class="l">Productos dormidos</div><div class="v">${vis.length}</div><div class="s">${nNunca} nunca se han vendido · lo que llegó hace menos de 30 días no cuenta</div></div>
+    ${fin?`<div class="kpi" style="border-top-color:var(--rojo)"><div class="l">Dinero parado (a costo, sin IVA)</div><div class="v">${fmt(valor)}</div><div class="s">${totInv>0?Math.round(valor/totInv*100):0}% de todo tu inventario (${fmt(totInv)})</div></div>
+    <div class="kpi" style="border-top-color:var(--verde)"><div class="l">Si se vende todo en promoción</div><div class="v">${fmt(vPromo)}</div><div class="s">con IVA · nunca abajo del piso</div></div>`:''}
+    <div class="kpi" style="border-top-color:#2563eb"><div class="l">En el folleto</div><div class="v">${sel.size}</div><div class="s">seleccionados</div></div>`;
+  $('dm-nsel').textContent = sel.size + ' seleccionado(s)';
+  $('dm-nota').textContent = `Días dormido = desde la última venta o la última vez que entró mercancía (lo más reciente). Promo = precio − ${$('dm-desc').value}% redondeado, pero NUNCA abajo de costo + IVA + ${$('dm-piso').value}%. El sistema NO cambia ningún precio: en caja se cobra con el descuento del ticket. "🚫" oculta algo que no es mercancía (ganchos, mobiliario) — se recuerda en esta computadora.`;
+  const bE = {ok:'', topado:'<div class="small" style="color:var(--ambar)">topado en el piso</div>', sinmargen:'<span class="badge b-gris">sin margen</span>', sinprecio:'<span class="badge b-gris">sin precio</span>'};
+  $('dm-tbody').innerHTML = vis.slice(0, 400).map(f=>{
+    const m = f.promo ? (f.promo/1.16 - f.costo)/(f.promo/1.16) : null;
+    return `<tr${sel.has(f.id)?' style="background:#fff7ed"':''}>
+      <td><input type="checkbox" ${sel.has(f.id)?'checked':''} ${f.promo?'':'disabled'} onchange="dormSel(${f.id}, this.checked)"></td>
+      <td><b>${esc(f.cod)}</b><div class="small muted">${esc(f.desc.slice(0,60))}${f.cat?' · '+esc(f.cat):''} · ${esc(f.prov)}</div></td>
+      <td class="num">${Math.round(f.stock*100)/100}${f.granel?' <span class="small muted">'+esc(f.u)+'</span>':''}</td>
+      ${fin?`<td class="num">${fmt(f.valor)}</td>`:''}
+      <td class="small">${f.nunca?'<span class="badge b-rojo">nunca</span>':fecha(String(f.ultima).slice(0,10))}</td>
+      <td class="num">${f.dias===null?'—':`<span class="badge ${f.dias>=180?'b-rojo':(f.dias>=90?'b-ambar':'b-gris')}">${f.dias} d</span>`}</td>
+      <td class="num">${fmt(f.precio)}</td>
+      <td class="num">${f.promo?`<b style="color:var(--rojo-d)">${fmt(f.promo)}</b>`:''}${bE[f.estado]||''}</td>
+      ${fin?`<td class="num">${m===null?'—':`<span class="badge ${m>=0.25?'b-verde':(m>=0.10?'b-ambar':'b-rojo')}">${Math.round(m*100)}%</span>`}</td>`:''}
+      <td><button class="btn sm sec" title="${$('dm-verexcl').checked?'Volver a mostrar':'No es mercancía / no promocionar: ocultar'}" onclick="dormExclToggle(${f.id})">${$('dm-verexcl').checked?'↩️':'🚫'}</button></td></tr>`; }).join('')
+    + (vis.length>400?`<tr><td colspan="10" class="small muted">Mostrando 400 de ${vis.length} (los de más dinero parado). Usa filtros o el Excel para ver todos.</td></tr>`:'')
+    || '<tr><td colspan="10" class="muted">Nada dormido con estos filtros 👍</td></tr>';
+}
+function dormSel(id, on){ const s = window._dormSel; on ? s.add(id) : s.delete(id); dormPintar(); }
+function dormSelTodo(on){ const s = window._dormSel; if(!on){ s.clear(); } else { (window._dormVis||[]).filter(f=>f.promo).slice(0, 48).forEach(f=>s.add(f.id)); if((window._dormVis||[]).filter(f=>f.promo).length>48) toast('Seleccioné los primeros 48 (8 folletos de 6)'); } dormPintar(); }
+function dormSeleccion(){ // con el descuento/piso actuales
+  const desc = +$('dm-desc').value, piso = +$('dm-piso').value, sel = window._dormSel;
+  return dormData ? dormData.filas.filter(f=>sel.has(f.id)).map(f=>Object.assign({}, f, dormPromo(f, desc, piso))).filter(f=>f.promo) : [];
+}
+function dormVigencia(){ const d = new Date(); d.setDate(d.getDate()+14); return d.toLocaleDateString('es-MX',{day:'numeric', month:'long'}); }
+function dormTextoWA(){
+  const s = dormSeleccion(); if(!s.length){ toast('Selecciona productos primero', true); return; }
+  const msg = `🔥 *PROMOCIONES AXION TOOLS* 🔥\nMateriales y Ferretería · Disensa\n\n` + s.map(f=>`▪️ ${f.desc}\n   ~$${f.precio.toFixed(2)}~ 👉 *$${f.promo.toFixed(2)}*${f.granel?' / '+f.u:''}`).join('\n\n')
+    + `\n\n✅ Válido hasta el ${dormVigencia()} o hasta agotar existencias.\n📍 Av. Fidel Velázquez Sánchez 788, Santa Elena Estadio, Gdl\n📞 33 1010 7423 · axiontools.mx`;
+  abrirModal(`<h3>💬 Texto para WhatsApp</h3><textarea id="dm-wa" style="width:100%;height:320px;font-family:inherit;padding:8px">${esc(msg)}</textarea>
+    <div class="toolbar" style="margin-top:8px"><button class="btn" onclick="navigator.clipboard.writeText($('dm-wa').value).then(()=>toast('Copiado ✓'))">📋 Copiar</button>
+    <button class="btn sec" onclick="window.open('https://wa.me/?text='+encodeURIComponent($('dm-wa').value),'_blank')">Abrir WhatsApp</button><button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
+  logEv('promo', 'Texto WhatsApp: '+s.length+' productos');
+}
+function dormLineas(ctx, txt, maxW, maxL){ const pal = String(txt).split(/\s+/); const out = []; let l = '';
+  for(const p of pal){ const t = l ? l+' '+p : p; if(ctx.measureText(t).width > maxW && l){ out.push(l); l = p; if(out.length===maxL) break; } else l = t; }
+  if(out.length<maxL && l) out.push(l); if(out.length===maxL && pal.join(' ').length > out.join(' ').length){ let u = out[maxL-1]; while(ctx.measureText(u+'…').width>maxW && u.length) u = u.slice(0,-1); out[maxL-1] = u+'…'; }
+  return out; }
+function dormPagina(prods, pag, npag){
+  const W = 1080, H = 1350, c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d');
+  const NAR = '#E8790F', TIN = '#26292b', F = 'Segoe UI, Arial, sans-serif';
+  x.fillStyle = '#f5f1e8'; x.fillRect(0,0,W,H);
+  x.fillStyle = TIN; x.fillRect(0,0,W,190); x.fillStyle = NAR; x.fillRect(0,190,W,14);
+  x.fillStyle = '#fff'; x.font = `800 64px ${F}`; x.textAlign = 'left'; x.fillText('AXION TOOLS', 50, 95);
+  x.font = `500 28px ${F}`; x.fillStyle = '#e5e7eb'; x.fillText('Materiales y Ferretería · Disensa', 52, 145);
+  x.fillStyle = NAR; x.beginPath(); x.roundRect ? x.roundRect(700, 55, 330, 90, 45) : x.rect(700,55,330,90); x.fill();
+  x.fillStyle = '#fff'; x.font = `900 46px ${F}`; x.textAlign = 'center'; x.fillText('¡PROMOCIÓN!', 865, 117);
+  const cw = 480, ch = 295, gx = 40, gy = 22, x0 = (W - 2*cw - gx)/2, y0 = 232;
+  prods.forEach((f,i)=>{ const cx = x0 + (i%2)*(cw+gx), cy = y0 + Math.floor(i/2)*(ch+gy);
+    x.fillStyle = '#fff'; x.beginPath(); x.roundRect ? x.roundRect(cx, cy, cw, ch, 22) : x.rect(cx,cy,cw,ch); x.fill();
+    x.strokeStyle = '#e7e2d8'; x.lineWidth = 3; x.stroke();
+    const pct = Math.round((1 - f.promo/f.precio)*100);
+    x.fillStyle = '#dc2626'; x.beginPath(); x.roundRect ? x.roundRect(cx+cw-130, cy+18, 112, 50, 25) : x.rect(cx+cw-130,cy+18,112,50); x.fill();
+    x.fillStyle = '#fff'; x.font = `800 30px ${F}`; x.textAlign = 'center'; x.fillText('-'+pct+'%', cx+cw-74, cy+54);
+    x.textAlign = 'left'; x.fillStyle = TIN; x.font = `700 30px ${F}`;
+    dormLineas(x, f.desc, cw-60, 3).forEach((l,k)=>x.fillText(l, cx+28, cy+ (k===0?105:105+k*38)));
+    x.font = `500 22px ${F}`; x.fillStyle = '#6b7280'; x.fillText('Código '+f.cod, cx+28, cy+ch-110);
+    const antes = 'Antes $'+f.precio.toFixed(2); x.font = `500 28px ${F}`; x.fillStyle = '#6b7280'; x.fillText(antes, cx+28, cy+ch-62);
+    const aw = x.measureText(antes).width; x.strokeStyle = '#dc2626'; x.lineWidth = 3; x.beginPath(); x.moveTo(cx+24, cy+ch-72); x.lineTo(cx+32+aw, cy+ch-72); x.stroke();
+    x.fillStyle = NAR; x.font = `900 60px ${F}`; x.textAlign = 'right'; x.fillText('$'+(f.promo%1?f.promo.toFixed(2):f.promo.toFixed(0)), cx+cw-26, cy+ch-26);
+    if(f.granel){ x.font = `600 22px ${F}`; x.fillStyle = '#6b7280'; x.fillText('por '+f.u, cx+cw-26, cy+ch-92); }
+    x.textAlign = 'left'; });
+  x.fillStyle = TIN; x.fillRect(0, H-150, W, 150);
+  x.fillStyle = '#fff'; x.font = `700 30px ${F}`; x.textAlign = 'center'; x.fillText('Av. Fidel Velázquez Sánchez 788 · Santa Elena Estadio · Gdl', W/2, H-95);
+  x.font = `600 28px ${F}`; x.fillStyle = NAR; x.fillText('📞 33 1010 7423   ·   axiontools.mx', W/2, H-52);
+  x.font = `500 20px ${F}`; x.fillStyle = '#9ca3af'; x.fillText(`Válido hasta el ${dormVigencia()} o hasta agotar existencias · Precios con IVA${npag>1?'   ·   '+pag+'/'+npag:''}`, W/2, H-18);
+  return c.toDataURL('image/png');
+}
+function dormFolleto(){
+  const s = dormSeleccion(); if(!s.length){ toast('Selecciona productos primero (los que tienen promo)', true); return; }
+  const pags = []; for(let i=0;i<s.length;i+=6) pags.push(s.slice(i,i+6));
+  const imgs = pags.map((p,i)=>dormPagina(p, i+1, pags.length)); window._dormImgs = imgs;
+  const hoy = new Date().toISOString().slice(0,10);
+  abrirModal(`<h3>🖼 Folleto · ${s.length} producto(s) · ${imgs.length} imagen(es)</h3>
+    <p class="small muted">Descárgalas y mándalas por WhatsApp / estados / Facebook, o imprímelas para el mostrador. Vigencia: 14 días.</p>
+    <div style="display:flex;flex-wrap:wrap;gap:10px;max-height:60vh;overflow:auto">${imgs.map((u,i)=>`<div style="text-align:center"><img src="${u}" style="width:260px;border:1px solid var(--linea);border-radius:8px"><br>
+      <a class="btn sm" download="Promo_Axion_${hoy}_${i+1}.png" href="${u}">📥 Imagen ${i+1}</a></div>`).join('')}</div>
+    <div class="toolbar" style="margin-top:10px"><button class="btn" onclick="dormBajarTodas()">📥 Bajar todas</button><button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
+  logEv('promo', 'Folleto: '+s.length+' productos, '+imgs.length+' imágenes');
+}
+function dormBajarTodas(){ const hoy = new Date().toISOString().slice(0,10); (window._dormImgs||[]).forEach((u,i)=>setTimeout(()=>{ const a = document.createElement('a'); a.href = u; a.download = `Promo_Axion_${hoy}_${i+1}.png`; document.body.appendChild(a); a.click(); a.remove(); }, i*400)); }
+async function dormExcel(){
+  const vis = window._dormVis||[]; if(!vis.length){ toast('No hay nada que exportar', true); return; }
+  if(!(await asegurarXLSX())) return; const fin = esFinanzas();
+  const rows = vis.map(f=>{ const o = {'Código':f.cod, 'Producto':f.desc, 'Proveedor':f.prov, 'Categoría':f.cat, 'Stock':f.stock, 'Última venta':f.ultima?String(f.ultima).slice(0,10):'NUNCA', 'Última entrada':f.entrada?String(f.entrada).slice(0,10):'', 'Días dormido':f.dias===null?'':f.dias, 'Precio':f.precio, 'Promo sugerida':f.promo||'', 'Nota':{topado:'topado en el piso', sinmargen:'sin margen', sinprecio:'sin precio'}[f.estado]||''};
+    if(fin){ o['Costo (sin IVA)'] = f.costo; o['Inventario a costo'] = Math.round(f.valor*100)/100; o['Margen promo %'] = f.promo ? Math.round((f.promo/1.16 - f.costo)/(f.promo/1.16)*1000)/10 : ''; } return o; });
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Mercancía dormida');
+  XLSX.writeFile(wb, 'Mercancia_dormida_'+new Date().toISOString().slice(0,10)+'.xlsx'); logEv('descarga', 'Excel mercancía dormida: '+rows.length);
 }
 
 /* ============================================================
