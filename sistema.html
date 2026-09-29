@@ -5897,22 +5897,43 @@ async function borrarMovCaja(id){
 }
 function movCaja(){
   abrirModal(`<h3>Retiro, gasto o entrada de efectivo</h3>
-    <label>Tipo</label><select id="mc-tipo"><option value="retiro">💸 Retiro (a bóveda / depósito)</option><option value="gasto">🧾 Gasto pagado de la caja</option><option value="entrada">➕ Entrada de efectivo</option></select>
+    <label>Tipo</label><select id="mc-tipo" onchange="mcAutVer()"><option value="retiro">💸 Retiro (a bóveda / depósito)</option><option value="gasto">🧾 Gasto pagado de la caja</option><option value="entrada">➕ Entrada de efectivo</option></select>
+    ${esAdmin()?'':`<div id="mc-autbox" style="display:none;margin:6px 0;padding:9px;border:2px solid #d97706;border-radius:8px;background:#fffbeb">
+      <label style="margin-top:0">¿Qué gasto es? (sin autorización solo se permiten estos dos)</label>
+      <select id="mc-aut"><option value="">— elige —</option><option value="basura">🗑️ Basura (máximo $20)</option><option value="aseo">🧹 Sueldo de aseo (máximo $800, una vez por semana)</option></select>
+      <p class="small" style="margin:6px 0 0">¿Otra cosa (agua, focos, material, comida…)? <b>Primero pídela en “🛠️ Necesito algo”</b>. Cuando Andrés la apruebe, se registra desde ahí con su ticket. El consumo del personal no sale de la caja.</p></div>`}
     <label>¿De dónde salió el dinero?</label><select id="mc-origen" style="border:2px solid #d97706"><option value="">— elige: ¿cajón o caja fuerte? —</option><option value="cajon">🗄️ Del cajón (ventas del día) — cuenta en el corte</option><option value="chica">🏠 De la caja fuerte / caja chica — no toca el corte</option></select>
     <label>Monto</label><input type="number" id="mc-monto" step="0.01" min="0.01" placeholder="0.00">
     <label>Concepto</label><input id="mc-con" placeholder="Ej: depósito al banco, gasolina, cambio de $500">
     <label>¿Para qué se usó?</label><select id="mc-paraque"><option value="">— elige una opción —</option>
       <option>🏪 Para la tienda (operación/mantenimiento)</option><option>📦 Para revender (mercancía)</option>
-      <option>👷 Para un trabajo/cliente</option><option>☕ Consumo del personal</option>
+      <option>👷 Para un trabajo/cliente</option>${esAdmin()?'<option>☕ Consumo del personal</option>':''}
       <option>🏦 Depósito / movimiento de dinero</option><option>Otro</option></select>
     <label>📎 Ticket o comprobante (foto o PDF — súbanlo siempre en depósitos)</label>
     <input type="file" id="mc-file" accept="image/*,application/pdf" capture="environment">
     <div class="acciones"><button class="btn" onclick="guardarMovCaja()">Guardar</button><button class="btn sec" onclick="cerrarModal()">Cancelar</button></div>`);
   setTimeout(()=>$('mc-monto').focus(), 100);
 }
+function mcAutVer(){ const b = $('mc-autbox'); if(b) b.style.display = $('mc-tipo').value==='gasto' ? '' : 'none'; } // v200
 async function guardarMovCaja(){
   const monto = +$('mc-monto').value||0;
   if(monto<=0){ toast('Escribe el monto', true); return; }
+  // v200: sin autorización, la tienda solo puede sacar de caja basura (≤$20) y sueldo de aseo (≤$800, 1 por semana)
+  if(!esAdmin() && $('mc-tipo').value==='gasto'){
+    const aut = ($('mc-aut')||{}).value||'';
+    if(!aut){ toast('Ese gasto necesita autorización de Andrés: pídelo en “🛠️ Necesito algo”. Sin autorización solo basura y sueldo de aseo.', true); return; }
+    if(aut==='basura' && monto > 20){ toast('Basura: máximo $20. Si es más, pide autorización en “🛠️ Necesito algo”.', true); return; }
+    if(aut==='aseo'){
+      if(monto > 800){ toast('Sueldo de aseo: máximo $800. Si es más, pide autorización.', true); return; }
+      const lun = ymdLocal(lunesDe(new Date(hoyMX()+'T12:00:00')));
+      const ya = await sb.from('caja_movs').select('id,monto,fecha').eq('tipo','gasto').ilike('concepto','%ASEO%').gte('fecha', lun);
+      if((ya.data||[]).length){ toast('El sueldo de aseo de esta semana ya se registró ('+fmt(ya.data[0].monto)+'). Otro pago necesita autorización de Andrés.', true); return; }
+    }
+    const pre = aut==='basura' ? 'BASURA' : 'SUELDO ASEO';
+    const cEl = $('mc-con'); if(cEl && !new RegExp(pre,'i').test(cEl.value)) cEl.value = (pre+' '+cEl.value).trim();
+    if($('mc-paraque') && !$('mc-paraque').value) $('mc-paraque').value = '🏪 Para la tienda (operación/mantenimiento)';
+  }
+  if(!esAdmin() && $('mc-paraque') && /Consumo del personal/.test($('mc-paraque').value)){ toast('El consumo del personal no sale de la caja', true); return; }
   if($('mc-tipo').value!=='entrada' && $('mc-origen') && !$('mc-origen').value){ toast('Dinos DE DÓNDE salió el dinero: del cajón o de la caja fuerte', true); $('mc-origen').focus(); return; } // v194
   if($('mc-tipo').value!=='entrada' && $('mc-paraque') && !$('mc-paraque').value){ toast('Dinos PARA QUÉ se usó (elige una opción)', true); return; }
   let path = null;
