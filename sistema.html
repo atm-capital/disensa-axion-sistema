@@ -7392,21 +7392,43 @@ function pagarCuenta(id){
       <button class="btn sm sec" style="margin-left:8px" onclick="$('pg-desc').value=(${c.saldo}*0.05).toFixed(2);$('pg-monto').value=(${c.saldo}*0.95).toFixed(2)">5% Disensa</button></label>
       <input id="pg-desc" type="number" step="0.01" value="0"></div>
     <p class="small muted" style="margin-top:-6px;margin-bottom:10px">Si te descuentan al pagar: pon el descuento y el monto real pagado; el saldo se cierra completo y queda el rastro.</p>
-    <div class="field"><label>Referencia (opcional)</label><input id="pg-ref"></div>
+    <div class="field"><label>Referencia (opcional)</label><input id="pg-ref" placeholder="Ej. clave de rastreo SPEI"></div>
+    <div class="field"><label>📎 Comprobante de la transferencia (PDF o foto)</label>
+      <input type="file" id="pg-file" accept="image/*,application/pdf" onchange="pgPrev(this)">
+      <div id="pg-prev"></div></div>
     <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cancelar</button>
-      <button class="btn" onclick="confirmarPago(${id})">Registrar pago</button></div>`);
+      <button class="btn" id="pg-btn" onclick="confirmarPago(${id})">Registrar pago</button></div>`);
 }
+function pgPrev(inp){ const f = inp.files && inp.files[0]; const el = $('pg-prev'); if(el) el.innerHTML = f ? `<div class="small" style="color:#15803d;margin-top:4px">✓ ${esc(f.name)} — se sube al registrar el pago</div>` : ''; }
 async function confirmarPago(id){
   const desc = +($('pg-desc')?.value||0);
-  let ref = $('pg-ref').value.trim();
+  let ref = $('pg-ref').value.trim(); const refBanco = ref;
   if(desc > 0) ref = (ref?ref+' · ':'')+'descuento '+fmt(desc);
+  // v199: comprobante también en el pago individual (se guarda como lote de 1 → se ve en "Pagos hechos")
+  const file = $('pg-file') && $('pg-file').files && $('pg-file').files[0]; let lote = null, compPath = null;
+  const c0 = (cxpData||[]).find(x=>x.id===id) || {};
+  if(file){
+    const btn = $('pg-btn'); if(btn){ btn.disabled = true; btn.textContent = 'Subiendo comprobante...'; }
+    lote = 'L' + new Date().toISOString().slice(0,10).replace(/-/g,'') + '-' + String(Date.now()).slice(-4);
+    const ext = (file.name.split('.').pop()||'pdf').toLowerCase(); const path = 'pagos/'+lote+'.'+ext;
+    const up = await sb.storage.from('facturas').upload(path, file, {upsert:true});
+    if(up.error){ if(!confirm('No pude subir el comprobante ('+errMsg(up.error)+').\n\n¿Registro el pago de todas formas?')){ if(btn){ btn.disabled=false; btn.textContent='Registrar pago'; } return; } }
+    else compPath = path;
+    ref = (ref?ref+' · ':'')+'lote '+lote;
+  }
   const {error} = await sb.rpc('registrar_pago', {p_cuenta_id:id, p_monto:+$('pg-monto').value,
     p_metodo:$('pg-metodo').value, p_referencia:ref});
-  if(error){ toast(errMsg(error), true); return; }
+  if(error){ toast(errMsg(error), true); if($('pg-btn')){ $('pg-btn').disabled=false; $('pg-btn').textContent='Registrar pago'; } return; }
   if(desc > 0){ // el descuento cierra el resto del saldo
     const {data:c2} = await sb.from('cuentas_pagar').select('saldo').eq('id', id).single();
     if(c2 && +c2.saldo > 0 && +c2.saldo <= desc + 0.01)
       await sb.from('cuentas_pagar').update({saldo:0, estado:'pagada'}).eq('id', id);
+  }
+  if(lote){ const monto = +$('pg-monto').value;
+    try{ await sb.from('pagos_cxp').update({lote, descuento:desc}).eq('cuenta_id', id).order('id',{ascending:false}).limit(1); }catch(e){}
+    try{ await sb.from('pagos_lote').insert({lote, proveedor_id: c0.proveedor_id||null, n_facturas:1, suma_saldos: Math.round((monto+desc)*100)/100, transferido: monto, descuento: desc,
+      metodo: $('pg-metodo').value, referencia: refBanco, comprobante_path: compPath, nota: c0.concepto||null, nombre: (typeof perfil!=='undefined'&&perfil?perfil.nombre:'')}); }catch(e){}
+    logEv('finanzas', 'pago '+lote+' '+(c0.concepto||'')+' '+fmt(monto)+(compPath?' (con comprobante)':''));
   }
   cerrarModal(); toast('Pago registrado'+(desc>0?' con descuento de '+fmt(desc):'')); vFinanzas();
 }
