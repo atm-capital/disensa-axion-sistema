@@ -7495,10 +7495,11 @@ function nuevoGasto(cat){
         <option>Mantenimiento</option><option>Equipo</option><option>Mobiliario</option><option>Obra</option><option>Otro</option></select></div>
     </div>
     <div class="frow">
-      <div class="field"><label>¿De dónde salió?</label><select id="gs-metodo">
-        <option value="efectivo">💵 Efectivo de caja</option><option value="transferencia">🏦 Transferencia</option>
-        <option value="tarjeta">💳 Tarjeta</option></select></div>
-      <div class="field"><label>Fecha</label><input id="gs-fecha" type="date" value="${new Date().toISOString().slice(0,10)}"></div>
+      <div class="field"><label>¿De dónde salió?</label><select id="gs-metodo" style="border:2px solid #d97706" onchange="this.style.border=this.value?'':'2px solid #d97706'">
+        <option value="">— elige —</option><option value="transferencia">🏦 Transferencia</option><option value="tarjeta">💳 Tarjeta</option>
+        <option value="efectivo_cajon">🗄️ Efectivo del cajón (ventas del día) — cuenta en el corte</option>
+        <option value="efectivo_chica">🏠 Efectivo de la caja fuerte — no toca el corte</option></select></div>
+      <div class="field"><label>Fecha</label><input id="gs-fecha" type="date" value="${hoyMX()}"></div>
     </div>
     <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cancelar</button>
       <button class="btn" onclick="guardarGasto()">Guardar</button></div>`);
@@ -7514,8 +7515,11 @@ function pistaGasto(){
 async function guardarGasto(){
   const monto = +$('gs-monto').value;
   if(!$('gs-concepto').value.trim() || !monto){ toast('Faltan datos', true); return; }
+  const mSel = $('gs-metodo')?.value || ''; // v202: el efectivo dice si salió del cajón o de la caja fuerte
+  if(!mSel){ toast('Dinos DE DÓNDE salió: transferencia, tarjeta, cajón o caja fuerte', true); $('gs-metodo').focus(); return; }
+  const origenCaja = mSel==='efectivo_chica' ? 'chica' : 'cajon';
   const fila = {concepto:$('gs-concepto').value.trim(), categoria:$('gs-cat').value, monto,
-    metodo: $('gs-metodo')?.value || 'efectivo', usuario_id:sesion.user.id};
+    metodo: mSel.startsWith('efectivo') ? 'efectivo' : mSel, usuario_id:sesion.user.id};
   const f = $('gs-fecha')?.value; if(f) fila.fecha = f;
   const t = $('gs-tipo')?.value; if(t) fila.tipo = t;
   let {error} = await sb.from('gastos').insert(fila);
@@ -7524,7 +7528,7 @@ async function guardarGasto(){
   // v106: gasto/retiro en efectivo también descuenta del corte de caja del día
   if((fila.metodo||'')==='efectivo'){
     const cm = (fila.tipo==='retiro') ? 'retiro' : 'gasto';
-    try{ await sb.from('caja_movs').insert({tipo:cm, monto:fila.monto, concepto:fila.concepto+' (desde Finanzas)',
+    try{ await sb.from('caja_movs').insert({tipo:cm, monto:fila.monto, concepto:fila.concepto+' (desde Finanzas)', origen: origenCaja,
       fecha: fila.fecha||undefined, usuario_id:sesion.user.id, nombre:(typeof perfil!=='undefined'&&perfil?perfil.nombre:'')}); }catch(e){}
   }
   cerrarModal(); toast('Registrado ✓'); vFinanzas();
