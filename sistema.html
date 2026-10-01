@@ -1340,6 +1340,7 @@ async function nuevaVenta(){
         <table class="carrito" style="margin:8px 0"><tbody id="nv-carrito"></tbody></table>
         <div class="tot-line"><span>Descuento <span class="small muted" id="nv-desc-info"></span></span><span style="white-space:nowrap"><button class="btn sm sec" onclick="descPct(5)">5%</button> <button class="btn sm sec" onclick="descPct(10)">10%</button> <button class="btn sm sec" onclick="descPct(15)">15%</button> <input id="nv-descpct" inputmode="decimal" placeholder="%" title="Porcentaje de descuento" style="width:46px;padding:5px;border:1px solid var(--linea);border-radius:6px;text-align:right" oninput="descPct(this.value)"> &nbsp;$ <input id="nv-desc" value="0" style="width:80px;padding:5px;border:1px solid var(--linea);border-radius:6px;text-align:right" oninput="if($('nv-descpct'))$('nv-descpct').value='';pintarCarrito()"></span></div>
         <div class="tot-line grande"><span>Total</span><span id="nv-total">$0.00</span></div>
+        <div id="nv-util" class="small" style="display:none;text-align:right;margin:-4px 0 6px"></div>
         <div class="tot-line" id="nv-recibido-row" style="display:none"><span>💵 Recibido</span><span>$ <input id="nv-recibido" inputmode="decimal" placeholder="0" style="width:80px;padding:5px;border:1px solid var(--linea);border-radius:6px;text-align:right" oninput="calcCambio()"></span></div>
         <div class="tot-line grande" id="nv-cambio-row" style="display:none;color:var(--verde,#15803d)"><span>Cambio</span><span id="nv-cambio">$0.00</span></div>
         <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cancelar</button>
@@ -2090,6 +2091,14 @@ function costoRow(c){ // costo CON IVA por unidad del renglón (0 si no se conoc
   const u = c.granel ? +p.costo / (+p.contenido||1) : +p.costo;
   return Math.round(u*1.16*100)/100;
 }
+// v203: margen sobre venta sin IVA — SOLO lo ve el admin (los vendedores no ven costos)
+function nvMargenBadge(c){ const ci = costoRow(c), p = +c.precio_unit||0; if(!(ci>0) || !(p>0)) return '<div class="small muted">sin costo</div>';
+  const m = (p-ci)/p; return `<div><span class="badge ${m>=0.25?'b-verde':(m>=0.15?'b-ambar':'b-rojo')}" title="Margen sobre venta sin IVA">${Math.round(m*100)}%</span></div>`; }
+function nvUtilidad(cIvaT){ const el = $('nv-util'); if(!el) return; if(!esAdmin() || !carrito.length){ el.style.display='none'; return; }
+  const tot = window._nvTotal||0, sinCosto = carrito.some(c=>!(costoRow(c)>0));
+  if(!(tot>0) || !(cIvaT>0)){ el.style.display='none'; return; }
+  const u = (tot - cIvaT)/1.16, m = (tot - cIvaT)/tot;
+  el.style.display=''; el.innerHTML = `🔒 Solo tú ves esto · utilidad <b style="color:${m>=0.25?'#15803d':(m>=0.15?'#b45309':'#b91c1c')}">${fmt(u)}</b> · margen <b>${Math.round(m*100)}%</b> s/venta sin IVA${sinCosto?' <span class="muted">(hay renglones sin costo)</span>':''}`; }
 function costoTicket(){ return Math.round(carrito.reduce((s,c)=>s + costoRow(c)*(+c.cantidad||0), 0)*100)/100; }
 function costoUIva(p){ return (+p.costo>0) ? Math.round(+p.costo/(+p.contenido||1)*1.16*100)/100 : 0; }
 function cambiarPrecio(i, v){
@@ -2122,7 +2131,7 @@ function pintarCarrito(){
          <td><input value="${c.precio_unit}" readonly style="background:#eef2ff" title="El precio por ${esc(c.unidad||'unidad')} es fijo"></td>`
       : `<td><input value="${c.cantidad}" onchange="cambiarCant(${i}, this.value)"></td>
          <td><input value="${c.precio_unit}" onchange="cambiarPrecio(${i}, this.value)"${(+c.precio_unit < (+c.base||0)-0.001)?' style="border-color:#b91c1c;background:#fef2f2" title="Abajo del precio de lista"':''}></td>`}
-    <td class="num">${fmt(Math.round(c.cantidad*c.precio_unit*100)/100)}</td>
+    <td class="num">${fmt(Math.round(c.cantidad*c.precio_unit*100)/100)}${esAdmin()?nvMargenBadge(c):''}</td>
     <td><span class="x" onclick="quitarProd(${i})">✕</span></td></tr>`).join('')
     || '<tr><td class="muted" style="padding:14px 6px">El carrito está vacío — busca y da clic en un producto.</td></tr>';
   const sub = carrito.reduce((s,c)=>s+c.cantidad*c.precio_unit,0);
@@ -2135,6 +2144,7 @@ function pintarCarrito(){
   const info = $('nv-desc-info'); if(info) info.innerHTML = ((desc>0 && sub>0) ? '(−'+(desc/sub*100).toFixed(1).replace(/\.0$/,'')+'%)' : '') + (bajoCosto?' <b style="color:#b91c1c">⚠️ así la venta queda abajo del costo</b>':'');
   window._nvTotal = Math.round((sub - desc)*100)/100;
   $('nv-total').textContent = fmt(window._nvTotal);
+  nvUtilidad(cIvaT); // v203: margen solo para el admin
   if($('nv-recibido')) calcCambio();
   if($('nv-mixto') && $('nv-metodo') && $('nv-metodo').value==='mixto') mxCalc(); // v159: el total cambió → recalcular el desglose
 }
