@@ -686,14 +686,14 @@ function cxpAgrupado(rows, hoy){
     const g = grupos[nom]; gi++;
     const pend = g.filter(function(c){return c.estado!=='pagada';});
     const saldo = pend.reduce(function(s,c){return s+ +c.saldo;},0);
-    html += '<tr data-ghd="'+gi+'" data-abierto="1" onclick="finToggleGrp('+gi+')" style="background:#eef1f5;cursor:pointer" title="Clic para plegar/desplegar"><td colspan="9"><b>▾ '+esc(nom)+'</b> · '+g.length+' cuenta(s)'+(pend.length? ' · por pagar: <b>'+fmt(saldo)+'</b> ('+pend.length+')' : ' · <span class="badge b-verde">todo pagado</span>')+'</td></tr>';
+    html += '<tr data-ghd="'+gi+'" data-abierto="0" onclick="finToggleGrp('+gi+')" style="background:#eef1f5;cursor:pointer" title="Clic para abrir/cerrar"><td colspan="9"><b>▸ '+esc(nom)+'</b> · '+g.length+' cuenta(s)'+(pend.length? ' · por pagar: <b>'+fmt(saldo)+'</b> ('+pend.length+')' : ' · <span class="badge b-verde">todo pagado</span>')+'</td></tr>';
     g.forEach(function(c){
       const dias = Math.ceil((aDate(c.fecha_vencimiento)-hoy)/864e5);
       const est = c.estado==='pagada' ? 'pagada' : (dias<0 ? 'vencida' : 'pendiente');
       const b = c.estado==='pagada'?'b-verde':(dias<0?'b-rojo':(dias<=7?'b-ambar':'b-gris'));
       const chk = (esAdmin() && c.estado!=='pagada' && +c.saldo>0)
         ? '<input type="checkbox" class="cxp-sel" data-id="'+c.id+'" title="Seleccionar para pagar en lote" onclick="event.stopPropagation();togglePagoSel('+c.id+',this.checked)"'+((window._pagoSel&&window._pagoSel[c.id])?' checked':'')+'>' : '';
-      html += '<tr data-grp="'+gi+'" data-est="'+est+'"'+(est==='pagada'?' class="oculto"':'')+'><td>'+chk+'</td><td><b>'+esc(nom)+'</b></td><td>'+esc(c.concepto)+'</td><td class="small muted">'+esc(c.referencia)+'</td><td><span class="badge '+b+'">'+fecha(c.fecha_vencimiento)+(c.estado!=='pagada' ? (dias<0?' · '+Math.abs(dias)+'d vencida':' · '+dias+'d') : '')+'</span></td><td class="num">'+fmt(c.monto)+'</td><td class="num"><b>'+fmt(c.saldo)+'</b></td><td><span class="badge '+(c.estado==='pagada'?'b-verde':c.estado==='parcial'?'b-ambar':'b-gris')+'">'+c.estado+'</span></td><td>'+(esAdmin() && c.estado!=='pagada' ? '<button class="btn sm" onclick="pagarCuenta('+c.id+')">Pagar</button>':'')+'</td></tr>';
+      html += '<tr data-grp="'+gi+'" data-est="'+est+'" class="plegado'+(est==='pagada'?' oculto':'')+'"><td>'+chk+'</td><td><b>'+esc(nom)+'</b></td><td>'+esc(c.concepto)+'</td><td class="small muted">'+esc(c.referencia)+'</td><td><span class="badge '+b+'">'+fecha(c.fecha_vencimiento)+(c.estado!=='pagada' ? (dias<0?' · '+Math.abs(dias)+'d vencida':' · '+dias+'d') : '')+'</span></td><td class="num">'+fmt(c.monto)+'</td><td class="num"><b>'+fmt(c.saldo)+'</b></td><td><span class="badge '+(c.estado==='pagada'?'b-verde':c.estado==='parcial'?'b-ambar':'b-gris')+'">'+c.estado+'</span></td><td>'+(esAdmin() && c.estado!=='pagada' ? '<button class="btn sm" onclick="pagarCuenta('+c.id+')">Pagar</button>':'')+'</td></tr>';
     });
   });
   return html;
