@@ -717,23 +717,22 @@ function finFiltroCxp(f){
 }
 /* ===== v204: FINANZAS con pestañas arriba + facturas plegadas por mes ===== */
 const FIN_TABS = [['resumen','📊','Resumen'],['pagar','💳','Por pagar'],['facturas','🧾','Facturas'],['gastos','💸','Gastos'],['cobrar','📄','Por cobrar'],['socios','🤝','Socios'],['ak','📱','AK Pago'],['todo','🗂️','Todo']];
-function finTabsHtml(n){ // v206: barra tipo tarjeta, pestaña activa oscura, dato debajo de cada nombre
-  const sub = {resumen:'dinero y pendientes', pagar: n.pagar>0 ? fmt(n.pagar) : 'al día ✓', facturas: n.facturas+' archivadas', gastos: fmt(n.gastos)+' del mes', cobrar:'crédito a clientes', socios:'aportaciones', ak:'monedero', todo:'ver todo junto'};
+function finTabsHtml(n){ // v207: pestañas de texto con subrayado, sin íconos (estilo sobrio)
+  const sub = {pagar: n.pagar>0 ? fmt(n.pagar) : 'al día', facturas: String(n.facturas), gastos: fmt(n.gastos)};
   const alerta = {pagar: n.vencido>0};
   return `<style>
-    #fin-tabs{position:sticky;top:0;z-index:15;background:var(--fondo);padding:2px 0 12px;margin-bottom:4px}
-    #fin-tabs .barra{display:flex;gap:4px;padding:5px;background:#fff;border:1px solid var(--linea);border-radius:16px;box-shadow:0 4px 14px rgba(38,41,43,.07);overflow-x:auto}
-    .fintab{flex:1 0 auto;display:flex;flex-direction:column;align-items:flex-start;gap:1px;padding:9px 16px 8px;border:0;border-radius:12px;background:transparent;cursor:pointer;font:inherit;color:var(--tinta);text-align:left;transition:background .15s,color .15s,transform .15s;white-space:nowrap}
-    .fintab .tt{display:flex;align-items:center;gap:7px;font-weight:700;font-size:14px;letter-spacing:.1px}
-    .fintab .ic{font-size:16px;line-height:1}
-    .fintab .sb{font-size:11.5px;color:var(--gris);padding-left:23px;font-variant-numeric:tabular-nums}
-    .fintab:hover{background:#f5f1e8}
-    .fintab.on{background:var(--tinta-2);color:#fff;box-shadow:0 3px 10px rgba(38,41,43,.25)}
-    .fintab.on .sb{color:#f6b26b}
-    .fintab .pt{width:7px;height:7px;border-radius:50%;background:#dc2626;display:inline-block;margin-left:2px}
+    #fin-tabs{position:sticky;top:0;z-index:15;background:var(--fondo);padding:2px 0 0;margin-bottom:18px}
+    #fin-tabs .barra{display:flex;gap:30px;border-bottom:1px solid #ddd6c8;overflow-x:auto;scrollbar-width:none}
+    #fin-tabs .barra::-webkit-scrollbar{display:none}
+    .fintab{display:flex;align-items:baseline;gap:8px;padding:11px 1px 12px;margin-bottom:-1px;border:0;border-bottom:2px solid transparent;background:none;cursor:pointer;font:inherit;font-size:15px;font-weight:600;color:#8b9099;white-space:nowrap;transition:color .15s,border-color .15s}
+    .fintab .sb{font-size:12px;font-weight:500;color:#a8adb5;font-variant-numeric:tabular-nums}
+    .fintab:hover{color:var(--tinta)}
+    .fintab.on{color:var(--tinta-2);border-bottom-color:#c98a3c}
+    .fintab.on .sb{color:#b0752a}
+    .fintab .pt{width:6px;height:6px;border-radius:50%;background:#c0392b;display:inline-block;align-self:center}
   </style>
   <div id="fin-tabs"><div class="barra">
-    ${FIN_TABS.filter(t=>esFinanzas() || !['socios','ak'].includes(t[0])).map(t=>`<button class="fintab" id="fint-${t[0]}" onclick="finTab('${t[0]}')"><span class="tt"><span class="ic">${t[1]}</span>${t[2]}${alerta[t[0]]?'<span class="pt" title="Hay vencido"></span>':''}</span><span class="sb">${esc(sub[t[0]]||'')}</span></button>`).join('')}
+    ${FIN_TABS.filter(t=>esFinanzas() || !['socios','ak'].includes(t[0])).map(t=>`<button class="fintab" id="fint-${t[0]}" onclick="finTab('${t[0]}')">${t[2]}${sub[t[0]]?`<span class="sb">${esc(sub[t[0]])}</span>`:''}${alerta[t[0]]?'<span class="pt" title="Hay vencido"></span>':''}</button>`).join('')}
   </div></div>`;
 }
 function finTab(t, noGuardar){
