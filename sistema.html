@@ -715,12 +715,51 @@ function finFiltroCxp(f){
     el.classList.toggle('oculto', !ver);
   });
 }
-function finFiltroFact(f){
-  ['I','T','E','todas'].forEach(function(x){ const b=document.getElementById('ftf-'+x); if(b) b.className='btn sm'+(x===f?'':' sec'); });
-  document.querySelectorAll('\x23fin-fact tr[data-ftipo]').forEach(function(el){
-    el.classList.toggle('oculto', !(f==='todas' || el.dataset.ftipo===f));
-  });
+/* ===== v204: FINANZAS con pestañas arriba + facturas plegadas por mes ===== */
+const FIN_TABS = [['resumen','📊','Resumen'],['pagar','💳','Por pagar'],['facturas','🧾','Facturas'],['gastos','💸','Gastos'],['cobrar','📄','Por cobrar'],['socios','🤝','Socios'],['ak','📱','AK Pago'],['todo','🗂️','Todo']];
+function finTabsHtml(n){ // n = {pagar, vencido, facturas, gastos}
+  const extra = {pagar: n.pagar>0 ? `<span class="badge ${n.vencido>0?'b-rojo':'b-ambar'}">${fmt(n.pagar)}</span>` : '<span class="badge b-verde">al día</span>',
+    facturas: `<span class="badge b-azul">${n.facturas}</span>`, gastos: `<span class="badge b-gris">${fmt(n.gastos)}</span>`};
+  return `<div id="fin-tabs" style="position:sticky;top:0;z-index:15;background:var(--fondo);padding:6px 0 10px;margin-bottom:6px;display:flex;gap:8px;flex-wrap:wrap;border-bottom:2px solid var(--linea)">
+    ${FIN_TABS.filter(t=>esFinanzas() || !['socios','ak'].includes(t[0])).map(t=>`<button class="btn sec" id="fint-${t[0]}" onclick="finTab('${t[0]}')" style="display:flex;gap:6px;align-items:center;padding:9px 13px;border-radius:999px"><span>${t[1]}</span><b>${t[2]}</b>${extra[t[0]]||''}</button>`).join('')}
+  </div>`;
 }
+function finTab(t, noGuardar){
+  if(!FIN_TABS.some(x=>x[0]===t) || !$('fint-'+t)) t = 'resumen';
+  window._finTab = t; if(!noGuardar){ try{ localStorage.setItem('ax_fin_tab', t); }catch(e){} }
+  FIN_TABS.forEach(x=>{ const b = $('fint-'+x[0]); if(b){ const on = x[0]===t; b.className = 'btn'+(on?'':' sec'); b.style.boxShadow = on ? '0 2px 8px rgba(232,121,15,.35)' : ''; } });
+  document.querySelectorAll('#v-finanzas [data-ftab]').forEach(el=>{ el.style.display = (t==='todo' || el.dataset.ftab.split(' ').includes(t)) ? '' : 'none'; });
+  finTabsTop(); if(!noGuardar){ try{ window.scrollTo({top:0, behavior:'smooth'}); }catch(e){} }
+}
+function finTabsTop(){ const b = $('fin-tabs'), h = document.querySelector('.top'); if(b && h) b.style.top = h.offsetHeight+'px'; }
+window.addEventListener('resize', finTabsTop);
+function finTabInicial(){ let t = window._finTab; if(!t){ try{ t = localStorage.getItem('ax_fin_tab'); }catch(e){} } finTab(t||'resumen', true); finFactAgrupar(); }
+// --- Facturas: se agrupan por mes y salen PLEGADAS; filtro por tipo + buscador ---
+window._ftTipo = window._ftTipo || 'I'; window._ftAb = window._ftAb || {};
+function finFiltroFact(f){ window._ftTipo = f; finFactAplicar(); }
+function finFactMesNombre(k){ if(!k) return 'Sin fecha'; const d = new Date(k+'-15T12:00:00'); const s = d.toLocaleDateString('es-MX',{month:'long', year:'numeric'}); return s.charAt(0).toUpperCase()+s.slice(1); }
+function finFactAgrupar(){
+  const tb = document.querySelector('#fin-fact tbody'); if(!tb || tb.dataset.agr) return; tb.dataset.agr = '1';
+  const rows = [...tb.querySelectorAll('tr[data-ftipo]')]; let ult = null;
+  rows.forEach(r=>{ const k = r.dataset.fmes||''; if(k!==ult){ ult = k; const h = document.createElement('tr'); h.dataset.fhd = k; h.style.cssText = 'background:#eef1f5;cursor:pointer'; h.title = 'Clic para abrir/cerrar el mes';
+      h.onclick = ()=>{ window._ftAb[k] = !window._ftAb[k]; finFactAplicar(); }; h.innerHTML = '<td colspan="8"></td>'; tb.insertBefore(h, r); } });
+  finFactAplicar();
+}
+function finFactAplicar(){
+  const f = window._ftTipo||'I', q = String(($('ft-q')||{}).value||'').toLowerCase().trim();
+  ['I','T','E','todas'].forEach(x=>{ const b = $('ftf-'+x); if(b) b.className = 'btn sm'+(x===f?'':' sec'); });
+  const tb = document.querySelector('#fin-fact tbody'); if(!tb) return; const G = {}; let nTot = 0, sTot = 0;
+  tb.querySelectorAll('tr[data-ftipo]').forEach(r=>{ const k = r.dataset.fmes||'';
+    const ok = (f==='todas' || r.dataset.ftipo===f) && (!q || (r.dataset.fq||'').includes(q));
+    const g = G[k] = G[k] || {n:0, t:0}; if(ok){ g.n++; g.t += +r.dataset.ftot||0; nTot++; sTot += +r.dataset.ftot||0; }
+    r.classList.toggle('oculto', !ok); r.classList.toggle('plegado', ok && !(window._ftAb[k] || q)); });
+  tb.querySelectorAll('tr[data-fhd]').forEach(h=>{ const k = h.dataset.fhd, g = G[k]||{n:0,t:0}, ab = !!(window._ftAb[k] || q);
+    h.classList.toggle('oculto', !g.n);
+    h.firstChild.innerHTML = `<b>${ab?'▾':'▸'} ${esc(finFactMesNombre(k))}</b> · ${g.n} factura(s) · <b>${fmt(g.t)}</b> <span class="small muted">${ab?'clic para cerrar':'clic para abrir'}</span>`; });
+  const r = $('ft-res'); if(r) r.textContent = nTot+' factura(s) · '+fmt(sTot);
+}
+function finFactTodo(abrir){ document.querySelectorAll('#fin-fact tr[data-fhd]').forEach(h=>{ window._ftAb[h.dataset.fhd] = abrir; }); finFactAplicar(); }
+
 
 /* ===== Compartir varias facturas ===== */
 async function compartirFacturasSel(medio){
@@ -6617,33 +6656,34 @@ async function vFinanzas(){
   const factDias = factProx ? Math.ceil((aDate(factProx.fecha_vencimiento)-hoy)/864e5) : null;
   window._pagoSel = window._pagoSel || {};
   const dinero = await calcularDinero(hoy);
-  $('v-finanzas').innerHTML = panelDinero(dinero) + `
-    ${esFinanzas()?`<div class="card" style="margin-bottom:14px" id="fin-akpago"><h3>📱 Monedero AK Pago</h3>
+  setTimeout(finTabInicial, 0); // v204
+  $('v-finanzas').innerHTML = finTabsHtml({pagar:total, vencido:vencido, facturas:(factRows||[]).length, gastos:gTot.gasto}) + '<div data-ftab="resumen">' + panelDinero(dinero) + '</div>' + `
+    ${esFinanzas()?`<div class="card" style="margin-bottom:14px" data-ftab="ak" id="fin-akpago"><h3>📱 Monedero AK Pago</h3>
       <div id="akpago-panel"><span class="small muted">Cargando…</span></div>
       <span style="display:none">${setTimeout(()=>{ if(typeof pintarAkpago==='function') pintarAkpago(); },220)&&''}</span>
     </div>`:''}
-    ${esFinanzas()?`<div class="card" style="margin-bottom:14px"><h3>🤝 Aportaciones de socios</h3>
+    ${esFinanzas()?`<div class="card" style="margin-bottom:14px" data-ftab="socios"><h3>🤝 Aportaciones de socios</h3>
       <div id="aportes-panel"><span class="small muted">Cargando…</span></div>
       <span style="display:none">${setTimeout(()=>{ if(typeof pintarAportaciones==='function') pintarAportaciones(); },250)&&''}</span>
     </div>`:''}
-    ${esFinanzas()?`<div class="card" style="margin-bottom:14px" id="fin-fijos"><h3>📆 Gastos fijos <span class="small muted" style="font-weight:normal">renta, internet, luz, nómina… lo que se paga cada mes</span></h3>
+    ${esFinanzas()?`<div class="card" style="margin-bottom:14px" data-ftab="gastos" id="fin-fijos"><h3>📆 Gastos fijos <span class="small muted" style="font-weight:normal">renta, internet, luz, nómina… lo que se paga cada mes</span></h3>
       <div id="fijos-panel"><span class="small muted">Cargando…</span></div>
       <span style="display:none">${setTimeout(()=>{ if(typeof pintarGastosFijos==='function') pintarGastosFijos(); },280)&&''}</span>
     </div>`:''}
-    <div class="card" style="margin-bottom:14px" id="fin-cobrar"><h3>📄 Por cobrar (ventas a crédito)</h3>
+    <div class="card" style="margin-bottom:14px" data-ftab="cobrar" id="fin-cobrar"><h3>📄 Por cobrar (ventas a crédito)</h3>
       <div id="cobrar-panel"><span class="small muted">Cargando…</span></div>
       <span style="display:none">${setTimeout(()=>{ if(typeof pintarCobranza==='function') pintarCobranza(); },300)&&''}</span>
     </div>
-    <div class="kpis">
-      <div class="kpi" style="cursor:pointer" title="Ver cuentas" onclick="$('fin-cxp').scrollIntoView({behavior:'smooth'})"><div class="l">Total por pagar</div><div class="v">${fmt(total)}</div><div class="s">${pend.length} cuenta(s)</div></div>
-      <div class="kpi" style="cursor:pointer;border-top-color:${factDias!==null&&factDias<=7?'var(--ambar)':'inherit'}" title="Ver facturas" onclick="$('fin-fact').scrollIntoView({behavior:'smooth'})"><div class="l">Facturas por pagar</div><div class="v">${fmt(factTotal)}</div>
+    <div class="kpis" data-ftab="resumen">
+      <div class="kpi" style="cursor:pointer" title="Ver cuentas" onclick="finTab('pagar')"><div class="l">Total por pagar</div><div class="v">${fmt(total)}</div><div class="s">${pend.length} cuenta(s)</div></div>
+      <div class="kpi" style="cursor:pointer;border-top-color:${factDias!==null&&factDias<=7?'var(--ambar)':'inherit'}" title="Ver facturas" onclick="finTab('facturas')"><div class="l">Facturas por pagar</div><div class="v">${fmt(factTotal)}</div>
         <div class="s">${factProx ? `${factPend.length} factura(s) · próxima vence ${fecha(factProx.fecha_vencimiento)} (${factDias<0?'⚠️ '+Math.abs(factDias)+'d vencida':'en '+factDias+'d'})` : 'sin facturas pendientes'}</div></div>
-      <div class="kpi" style="cursor:pointer" title="Ver cuentas" onclick="$('fin-cxp').scrollIntoView({behavior:'smooth'})"><div class="l">Vencido</div><div class="v" style="color:${vencido>0?'var(--rojo)':'inherit'}">${fmt(vencido)}</div></div>
+      <div class="kpi" style="cursor:pointer" title="Ver cuentas" onclick="finTab('pagar'); setTimeout(()=>finFiltroCxp('venc'),50)"><div class="l">Vencido</div><div class="v" style="color:${vencido>0?'var(--rojo)':'inherit'}">${fmt(vencido)}</div></div>
       <div class="kpi"><div class="l">Pagado este mes</div><div class="v">${fmt(pagadoMes)}</div></div>
       <div class="kpi" style="border-top-color:var(--verde);cursor:pointer" title="Ver los pagos" onclick="historialPagos()"><div class="l">💰 Ahorrado por pronto pago</div>
         <div class="v" style="color:#15803d">${fmt(ahorroMes)}</div>
         <div class="s">${ahorroMes>0?'no está restado del costo de los productos':'paga antes del vencimiento y aquí aparece'}</div></div>
-      <div class="kpi" style="cursor:pointer" title="Ver gastos" onclick="$('fin-gastos').scrollIntoView({behavior:'smooth'})"><div class="l">Gastos ${esc(gNom)}</div><div class="v">${fmt(gTot.gasto)}</div><div class="s">${gTot.inversion?'+ '+fmt(gTot.inversion)+' de inversión':'sin inversiones'}</div></div>
+      <div class="kpi" style="cursor:pointer" title="Ver gastos" onclick="finTab('gastos')"><div class="l">Gastos ${esc(gNom)}</div><div class="v">${fmt(gTot.gasto)}</div><div class="s">${gTot.inversion?'+ '+fmt(gTot.inversion)+' de inversión':'sin inversiones'}</div></div>
       <div class="kpi" style="cursor:pointer;border-top-color:${faltaMeta>0?'var(--ambar)':'var(--verde)'}" title="Ir a Pedidos" onclick="irA('pedidos')">
         <div class="l">Compra Holcim del mes</div>
         <div class="v">${fmt(compraHolcim)}</div>
@@ -6652,7 +6692,7 @@ async function vFinanzas(){
           : `✓ meta de ${fmt(META_HOLCIM)} cumplida: sin intereses este mes`}</div>
       </div>
     </div>
-    <div class="card" id="fin-cxp"><h3>Cuentas por pagar</h3>
+    <div class="card" data-ftab="pagar" id="fin-cxp"><h3>💳 Cuentas por pagar</h3>
       <div style="margin:6px 0 10px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn sm" id="cxpf-pend" onclick="finFiltroCxp('pend')">Por pagar</button><button class="btn sm sec" id="cxpf-venc" onclick="finFiltroCxp('venc')">Vencidas</button><button class="btn sm sec" id="cxpf-todas" onclick="finFiltroCxp('todas')">Todas</button>
         ${esAdmin()?`<span style="flex:1"></span><button class="btn sm" onclick="asistentePago()">💸 Pagar lo que se vence</button>`:''}
       </div>
@@ -6660,21 +6700,21 @@ async function vFinanzas(){
       <div class="tbl-scroll"><table>
       <thead><tr><th style="width:26px"></th><th>Proveedor</th><th>Concepto</th><th>Referencia</th><th>Vence</th><th class="num">Monto</th><th class="num">Saldo</th><th>Estado</th><th></th></tr></thead>
       <tbody>${cxpAgrupado(cxp.data, hoy)}</tbody></table></div></div>
-    <div class="card" id="fin-fact"><h3>🧾 Facturas</h3>
+    <div class="card" data-ftab="facturas" id="fin-fact"><h3>🧾 Facturas <span class="small muted" style="font-weight:normal" id="ft-res"></span></h3>
       ${factRows === null
         ? '<p class="small muted">Para activar el archivo de facturas, corre <b>07_facturas_registro.sql</b> en Supabase (SQL Editor). Luego re-sube los XML+PDF en Importar.</p>'
-        : `<div style="margin:6px 0 10px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn sm" id="ftf-I" onclick="finFiltroFact('I')">Compras</button><button class="btn sm sec" id="ftf-T" onclick="finFiltroFact('T')">Traslados</button><button class="btn sm sec" id="ftf-E" onclick="finFiltroFact('E')">N. crédito</button><button class="btn sm sec" id="ftf-todas" onclick="finFiltroFact('todas')">Todas</button><span style="flex:1"></span><button class="btn sm" onclick="compartirFacturasSel('wa')">📱 Mandar seleccionadas</button><button class="btn sm sec" onclick="compartirFacturasSel('mail')">✉️ Correo</button></div><div class="tbl-scroll"><table>
+        : `<div style="margin:6px 0 10px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn sm" id="ftf-I" onclick="finFiltroFact('I')">Compras</button><button class="btn sm sec" id="ftf-T" onclick="finFiltroFact('T')">Traslados</button><button class="btn sm sec" id="ftf-E" onclick="finFiltroFact('E')">N. crédito</button><button class="btn sm sec" id="ftf-todas" onclick="finFiltroFact('todas')">Todas</button><input type="search" id="ft-q" placeholder="🔎 Buscar folio o pedido" oninput="finFactAplicar()" style="padding:6px 10px;border:1px solid var(--linea);border-radius:8px;min-width:190px"><button class="btn sm sec" onclick="finFactTodo(true)">▾ Abrir todo</button><button class="btn sm sec" onclick="finFactTodo(false)">▸ Cerrar todo</button><span style="flex:1"></span><button class="btn sm" onclick="compartirFacturasSel('wa')">📱 Mandar seleccionadas</button><button class="btn sm sec" onclick="compartirFacturasSel('mail')">✉️ Correo</button></div><div class="tbl-scroll"><table>
           <thead><tr><th></th><th>Tipo</th><th>Folio</th><th>Fecha</th><th>Pedido</th><th class="num">Total</th><th>Vence</th><th>PDF</th></tr></thead>
           <tbody>${factRows.map(f=>{
             const tb = {I:'<span class="badge b-azul">Compra</span>', T:'<span class="badge b-gris">Traslado</span>', E:'<span class="badge b-ambar">N. crédito</span>'};
             const v = f.tipo==='I' && f.fecha ? (()=>{const x=aDate(f.fecha); x.setDate(x.getDate()+f.dias); return fecha(x.toISOString().slice(0,10));})() : '—';
-            return `<tr data-ftipo="${f.tipo}"${f.tipo!=='I'?' class="oculto"':''}><td>${f.pdf_path?`<input type="checkbox" class="fsel" title="Seleccionar para mandar" data-path="${esc(f.pdf_path)}" data-folio="${esc(f.folio)}" data-total="${+f.total||0}" data-ped="${esc(f.pedidos_compra?.folio_externo||'')}">`:''}</td><td>${tb[f.tipo]||esc(f.tipo)}</td><td><b>${esc(f.folio)}</b></td><td>${f.fecha?fecha(f.fecha):'—'}</td>
+            return `<tr data-ftipo="${f.tipo}" data-fmes="${String(f.fecha||'').slice(0,7)}" data-ftot="${+f.total||0}" data-fq="${esc((String(f.folio||'')+' '+String(f.pedidos_compra?.folio_externo||'')).toLowerCase())}" class="plegado"><td>${f.pdf_path?`<input type="checkbox" class="fsel" title="Seleccionar para mandar" data-path="${esc(f.pdf_path)}" data-folio="${esc(f.folio)}" data-total="${+f.total||0}" data-ped="${esc(f.pedidos_compra?.folio_externo||'')}">`:''}</td><td>${tb[f.tipo]||esc(f.tipo)}</td><td><b>${esc(f.folio)}</b></td><td>${f.fecha?fecha(f.fecha):'—'}</td>
               <td>${f.pedidos_compra?.folio_externo ? `<a href="#" title="Ver partidas del pedido" onclick="event.preventDefault();verPedido(${f.pedido_id},'${esc(f.pedidos_compra.estado||'')}')">#${esc(f.pedidos_compra.folio_externo)}</a>` : '<span class="muted small">—</span>'}</td>
               <td class="num">${fmt(f.total)}</td><td class="small">${v}</td>
               <td style="white-space:nowrap">${f.pdf_path ? `<button class="btn sm sec" onclick="verPdfFactura('${esc(f.pdf_path)}')">📄 Ver</button> <button class="btn sm sec" title="Mandar liga por WhatsApp" onclick="compartirFactura('wa','${esc(f.pdf_path)}','${esc(f.folio)}',${+f.total||0},'${esc(f.pedidos_compra?.folio_externo||'')}')">📱 WhatsApp</button> <button class="btn sm sec" title="Mandar liga por correo" onclick="compartirFactura('mail','${esc(f.pdf_path)}','${esc(f.folio)}',${+f.total||0},'${esc(f.pedidos_compra?.folio_externo||'')}')">✉️</button>` : (esAdmin() && f.id ? `<button class="btn sm sec" title="Esta factura se registró con el XML pero sin PDF — súbelo aquí" onclick="subirPdfFactura(${f.id},'${esc(f.folio)}',function(){ vFinanzas(); })">📎 Subir PDF</button>` : '<span class="muted small">—</span>')}</td></tr>`;
           }).join('') || '<tr><td colspan="8" class="muted">Aún no hay facturas archivadas. Súbelas en Importar → Facturas Indar (XML).</td></tr>'}</tbody></table></div>`}
     </div>
-    <div class="card" id="fin-gastos"><h3>💸 Gastos, inversiones y retiros</h3>
+    <div class="card" data-ftab="gastos" id="fin-gastos"><h3>💸 Gastos, inversiones y retiros</h3>
       <div class="toolbar" style="margin-bottom:10px">
         ${[['mes','Este mes'],['mespasado','Mes pasado'],['anio','Este año'],['todo','Todo']].map(([k,t])=>
           `<button class="btn ${gPer===k?'':'sec'} sm" onclick="window._gPer='${k}'; vFinanzas()">${t}</button>`).join('')}
