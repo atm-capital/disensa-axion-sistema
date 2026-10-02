@@ -717,17 +717,29 @@ function finFiltroCxp(f){
 }
 /* ===== v204: FINANZAS con pestañas arriba + facturas plegadas por mes ===== */
 const FIN_TABS = [['resumen','📊','Resumen'],['pagar','💳','Por pagar'],['facturas','🧾','Facturas'],['gastos','💸','Gastos'],['cobrar','📄','Por cobrar'],['socios','🤝','Socios'],['ak','📱','AK Pago'],['todo','🗂️','Todo']];
-function finTabsHtml(n){ // n = {pagar, vencido, facturas, gastos}
-  const extra = {pagar: n.pagar>0 ? `<span class="badge ${n.vencido>0?'b-rojo':'b-ambar'}">${fmt(n.pagar)}</span>` : '<span class="badge b-verde">al día</span>',
-    facturas: `<span class="badge b-azul">${n.facturas}</span>`, gastos: `<span class="badge b-gris">${fmt(n.gastos)}</span>`};
-  return `<div id="fin-tabs" style="position:sticky;top:0;z-index:15;background:var(--fondo);padding:6px 0 10px;margin-bottom:6px;display:flex;gap:8px;flex-wrap:wrap;border-bottom:2px solid var(--linea)">
-    ${FIN_TABS.filter(t=>esFinanzas() || !['socios','ak'].includes(t[0])).map(t=>`<button class="btn sec" id="fint-${t[0]}" onclick="finTab('${t[0]}')" style="display:flex;gap:6px;align-items:center;padding:9px 13px;border-radius:999px"><span>${t[1]}</span><b>${t[2]}</b>${extra[t[0]]||''}</button>`).join('')}
-  </div>`;
+function finTabsHtml(n){ // v206: barra tipo tarjeta, pestaña activa oscura, dato debajo de cada nombre
+  const sub = {resumen:'dinero y pendientes', pagar: n.pagar>0 ? fmt(n.pagar) : 'al día ✓', facturas: n.facturas+' archivadas', gastos: fmt(n.gastos)+' del mes', cobrar:'crédito a clientes', socios:'aportaciones', ak:'monedero', todo:'ver todo junto'};
+  const alerta = {pagar: n.vencido>0};
+  return `<style>
+    #fin-tabs{position:sticky;top:0;z-index:15;background:var(--fondo);padding:2px 0 12px;margin-bottom:4px}
+    #fin-tabs .barra{display:flex;gap:4px;padding:5px;background:#fff;border:1px solid var(--linea);border-radius:16px;box-shadow:0 4px 14px rgba(38,41,43,.07);overflow-x:auto}
+    .fintab{flex:1 0 auto;display:flex;flex-direction:column;align-items:flex-start;gap:1px;padding:9px 16px 8px;border:0;border-radius:12px;background:transparent;cursor:pointer;font:inherit;color:var(--tinta);text-align:left;transition:background .15s,color .15s,transform .15s;white-space:nowrap}
+    .fintab .tt{display:flex;align-items:center;gap:7px;font-weight:700;font-size:14px;letter-spacing:.1px}
+    .fintab .ic{font-size:16px;line-height:1}
+    .fintab .sb{font-size:11.5px;color:var(--gris);padding-left:23px;font-variant-numeric:tabular-nums}
+    .fintab:hover{background:#f5f1e8}
+    .fintab.on{background:var(--tinta-2);color:#fff;box-shadow:0 3px 10px rgba(38,41,43,.25)}
+    .fintab.on .sb{color:#f6b26b}
+    .fintab .pt{width:7px;height:7px;border-radius:50%;background:#dc2626;display:inline-block;margin-left:2px}
+  </style>
+  <div id="fin-tabs"><div class="barra">
+    ${FIN_TABS.filter(t=>esFinanzas() || !['socios','ak'].includes(t[0])).map(t=>`<button class="fintab" id="fint-${t[0]}" onclick="finTab('${t[0]}')"><span class="tt"><span class="ic">${t[1]}</span>${t[2]}${alerta[t[0]]?'<span class="pt" title="Hay vencido"></span>':''}</span><span class="sb">${esc(sub[t[0]]||'')}</span></button>`).join('')}
+  </div></div>`;
 }
 function finTab(t, noGuardar){
   if(!FIN_TABS.some(x=>x[0]===t) || !$('fint-'+t)) t = 'resumen';
   window._finTab = t; if(!noGuardar){ try{ localStorage.setItem('ax_fin_tab', t); }catch(e){} }
-  FIN_TABS.forEach(x=>{ const b = $('fint-'+x[0]); if(b){ const on = x[0]===t; b.className = 'btn'+(on?'':' sec'); b.style.boxShadow = on ? '0 2px 8px rgba(232,121,15,.35)' : ''; } });
+  FIN_TABS.forEach(x=>{ const b = $('fint-'+x[0]); if(b) b.classList.toggle('on', x[0]===t); });
   document.querySelectorAll('#v-finanzas [data-ftab]').forEach(el=>{ el.style.display = (t==='todo' || el.dataset.ftab.split(' ').includes(t)) ? '' : 'none'; });
   finTabsTop(); if(!noGuardar){ try{ window.scrollTo({top:0, behavior:'smooth'}); }catch(e){} }
 }
@@ -6468,8 +6480,9 @@ async function calcularDinero(hoy){
     }catch(e){}
     const ventasEf = vivasV.reduce((s,v)=>s + (v.metodo_pago==='efectivo' ? +v.total : (v.metodo_pago==='mixto' ? +(v.efectivo||0) : 0)),0); // v159
     // SALIÓ: pagos a proveedores + gastos registrados DESPUÉS de la captura
-    const pg = await sb.from('pagos_cxp').select('monto').gt('creado', desdeISO);
+    const pg = await sb.from('pagos_cxp').select('monto,metodo').gt('creado', desdeISO);
     D.salioPagos = (pg.data||[]).reduce((s,x)=>s+ +x.monto,0);
+    const pagosEf = (pg.data||[]).filter(x=>x.metodo==='efectivo').reduce((s,x)=>s+ +x.monto,0); // v206: ya se restaron de la caja
     const gs = await sb.from('gastos').select('monto,metodo').gt('creado', desdeISO);
     D.salioGastos = (gs.data||[]).filter(x=>x.metodo!=='inventario').reduce((s,x)=>s+ +x.monto,0);
     const gastosEf = (gs.data||[]).filter(g=>g.metodo==='efectivo').reduce((s,x)=>s+ +x.monto,0);
@@ -6492,7 +6505,7 @@ async function calcularDinero(hoy){
     // v124: banco y efectivo por separado; el total es la suma
     // v167: depósitos de efectivo a la cuenta después de la captura → entran al banco
     D.depositosDesde = (dpc.data||[]).filter(d=> d.creado ? String(d.creado) > String(desdeISO) : String(d.fecha) > String(D.cap.fecha)).reduce((s,d)=>s+ +d.monto,0);
-    D.bancoHoy = Math.round((D.banco + D.otros + D.entroAportes + cobrosNoEf + (D.entroVentas - ventasEf) + (D.depositosDesde||0) - D.salioPagos - (D.salioGastos - gastosEf) - (D.fondeosDesde||0) + (D.apBanco||0))*100)/100;
+    D.bancoHoy = Math.round((D.banco + D.otros + D.entroAportes + cobrosNoEf + (D.entroVentas - ventasEf) + (D.depositosDesde||0) - (D.salioPagos - pagosEf) - (D.salioGastos - gastosEf) - (D.fondeosDesde||0) + (D.apBanco||0))*100)/100;
     // v167: efectivo en cajas = cajón de HOY + caja chica anclada al conteo (ya NO se vuelven a sumar las ventas desde la captura: estaban doble)
     const hoyS = hoyMX();
     const corteHoy = (D.corte && String(D.corte.fecha)===hoyS) ? D.corte : null;
