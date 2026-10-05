@@ -504,7 +504,7 @@ function tiempoRel(ts){
   try{ const d = (Date.now()-new Date(ts).getTime())/60000; if(d<1) return 'justo ahora'; if(d<60) return 'hace '+Math.round(d)+' min'; if(d<1440) return 'hace '+Math.round(d/60)+' h'; return 'hace '+Math.round(d/1440)+' días'; }catch(e){ return ''; }
 }
 async function syncIndar(){
-  const pr = await sb.from('pedidos_compra').select('id,estado').in('estado',['enviado','parcial']);
+  const pr = await sb.from('pedidos_compra').select('id,estado,proveedores!inner(nombre)').ilike('proveedores.nombre','%indar%').in('estado',['enviado','parcial']); // v209: solo Indar
   if(pr.error){ toast(errMsg(pr.error),true); return; }
   const ids = (pr.data||[]).map(function(x){ return x.id; });
   if(!ids.length){ toast('No hay pedidos activos (enviado/parcial) que consultar'); return; }
@@ -538,7 +538,7 @@ async function procesarEstatusIndar(){
     logEv('vista', 'estatus Indar actualizado: '+filas.length+' partes');
     // v125: detectar pedidos que Indar ya no reporta (posibles CANCELADOS) y partidas facturadas incompletas
     const conDato = new Set(filas.map(function(f){ return f.pedido_id; }));
-    const abiertos = (await sb.from('pedidos_compra').select('id,folio_externo').in('estado',['enviado','parcial'])).data||[];
+    const abiertos = (await sb.from('pedidos_compra').select('id,folio_externo,proveedores!inner(nombre)').ilike('proveedores.nombre','%indar%').in('estado',['enviado','parcial'])).data||[]; // v209: solo Indar
     const sinDato = abiertos.filter(function(p){ return !conDato.has(p.id); });
     const cortas = filas.filter(function(f){ return f.estatus!=='CANCELADO' && f.cant_pedida>0 && f.cant_facturada < f.cant_pedida; });
     const F = {}; abiertos.forEach(function(p){ F[p.id]=p.folio_externo; });
@@ -578,6 +578,10 @@ async function cancelarParteIndar(pedidoId, parte, btn){
   else if(typeof vPedidos==='function' && $('v-pedidos') && $('v-pedidos').classList.contains('activa')) vPedidos();
 }
 async function marcarPedidoCancelado(id){
+  const chk = await sb.from('pedidos_compra').select('folio_externo,total,proveedores(nombre)').eq('id',id).single(); // v209: candado
+  const pvN = (chk.data && chk.data.proveedores && chk.data.proveedores.nombre) || '';
+  if(chk.data && !/indar/i.test(pvN)){ alert('🚫 El pedido #'+chk.data.folio_externo+' es de '+pvN+', no de Indar. No se cancela desde aquí.'); return; }
+  if(chk.data && !confirm('¿Marcar CANCELADO el pedido #'+chk.data.folio_externo+' de '+pvN+' por '+fmt(chk.data.total)+'?\n\nSu cuenta por pagar se anula. Confírmalo antes en el portal de Indar.')) return;
   const r = await sb.from('pedidos_compra').update({estado:'cancelado'}).eq('id',id).select('folio_externo');
   if(r.error || !(r.data||[]).length){ toast(errMsg(r.error||{message:'no se pudo'}), true); return; }
   const folio = r.data[0].folio_externo;
@@ -587,9 +591,27 @@ async function marcarPedidoCancelado(id){
   logEv('pedido','cancelado por Indar: #'+folio);
 }
 
+// v209: deshacer una cancelación hecha por error
+async function reactivarPedido(id){
+  if(!esAdmin()) return;
+  const p = await sb.from('pedidos_compra').select('folio_externo,total,estado,proveedores(nombre)').eq('id',id).single();
+  if(p.error || !p.data || p.data.estado!=='cancelado'){ toast('Ese pedido no está cancelado', true); return; }
+  if(!confirm('¿Reactivar el pedido #'+p.data.folio_externo+' de '+((p.data.proveedores||{}).nombre||'')+' por '+fmt(p.data.total)+'?\n\nVuelve a quedar pendiente de recibir y su cuenta por pagar se restaura.')) return;
+  const it = await sb.from('pedido_compra_items').select('cantidad,cantidad_recibida,cancelada').eq('pedido_id',id);
+  const vivos = (it.data||[]).filter(function(i){ return !i.cancelada; });
+  const rec = vivos.reduce(function(s,i){ return s + +(i.cantidad_recibida||0); },0), ped = vivos.reduce(function(s,i){ return s + +i.cantidad; },0);
+  const est = rec<=0 ? 'enviado' : (rec>=ped ? 'recibido' : 'parcial');
+  const u = await sb.from('pedidos_compra').update({estado:est}).eq('id',id);
+  if(u.error){ toast(errMsg(u.error), true); return; }
+  const cx = (await sb.from('cuentas_pagar').select('id,monto').ilike('concepto','%'+p.data.folio_externo+'%').eq('referencia','Pedido cancelado por Indar')).data||[];
+  for(const c of cx){ await sb.from('cuentas_pagar').update({saldo:+c.monto, estado:'pendiente', referencia:'Reactivado (se había cancelado por error)'}).eq('id',c.id); }
+  logEv('pedido','reactivado: #'+p.data.folio_externo);
+  toast('Pedido #'+p.data.folio_externo+' reactivado ✓'+(cx.length?' · cuenta por pagar restaurada':'')); vPedidos();
+}
+
 /* ===== Traer facturas (XML+PDF) de Indar con el botón ===== */
 async function traerFacturasIndar(){
-  const pr = await sb.from('pedidos_compra').select('id,folio_externo,estado').neq('estado','cancelado');
+  const pr = await sb.from('pedidos_compra').select('id,folio_externo,estado,proveedores!inner(nombre)').ilike('proveedores.nombre','%indar%').neq('estado','cancelado'); // v209: solo Indar
   if(pr.error){ toast(errMsg(pr.error),true); return; }
   const folios = [...new Set((pr.data||[]).map(function(x){ return String(x.folio_externo||'').trim(); }).filter(Boolean))];
   if(!folios.length){ toast('No hay pedidos registrados'); return; }
@@ -4500,7 +4522,7 @@ async function vPedidos(){
         <td class="small">${p.fecha_recibido?fecha(p.fecha_recibido):'<span class="muted">—</span>'}</td>
         <td><span class="badge ${badges[p.estado]}">${p.estado}</span></td>
         <td class="small" style="white-space:nowrap">${resParteHTML(window._pp[p.id], window._pind && window._pind[p.id])}${(window._pdev&&window._pdev[p.id])?`<br><span class="badge ${window._pdev[p.id].abiertas?'b-ambar':'b-verde'}" title="Tiene devolución con Indar">↩️ ${window._pdev[p.id].pz} devuelta(s)${window._pdev[p.id].abiertas?'':' ✓'}</span>`:''}</td><td>${p.plazo_dias||0} días</td>${esFinanzas()?`<td class="num"><b>${fmt(p.total)}</b></td>`:''}
-        <td style="white-space:nowrap" onclick="event.stopPropagation()"><button class="btn sec sm" onclick="verPedido(${p.id}, '${p.estado}')">Ver / Recibir</button>
+        <td style="white-space:nowrap" onclick="event.stopPropagation()"><button class="btn sec sm" onclick="verPedido(${p.id}, '${p.estado}')">Ver / Recibir</button>${p.estado==='cancelado'&&esAdmin()?` <button class="btn sm" title="Deshacer la cancelación" onclick="reactivarPedido(${p.id})">↩ Reactivar</button>`:''}
         ${esAdmin() && ['enviado','parcial'].includes(p.estado) ? `<button class="btn sm" onclick="recibirPedido(${p.id})">Recibir todo ✓</button>`:''}</td>
       </tr>`;}).join('') || '<tr><td colspan="9" class="muted">Sin pedidos con este filtro.</td></tr>'}
       <tr id="ped-vacio" style="display:none"><td colspan="9" class="muted">Ese número no aparece en ningún pedido. Revisa que esté bien escrito, o usa el botón <b>🔍 ¿Qué me están entregando?</b>.</td></tr></tbody></table></div></div>
