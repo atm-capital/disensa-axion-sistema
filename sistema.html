@@ -2710,8 +2710,8 @@ async function cotizarSolicitud(id){
   window._preCot = items.map(i=>{
     const x = M.get(i.codigo), mio = MP.get(i.codigo);
     if(mio && +mio.precio>0) return {codigo:i.codigo, desc:i.desc || mio.descripcion || '', cantidad:+i.cantidad||1, precio:+mio.precio, costo:+mio.costo||0, sugerido:+mio.precio, producto_id:mio.id};
-    const costo = x ? +x.precio_lista * (1 - (+x.promo_pct||0)/100) : 0;
-    const pax = x ? precioAxion(x.precio_lista, x.precio_sugerido, i.codigo) : 0; // v210: precio Axion, no el sugerido de Indar
+    const costo = axCostoHoy(x); // v213
+    const pax = x ? precioAxion(axCostoHoy(x), x.precio_sugerido, i.codigo) : 0; // v210: precio Axion, no el sugerido de Indar
     return {codigo:i.codigo, desc:i.desc || x?.descripcion || '', cantidad:+i.cantidad||1,
       precio: pax, costo, sugerido: pax, indar: x ? +x.precio_sugerido||0 : 0, producto_id:null};
   });
@@ -2748,7 +2748,7 @@ async function nuevaCot(editId){
       for(const it2 of cotCarrito){
         const a = m1.get(it2.codigo), b = m2.get(it2.codigo);
         if(a){ it2.costo = +a.costo; it2.sugerido = +a.precio; }
-        else if(b){ it2.costo = Math.round(+b.precio_lista*(1-(+b.promo_pct||0))*100)/100; it2.sugerido = precioAxion(b.precio_lista, b.precio_sugerido, it2.codigo); it2.indar = +b.precio_sugerido||0; } // v210/v211
+        else if(b){ it2.costo = Math.round(+b.precio_lista*(1-(+b.promo_pct||0))*100)/100; it2.sugerido = precioAxion(axCostoHoy(b), b.precio_sugerido, it2.codigo); it2.indar = +b.precio_sugerido||0; } // v210/v211
       }
     }
   }
@@ -2807,7 +2807,7 @@ async function buscarCotYa(){
     const promo = +p.promo_pct > 0;
     const costo = Math.round(+p.precio_lista * (1 - (+p.promo_pct||0)) * 100)/100;
     const pz = pzasDe(p.descripcion);
-    const pax = precioAxion(p.precio_lista, p.precio_sugerido, p.codigo); // v210: precio Axion (regla de margen), no el sugerido de Indar
+    const pax = precioAxion(axCostoHoy(p), p.precio_sugerido, p.codigo); // v210: precio Axion (regla de margen), no el sugerido de Indar
     return `<div class="it" onclick='agregarCot(${JSON.stringify({c:p.codigo, d:p.descripcion, pr:pax, co:costo, su:pax, ind:+p.precio_sugerido||0, pid:null}).replace(/'/g,"&#39;")})'>
       <span><b>${esc(p.codigo)}</b> ${esc((p.descripcion||'').slice(0,42))} <span class="badge b-azul">${esc(p.marca||'Indar')}${promo?' · −'+Math.round(p.promo_pct*100)+'%':''}</span></span>
       <span style="white-space:nowrap">${fmt(pax)}${axCaroBadge(pax, p.precio_sugerido, p.codigo)}${pz?`<br><span class="small" style="color:var(--azul)">${fmt(pax/pz)}/pza</span>`:''}</span></div>`;
@@ -3134,8 +3134,8 @@ async function pintarCatalogoTodo(agregar){
   const r = await sb.rpc('buscar_todo', {q, limite, cualquiera: !!window._catCualquiera});
   if(r.error){ toast(/buscar_todo/.test(r.error.message||'')?'Falta correr el SQL 58 (buscador único)':errMsg(r.error), true); return; }
   const todos = (r.data||[]).filter(p=>!(p.fuente==='indar' && +p.precio < 1)); const data = todos.slice(catPagina*48, catPagina*48+48); // sin los renglones promocionales de Indar a $0.01
-  // v210: costo de LISTA de lo de Indar, para calcular el precio Axion (regla de margen)
-  const LI = {}; try{ const ci = data.filter(p=>p.fuente==='indar').map(p=>p.codigo); if(ci.length){ const rl = await sb.from('lista_indar').select('codigo,precio_lista').in('codigo', ci); (rl.data||[]).forEach(x=>{ LI[x.codigo] = +x.precio_lista||0; }); } }catch(e){}
+  // v213: costo de HOY de lo de Indar (lista menos promo), para calcular el precio Axion (regla de margen)
+  const LI = {}; try{ const ci = data.filter(p=>p.fuente==='indar').map(p=>p.codigo); if(ci.length){ const rl = await sb.from('lista_indar').select('codigo,precio_lista,promo_pct,vigencia_promo').in('codigo', ci); (rl.data||[]).forEach(x=>{ LI[x.codigo] = {c:axCostoHoy(x), promo:+x.promo_pct||0, vig:x.vigencia_promo||''}; }); } }catch(e){}
   // ¿alguna palabra coincide con un uso? → sugerencias
   const toks = normTxt(q).split(/\s+/).filter(t=>t.length>=4);
   const sug = window._catUso ? [] : usos.filter(u=>{ const t = normTxt(u.termino+' '+u.palabras); return toks.some(k=>t.includes(k)); }).slice(0,6);
@@ -3146,12 +3146,13 @@ async function pintarCatalogoTodo(agregar){
     if(p.fuente==='truper') window._catTr[p.codigo] = {codigo:p.codigo, clave:p.clave, descripcion:p.descripcion, marca:p.marca, familia_desc:p.familia, unidad:'Pieza', ean:p.ean, precio_publico_iva:+p.precio, distribuidor:+p.costo};
     const badge = p.fuente==='mio' ? '<span class="badge b-verde">🏪 nuestro</span>' : (p.fuente==='truper' ? '<span class="badge b-azul">Truper</span>' : '<span class="badge b-gris">Indar</span>');
     const esInd = p.fuente==='indar';
-    const co = esInd ? (LI[p.codigo] || +p.costo) : +p.costo;      // v210
+    const li0 = esInd ? LI[p.codigo] : null;
+    const co = esInd ? ((li0 && li0.c) || +p.costo) : +p.costo;      // v213: lo que nos cuesta hoy
     const pv = esInd ? precioAxion(co, +p.precio, p.codigo) : +p.precio;      // v210: Indar que no tenemos -> precio Axion (v211: o su precio fijo)
     const m = margenSV(pv, co);
     const precioHtml = p.fuente==='mio'
       ? `<b>${fmt(p.precio)}</b><br><span class="small muted">stock ${+p.stock||0}${esFinanzas()?` · costo ${fmt(p.costo)} (${m!==null?Math.round(m*100)+'%':'—'})`:''}</span>`
-      : `<b>${fmt(pv)}</b><br><span class="small muted">${p.fuente==='truper'?'público Truper':((esFinanzas() && axFijoDe(p.codigo)>0)?'📌 precio fijo':'precio Axion')}${esFinanzas()?` · costo ${fmt(co)} (${m!==null?Math.round(m*100)+'%':'—'})${esInd?` · Indar sugiere ${fmt(p.precio)}`:''}`:''}</span>${(esInd && esFinanzas())?`<br>${axCaroBadge(pv, +p.precio, p.codigo)}${axLapiz(p.codigo)}`:''}`;
+      : `<b>${fmt(pv)}</b><br><span class="small muted">${p.fuente==='truper'?'público Truper':((esFinanzas() && axFijoDe(p.codigo)>0)?'📌 precio fijo':'precio Axion')}${esFinanzas()?` · costo ${fmt(co)} (${m!==null?Math.round(m*100)+'%':'—'})${esInd?` · Indar sugiere ${fmt(p.precio)}${axPromoTxt(li0)}`:''}`:''}</span>${(esInd && esFinanzas())?`<br>${axCaroBadge(pv, +p.precio, p.codigo)}${axLapiz(p.codigo)}`:''}`;
     const obj = {c:key, d:p.descripcion, pr:pv, co:co, su:pv, ind:(esInd?+p.precio:0), pid:p.pid||undefined};
     const link = p.fuente==='truper' ? `https://www.truper.com/CatVigente/buscador?palabra=${encodeURIComponent(p.clave)}` : (p.fuente==='indar' ? `https://indar.mx/portal/detallesProducto/${encodeURIComponent(String(p.codigo).replace(/ /g,'_'))}` : '');
     const alta = (esAdmin() && p.fuente!=='mio') ? (p.fuente==='truper' ? `<button class="btn sm sec" title="Dar de alta en mi inventario" onclick="altaProductoTruper('${esc(p.codigo)}')">➕ Alta</button> ` : `<button class="btn sm sec" title="Dar de alta en mi inventario (precio Axion: regla de margen)" onclick='altaProductoIndar(${JSON.stringify(p.codigo)})'>➕ Alta</button> `) : '';
@@ -3173,10 +3174,10 @@ async function pintarCatalogoTodo(agregar){
 }
 async function altaProductoIndar(codigo){
   // v210: el producto nuevo entra con el precio Axion (regla de margen sobre lista), no con el sugerido de Indar
-  const li = await sb.from('lista_indar').select('precio_lista,precio_sugerido').eq('codigo', codigo).limit(1);
+  const li = await sb.from('lista_indar').select('precio_lista,promo_pct,precio_sugerido').eq('codigo', codigo).limit(1);
   const l0 = (li.data||[])[0];
   await cargarPreciosAxion(true); // v211
-  const pax = l0 ? precioAxion(l0.precio_lista, l0.precio_sugerido, codigo) : 0;
+  const pax = l0 ? precioAxion(axCostoHoy(l0), l0.precio_sugerido, codigo) : 0;
   if(!confirm('Dar de alta en el inventario (stock 0) el producto Indar '+codigo+(pax>0?' a '+fmt(pax)+(axFijoDe(codigo)>0?' (precio fijo que le pusiste)':' (precio Axion, regla de margen)'):'')+'?')) return;
   const r = await sb.rpc('alta_producto_indar', { p_codigo: codigo });
   if(r.error){ toast(errMsg(r.error), true); return; }
@@ -3201,14 +3202,16 @@ async function vCatalogo(){
         ${(ma.data||[]).map(x=>`<option value="${esc(x.marca)}">${esc(x.marca)} (${x.n})</option>`).join('')}</select>
       <select id="cat-fam" onchange="catPagina=0;pintarCatalogo()"><option value="">Todas las familias</option>
         ${(fa.data||[]).map(x=>`<option value="${esc(x.familia)}">${esc(x.familia)} (${x.n})</option>`).join('')}</select>
-      ${esAdmin()?`<button class="btn sm sec" title="Productos de Indar que la regla de margen deja muy por encima del sugerido: ponles precio fijo" onclick="axMuyCaros()">⚠️ Muy caros vs Indar</button>`:''}
+      ${esAdmin()?`<button class="btn sm sec" title="Productos del catálogo de Indar a los que les pusiste precio fijo (y los que salgan muy por encima de Indar)" onclick="axMuyCaros()">📌 Precios fijos</button>`:''}
     </div>
+    <div id="cat-aviso"></div>
     <div id="cat-sel-bar" class="card hidden" style="position:sticky;top:60px;z-index:10;border-left:4px solid var(--rojo)"></div>
     <div id="cat-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px"></div>
     <p style="margin-top:14px"><button class="btn sec" id="cat-mas" onclick="catPagina++;pintarCatalogo(true)">Cargar más</button></p>`;
   catSel = new Map(); catPagina = 0;
   window._catMarcasIndar = $('cat-marca') ? $('cat-marca').innerHTML : ''; // v184
   ['cat-rubro','cat-fam','cat-marca'].forEach(id=>{ const e=$(id); if(e) e.style.display='none'; }); // v186: default "todo"
+  axAvisoLista(); // v213
   pintarCatalogo();
 }
 async function pintarCatalogo(agregar){
@@ -3216,7 +3219,7 @@ async function pintarCatalogo(agregar){
   if(($('cat-prov')||{}).value==='truper') return pintarCatalogoTruper(agregar); // v184
   const q = ($('cat-q')?.value||'').trim(), marca = $('cat-marca')?.value, fam = $('cat-fam')?.value, rubro = $('cat-rubro')?.value;
   await cargarPreciosAxion(); // v211
-  let con = sb.from('lista_indar').select('codigo,descripcion,marca,categoria,precio_lista,promo_pct,precio_sugerido').order('descripcion');
+  let con = sb.from('lista_indar').select('codigo,descripcion,marca,categoria,precio_lista,promo_pct,vigencia_promo,precio_sugerido').order('descripcion');
   if(q.length>=2){
     // búsqueda por palabras: cada palabra debe aparecer en código, descripción O marca (sin acentos)
     for(const t of q.split(/\s+/).slice(0,6)){
@@ -3267,13 +3270,13 @@ function catPrecioHtml(p, mio, pz, costoD){
   if(mio && +mio.precio>0){
     return `<b>${fmt(mio.precio)}</b> <span class="badge b-verde" title="Ya lo vendemos en la tienda: este es nuestro precio">🏪 nuestro</span>${mio.granel&&+mio.precio_unidad>0?`<br><span class="small muted">${fmt(mio.precio_unidad)}/${esc(mio.unidad_venta||'u')}</span>`:''}<br><span class="small muted">stock ${+mio.stock||0}${esFinanzas()?` · Indar sugiere ${fmt(p.precio_sugerido)} · costo ${fmt(costoD)}`:''}</span>`;
   }
-  const pax = precioAxion(p.precio_lista, p.precio_sugerido, p.codigo); // v210: precio Axion (regla de margen), no el sugerido de Indar; v211: o su precio fijo
-  return `<b>${fmt(pax)}</b>${pz?`<br><span class="small muted">${fmt(pax/pz)}/pza</span>`:''}<br><span class="small muted">${(esFinanzas() && axFijoDe(p.codigo)>0)?'📌 precio fijo':'precio Axion'}${esAdmin()?` · costo: ${fmt(costoD)}`:''}${esFinanzas()?` · Indar sugiere ${fmt(p.precio_sugerido)}`:''}</span>${esFinanzas()?`<br>${axCaroBadge(pax, p.precio_sugerido, p.codigo)}${axLapiz(p.codigo)}`:''}`;
+  const pax = precioAxion(axCostoHoy(p), p.precio_sugerido, p.codigo); // v210: precio Axion (regla de margen), no el sugerido de Indar; v211: o su precio fijo
+  return `<b>${fmt(pax)}</b>${pz?`<br><span class="small muted">${fmt(pax/pz)}/pza</span>`:''}<br><span class="small muted">${(esFinanzas() && axFijoDe(p.codigo)>0)?'📌 precio fijo':'precio Axion'}${esAdmin()?` · costo: ${fmt(costoD)}`:''}${esFinanzas()?` · Indar sugiere ${fmt(p.precio_sugerido)}${axPromoTxt({promo:+p.promo_pct||0, vig:p.vigencia_promo||''})}`:''}</span>${esFinanzas()?`<br>${axCaroBadge(pax, p.precio_sugerido, p.codigo)}${axLapiz(p.codigo)}`:''}`;
 }
 function catSelObj(p, mio){
   const co = Math.round(+p.precio_lista*(1-(+p.promo_pct||0))*100)/100;
   if(mio && +mio.precio>0) return {c:p.codigo, d:p.descripcion, pr:+mio.precio, co:(+mio.costo>0?+mio.costo:co), su:+mio.precio, pid:mio.id};
-  const pax = precioAxion(p.precio_lista, p.precio_sugerido, p.codigo); // v210
+  const pax = precioAxion(axCostoHoy(p), p.precio_sugerido, p.codigo); // v210
   return {c:p.codigo, d:p.descripcion, pr:pax, co, su:pax, ind:+p.precio_sugerido||0};
 }
 function fichaCat(cod){
@@ -3284,7 +3287,7 @@ function fichaCat(cod){
   abrirModal(`<div style="text-align:center"><img src="https://storage.googleapis.com/indararticulos/${encodeURIComponent(p.codigo.replace(/[^A-Za-z0-9]/g,'_'))}_MD.webp" style="width:100%;max-width:380px;height:280px;object-fit:contain" onerror="this.style.display='none'"></div>
     <p class="small" style="margin:8px 0 2px"><span class="badge b-gris">${esc(p.marca||'sin marca')}</span> · <b>${esc(p.codigo)}</b> · <a href="https://indar.mx/portal/detallesProducto/${encodeURIComponent(p.codigo.replace(/ /g,'_'))}" target="_blank" class="link">📎 ficha técnica en Indar</a></p>
     <h3 style="margin:6px 0;line-height:1.4">${esc(p.descripcion)}</h3>
-    <p style="font-size:19px;margin:8px 0">${mio&&+mio.precio>0 ? `<b>${fmt(mio.precio)}</b> <span class="small muted">🏪 nuestro precio · stock ${+mio.stock||0}</span>${esFinanzas()?`<br><span class="small muted">Indar sugiere ${fmt(p.precio_sugerido)}</span>`:''}` : `<b>${fmt(precioAxion(p.precio_lista, p.precio_sugerido, p.codigo))}</b> <span class="small muted">precio Axion con IVA${pz?` · ${fmt(precioAxion(p.precio_lista, p.precio_sugerido, p.codigo)/pz)}/pza`:''}</span>${esFinanzas()?`<br><span class="small muted">Indar sugiere ${fmt(p.precio_sugerido)}</span>${axCaroBadge(precioAxion(p.precio_lista, p.precio_sugerido, p.codigo), p.precio_sugerido, p.codigo)}`:''}`}
+    <p style="font-size:19px;margin:8px 0">${mio&&+mio.precio>0 ? `<b>${fmt(mio.precio)}</b> <span class="small muted">🏪 nuestro precio · stock ${+mio.stock||0}</span>${esFinanzas()?`<br><span class="small muted">Indar sugiere ${fmt(p.precio_sugerido)}</span>`:''}` : `<b>${fmt(precioAxion(axCostoHoy(p), p.precio_sugerido, p.codigo))}</b> <span class="small muted">precio Axion con IVA${pz?` · ${fmt(precioAxion(axCostoHoy(p), p.precio_sugerido, p.codigo)/pz)}/pza`:''}</span>${esFinanzas()?`<br><span class="small muted">Indar sugiere ${fmt(p.precio_sugerido)}</span>${axCaroBadge(precioAxion(axCostoHoy(p), p.precio_sugerido, p.codigo), p.precio_sugerido, p.codigo)}`:''}`}
     ${esAdmin()?`<br><span class="small muted">costo: ${fmt(costoD)} · lista: ${fmt(p.precio_lista)}${+p.promo_pct?` · promo ${Math.round(+p.promo_pct*100)}%`:''}</span>`:''}</p>
     <p class="small" id="fcat-inv" style="margin:4px 0 8px"><span class="muted">⏳ checando inventario y pedidos...</span></p>
     <div class="acciones">
@@ -8056,9 +8059,13 @@ function impPrecioRegla(i){ return precioPorMargen(i.l, impMargenRegla(impRef(i)
 // sobre el costo de LISTA de Indar. El sugerido de Indar ya no se le ensena a la tienda: solo decide el rango de la regla.
 // v211 (6-oct-2026): la regla vive en la BASE (config_sistema.regla_margen) y vale para todos; el admin puede ponerle
 // PRECIO FIJO a un producto (precios_axion) y ve una alerta cuando la regla lo deja muy por encima del sugerido de Indar.
-function precioAxionRegla(lista, sugerido){ lista=+lista||0; sugerido=+sugerido||0; if(lista<=0) return redondearPrecio(sugerido); const ref = sugerido>0 ? sugerido : lista*1.16/0.754; return precioPorMargen(lista, impMargenRegla(ref)) || redondearPrecio(sugerido); }
+// v213 (6-oct-2026, Andres: "nuestro porcentaje va arriba del costo, no del precio que sugiere Indar"): el margen se calcula
+// sobre LO QUE NOS CUESTA HOY (precio de lista menos la promo/outlet vigente de Indar), margen sobre la venta. El rango
+// 40/35/30 lo decide ese mismo costo (costo x 1.16 / 0.754 = hasta $130 de costo 40%, hasta $325 35%, arriba 30%).
+function axCostoHoy(x){ return x ? Math.round((+x.precio_lista||0)*(1-(+x.promo_pct||0))*100)/100 : 0; }
+function precioAxionRegla(costo){ costo=+costo||0; if(costo<=0) return 0; return precioPorMargen(costo, impMargenRegla(costo*1.16/0.754)); }
 function axFijoDe(codigo){ return (codigo && window._pxFijo) ? (+window._pxFijo.get(codigo)||0) : 0; }
-function precioAxion(lista, sugerido, codigo){ const f = axFijoDe(codigo); return f>0 ? f : precioAxionRegla(lista, sugerido); }
+function precioAxion(costo, sugerido, codigo){ const f = axFijoDe(codigo); return f>0 ? f : (precioAxionRegla(costo) || redondearPrecio(sugerido)); }
 const AX_CARO_PCT = 0.35, AX_CARO_MIN = 5; // "muy caro" = 35% o mas arriba del sugerido de Indar y al menos $5 de diferencia
 function axMuyCaro(precio, indar){ precio=+precio||0; indar=+indar||0; if(indar<1 || precio<=0) return 0; const r = precio/indar - 1; return (r>=AX_CARO_PCT && precio-indar>=AX_CARO_MIN) ? r : 0; }
 function axCaroBadge(precio, indar, codigo){
@@ -8069,6 +8076,26 @@ function axCaroBadge(precio, indar, codigo){
 function axLapiz(codigo){
   if(typeof perfil==='undefined' || !perfil || !esAdmin()) return '';
   return ` <a class="link small" style="cursor:pointer;white-space:nowrap" title="Ponerle precio fijo a este producto (vale para todos)" onclick='event.stopPropagation();axFijarPrecio(${JSON.stringify(codigo).replace(/'/g,"&#39;")})'>✏️ precio</a>`;
+}
+function axPromoTxt(i){ // v213: para el admin, de donde sale el costo
+  if(!i || !(i.promo>0)) return '';
+  const venc = i.vig && String(i.vig).slice(0,10) < hoyMX();
+  return ` · <span style="${venc?'color:#b91c1c;font-weight:700':''}" title="${venc?'La promo que tenemos cargada ya venció: sube la lista nueva de Indar para confirmar el costo':'Promo de Indar ya descontada en el costo'}">promo −${Math.round(i.promo*100)}%${venc?' VENCIDA '+String(i.vig).slice(8,10)+'/'+String(i.vig).slice(5,7):''}</span>`;
+}
+async function axAvisoLista(){ // v213: si las promos de la lista cargada ya vencieron, el costo de hoy puede ser otro
+  const el = $('cat-aviso'); if(!el || !esFinanzas()) return;
+  try{
+    const hoy = hoyMX();
+    const [mx, nv, na] = await Promise.all([
+      sb.from('lista_indar').select('vigencia_promo,actualizado').gt('promo_pct',0).order('vigencia_promo',{ascending:false}).limit(1),
+      sb.from('lista_indar').select('codigo',{count:'exact',head:true}).gt('promo_pct',0).lt('vigencia_promo', hoy),
+      sb.from('lista_indar').select('codigo',{count:'exact',head:true}).gt('promo_pct',0)]);
+    const u = (mx.data||[])[0]; if(!u || !$('cat-aviso')) return;
+    const venc = nv.count||0, tot = na.count||0;
+    if(!venc){ el.innerHTML = ''; return; }
+    const f = s => String(s||'').slice(8,10)+'/'+String(s||'').slice(5,7)+'/'+String(s||'').slice(0,4);
+    el.innerHTML = `<div class="card" style="padding:10px 12px;margin-bottom:10px;background:#fef2f2;border:1px solid #fecaca"><b style="color:#b91c1c">⚠️ ${venc.toLocaleString('es-MX')} de ${tot.toLocaleString('es-MX')} promos de la lista de Indar ya vencieron</b> <span class="small">(la lista se cargó el ${f(u.actualizado)}; la promo más reciente venció el ${f(u.vigencia_promo)}). El precio Axion de esos productos se calcula con el costo de esa promo: si Indar ya la quitó, estaríamos cotizando abajo de lo que cuesta. <b>Sube la lista nueva</b> en Importar → 📄 Actualizar lista de precios Indar.</span></div>`;
+  }catch(e){}
 }
 async function cargarPreciosAxion(forzar){
   if(!forzar && window._pxT && Date.now()-window._pxT < 60000) return;
@@ -8096,12 +8123,8 @@ async function axGuardarFijo(cod, v){
   if(!(precio>0)){ toast('Pon un precio', true); return false; }
   const i = (window._axInfo||{})[cod];
   if(i){
-    const pisoPromo = Math.ceil(i.l*(1-i.promo)*1.16 - 0.001), pisoLista = Math.ceil(i.l*1.16 - 0.001);
-    if(precio < pisoPromo){ alert('🚫 '+cod+': '+fmt(precio)+' queda ABAJO DEL COSTO.\n\nCosto con la promo de Indar: '+fmt(i.l*(1-i.promo))+' + IVA = '+fmt(pisoPromo)+'.'); return false; }
-    if(precio < pisoLista && !window._axOkPromo){
-      if(!confirm(cod+': '+fmt(precio)+' queda abajo del costo de LISTA ('+fmt(pisoLista)+' con IVA).\n\nSolo deja utilidad mientras Indar mantenga la promo/outlet ('+Math.round(i.promo*100)+'% hoy; el costo con promo es '+fmt(i.l*(1-i.promo))+').\n\n¿Lo dejo así? (ya no vuelvo a preguntar en esta sesión)')) return false;
-      window._axOkPromo = true;
-    }
+    const pisoPromo = Math.ceil(i.l*(1-i.promo)*1.16 - 0.001);
+    if(precio < pisoPromo){ alert('🚫 '+cod+': '+fmt(precio)+' queda ABAJO DEL COSTO.\n\nNos cuesta '+fmt(i.l*(1-i.promo))+' + IVA = '+fmt(pisoPromo)+'.'); return false; }
   }
   const u = await sb.from('precios_axion').upsert({codigo:cod, precio, por:(perfil&&perfil.nombre)||'', actualizado:new Date().toISOString()}, {onConflict:'codigo'});
   if(u.error){ toast(/precios_axion/.test(u.error.message||'') ? 'Falta correr el SQL 61 (precios fijos)' : errMsg(u.error), true); return false; }
@@ -8124,22 +8147,21 @@ async function axFijarPrecio(cod){
   const x = (r.data||[])[0]; if(!x){ toast('No encontré '+cod+' en la lista de Indar', true); return; }
   const l = +x.precio_lista||0, promo = +x.promo_pct||0, cp = Math.round(l*(1-promo)*100)/100, s = +x.precio_sugerido||0;
   window._axInfo = window._axInfo||{}; window._axInfo[cod] = {l, promo, s};
-  const regla = precioAxionRegla(l, s), fijo = axFijoDe(cod), rp = precioPorMargen(cp, impMargenRegla(s>0?s:cp*1.16/0.754));
+  const regla = precioAxionRegla(cp) || redondearPrecio(s), fijo = axFijoDe(cod);
   const mg = p => { const m = margenSV(p, cp); return m===null ? '—' : Math.round(m*100)+'%'; };
   const J = JSON.stringify(cod).replace(/'/g,"&#39;");
   abrirModal(`<h3>✏️ Precio de ${esc(cod)}</h3>
     <p class="small" style="margin:0 0 10px">${esc(x.descripcion||'')} <span class="badge b-gris">${esc(x.categoria||'')}</span></p>
     <table style="margin-bottom:10px"><tbody>
-      <tr><td>Costo de lista Indar</td><td class="num">${fmt(l)}</td><td class="small muted">sin IVA</td></tr>
-      <tr><td>Costo con la promo de hoy${promo?` (−${Math.round(promo*100)}%)`:''}</td><td class="num">${fmt(cp)}</td><td class="small muted">sin IVA</td></tr>
-      <tr><td>Indar sugiere</td><td class="num">${fmt(s)}</td><td class="small muted">margen ${mg(s)} con promo</td></tr>
-      <tr><td>Regla de margen (sobre lista)</td><td class="num"><b>${fmt(regla)}</b>${axMuyCaro(regla,s)?` <span style="color:#b91c1c">+${Math.round(axMuyCaro(regla,s)*100)}% vs Indar</span>`:''}</td><td class="small muted">lo que sale si no pones nada</td></tr>
+      <tr><td>Precio de lista Indar</td><td class="num">${fmt(l)}</td><td class="small muted">sin IVA${promo?` · promo −${Math.round(promo*100)}%`:''}</td></tr>
+      <tr><td><b>Lo que nos cuesta hoy</b></td><td class="num"><b>${fmt(cp)}</b></td><td class="small muted">sin IVA · con IVA ${fmt(cp*1.16)}</td></tr>
+      <tr><td>Indar sugiere</td><td class="num">${fmt(s)}</td><td class="small muted">margen ${mg(s)}</td></tr>
+      <tr><td>Precio Axion (regla de margen)</td><td class="num"><b>${fmt(regla)}</b></td><td class="small muted">margen ${mg(regla)} · lo que sale si no pones nada</td></tr>
       <tr><td>Precio fijo actual</td><td class="num">${fijo?'<b>📌 '+fmt(fijo)+'</b>':'<span class="muted">ninguno</span>'}</td><td></td></tr>
     </tbody></table>
     <div class="field"><label>Precio fijo (con IVA) — lo ven y lo cotizan todos</label><input id="axf-p" type="number" step="1" value="${fijo||''}" placeholder="${regla}" style="font-size:18px"></div>
     <p class="small" style="margin:0 0 10px">Atajos:
-      <button class="btn sm sec" onclick="$('axf-p').value=${redondearPrecio(s)}">= Indar ${fmt(redondearPrecio(s))}</button>
-      ${rp>0&&rp!==regla?`<button class="btn sm sec" title="La misma regla de margen, pero sobre el costo con la promo de Indar" onclick="$('axf-p').value=${rp}">Regla sobre costo con promo ${fmt(rp)}</button>`:''}</p>
+      <button class="btn sm sec" onclick="$('axf-p').value=${redondearPrecio(s)}">= Indar ${fmt(redondearPrecio(s))}</button></p>
     <div class="acciones">
       ${fijo?`<button class="btn sec" onclick='axQuitarFijo(${J}).then(function(ok){ if(ok){ cerrarModal(); toast("Vuelve al precio de la regla"); pintarCatalogo(false); } })'>Quitar precio fijo</button>`:''}
       <button class="btn sec" onclick="cerrarModal()">Cancelar</button>
@@ -8149,7 +8171,7 @@ async function axFijarPrecio(cod){
 // lista de trabajo: todo lo de Indar (que no vendemos) que la regla deja muy por encima del sugerido
 async function axMuyCaros(){
   if(!esAdmin()) return;
-  abrirModal('<h3>⚠️ Muy caros contra Indar</h3><p class="muted" id="axc-st">⏳ Cargando la lista de Indar (29 mil renglones; la primera vez tarda como 40 segundos)…</p>', true);
+  abrirModal('<h3>📌 Precios fijos</h3><p class="muted" id="axc-st">⏳ Cargando la lista de Indar (29 mil renglones; la primera vez tarda como 40 segundos)…</p>', true);
   try{
     await cargarPreciosAxion(true);
     const cat = await liCatalogo(t=>{ const e=$('axc-st'); if(e) e.textContent = '⏳ '+t; });
@@ -8157,13 +8179,13 @@ async function axMuyCaros(){
     const M = new Set(mios.map(x=>x.codigo)); const filas = []; window._axInfo = window._axInfo||{};
     for(const x of cat.items){
       const l = +x.precio_lista||0, s = +x.precio_sugerido||0; if(M.has(x.codigo) || s<1 || l<=0) continue;
-      const regla = precioAxionRegla(l, s), fijo = axFijoDe(x.codigo), r = axMuyCaro(regla, s);
+      const promo = +x.promo_pct||0, cp = axCostoHoy(x);
+      const regla = precioAxionRegla(cp) || redondearPrecio(s), fijo = axFijoDe(x.codigo), r = axMuyCaro(regla, s);
       if(!r && !fijo) continue;
-      const promo = +x.promo_pct||0;
-      filas.push({cod:x.codigo, desc:x.descripcion||'', cat:x.categoria||'(sin categoría)', l, promo, cp:Math.round(l*(1-promo)*100)/100, s, regla, r, fijo});
+      filas.push({cod:x.codigo, desc:x.descripcion||'', cat:x.categoria||'(sin categoría)', l, promo, cp, s, regla, r, fijo});
       window._axInfo[x.codigo] = {l, promo, s};
     }
-    window._axC = {filas, modo:'caros', q:'', cat:''};
+    window._axC = {filas, modo:(filas.some(f=>f.r && !f.fijo) ? 'caros' : 'fijos'), q:'', cat:''};
     if(!$('axc-st')) return; // cerraron el modal mientras cargaba
     axCarosMarco();
   }catch(e){ const el=$('axc-st'); if(el) el.textContent = 'No se pudo cargar: '+errMsg(e); }
@@ -8184,8 +8206,9 @@ function axCarosMarco(){
   const pend = C.filas.filter(f=>f.r && !f.fijo), porCat = {};
   pend.forEach(f=>{ porCat[f.cat] = (porCat[f.cat]||0)+1; });
   const cats = Object.entries(porCat).sort((a,b)=>b[1]-a[1]);
-  abrirModal(`<h3>⚠️ Muy caros contra Indar</h3>
-    <p class="small muted" style="margin:0 0 8px">Productos de Indar que <b>no tenemos en inventario</b> y que la regla de margen deja ${Math.round(AX_CARO_PCT*100)}% o más arriba de lo que sugiere Indar. Casi todos son OUTLET, remates o promos fuertes: Indar calcula su sugerido sobre el costo ya rebajado y la regla lo calcula sobre el precio de lista. Ponles precio fijo (lo ven y lo cotizan todos) o déjalos como están.</p>
+  abrirModal(`<h3>📌 Precios fijos</h3>
+    <p class="small muted" style="margin:0 0 8px">Productos del catálogo de Indar (que no tenemos en inventario) a los que les pusiste <b>precio fijo</b>: ese precio manda sobre la regla de margen y lo ven todos. Para ponerle precio fijo a otro, búscalo en el Catálogo y dale a ✏️ precio.</p>
+    <p class="small muted" style="display:none">Productos de Indar que <b>no tenemos en inventario</b> y que la regla de margen deja ${Math.round(AX_CARO_PCT*100)}% o más arriba de lo que sugiere Indar. Casi todos son OUTLET, remates o promos fuertes: Indar calcula su sugerido sobre el costo ya rebajado y la regla lo calcula sobre el precio de lista. Ponles precio fijo (lo ven y lo cotizan todos) o déjalos como están.</p>
     <div class="toolbar" style="margin-bottom:8px;flex-wrap:wrap;gap:6px">
       <select id="axc-modo" onchange="window._axC.modo=this.value;axCarosPintar()"><option value="caros">⚠️ Muy caros sin precio fijo (${pend.length.toLocaleString('es-MX')})</option><option value="fijos">📌 Con precio fijo (${C.filas.filter(f=>f.fijo>0).length})</option><option value="todos">Todos</option></select>
       <select id="axc-cat" onchange="window._axC.cat=this.value;axCarosPintar()"><option value="">Todas las categorías</option>${cats.map(c=>`<option value="${esc(c[0])}">${esc(c[0])} (${c[1].toLocaleString('es-MX')})</option>`).join('')}</select>
@@ -8193,9 +8216,9 @@ function axCarosMarco(){
     </div>
     <div class="card" style="padding:9px;background:#f8fafc;margin-bottom:8px"><span class="small"><b id="axc-n"></b> &nbsp;En bloque, a todos los que están filtrados y sin precio fijo:</span><br>
       <button class="btn sm sec" style="margin-top:6px" onclick="axFijoBloque('indar')">Ponerles el sugerido de Indar</button>
-      <button class="btn sm sec" style="margin-top:6px" title="La regla 40/35/30 calculada sobre el costo con la promo de Indar" onclick="axFijoBloque('promo')">Ponerles la regla sobre el costo con promo</button></div>
+</div>
     <div class="tbl-scroll" style="max-height:52vh;overflow-y:auto"><table>
-      <thead><tr><th>Producto</th><th class="num">Costo lista</th><th class="num">Promo</th><th class="num">Costo c/promo</th><th class="num">Indar sugiere</th><th class="num">Regla</th><th>Precio fijo</th></tr></thead>
+      <thead><tr><th>Producto</th><th class="num">Costo lista</th><th class="num">Promo</th><th class="num">Nos cuesta hoy</th><th class="num">Indar sugiere</th><th class="num">Precio regla</th><th>Precio fijo</th></tr></thead>
       <tbody id="axc-tb"></tbody></table></div>
     <div class="acciones"><button class="btn sec" onclick="cerrarModal();if($('cat-grid'))pintarCatalogo(false)">Cerrar</button></div>`, true);
   const mm = document.querySelector('#modal-root .modal'); if(mm){ mm.style.maxWidth = '1180px'; mm.style.width = '96vw'; } // v212: la tabla necesita ancho
@@ -8208,14 +8231,12 @@ function axCarosPintar(){
   $('axc-n').textContent = F.length.toLocaleString('es-MX')+' producto(s)'+(F.length>ver.length?' (se ven los primeros '+ver.length+')':'')+'.';
   tb.innerHTML = ver.map(f=>{
     const J = JSON.stringify(f.cod).replace(/'/g,"&#39;");
-    const rp = precioPorMargen(f.cp, impMargenRegla(f.s));
     return `<tr><td style="max-width:300px"><b>${esc(f.cod)}</b> <span class="badge b-gris">${esc(f.cat)}</span><br><span class="small muted">${esc(f.desc.slice(0,60))}</span></td>
       <td class="num">${fmt(f.l)}</td><td class="num">${f.promo?'−'+Math.round(f.promo*100)+'%':'—'}</td><td class="num">${fmt(f.cp)}</td>
       <td class="num">${fmt(f.s)}</td>
       <td class="num">${fmt(f.regla)}${f.r?`<br><span class="small" style="color:#b91c1c;font-weight:700">+${Math.round(f.r*100)}%</span>`:''}</td>
       <td style="white-space:nowrap"><input type="number" step="1" value="${f.fijo||''}" placeholder="—" style="width:78px;padding:4px 6px;border:1px solid ${f.fijo?'var(--verde)':'var(--linea)'};border-radius:6px;text-align:right" onchange='axFijoInline(${J}, this.value)'>
         <button class="btn sm sec" title="Poner el sugerido de Indar" onclick='axFijoInline(${J}, ${redondearPrecio(f.s)})'>= Indar</button>
-        <button class="btn sm sec" title="Regla de margen sobre el costo con promo" onclick='axFijoInline(${J}, ${rp})'>${fmt(rp)}</button>
         ${f.fijo?`<span class="x" title="Quitar el precio fijo (vuelve a la regla)" onclick='axFijoInline(${J}, 0)'>✕</span>`:''}</td></tr>`;
   }).join('') || '<tr><td colspan="7" class="muted" style="padding:14px">Nada con ese filtro.</td></tr>';
 }
@@ -8232,7 +8253,7 @@ async function axFijoBloque(modo){
     .filter(x=>x.p>0 && x.p >= Math.ceil(x.f.cp*1.16 - 0.001));
   if(!filas.length){ toast('No hay productos filtrados sin precio fijo', true); return; }
   const bajo = filas.filter(x=>x.p < Math.ceil(x.f.l*1.16 - 0.001)).length;
-  if(!confirm('¿Ponerle precio fijo a '+filas.length.toLocaleString('es-MX')+' producto(s) con '+(modo==='indar'?'el sugerido de Indar':'la regla de margen sobre el costo con promo')+'?\n\n'+(bajo?bajo.toLocaleString('es-MX')+' quedan abajo del costo de LISTA: solo dejan utilidad mientras Indar mantenga la promo/outlet. Si Indar quita la promo hay que revisarlos.\n\n':'')+'Lo van a ver y cotizar todos. Se puede quitar después, uno por uno.')) return;
+  if(!confirm('¿Ponerle precio fijo a '+filas.length.toLocaleString('es-MX')+' producto(s) con el sugerido de Indar?\n\n'+'Lo van a ver y cotizar todos. Se puede quitar después, uno por uno.')) return;
   const por = (perfil&&perfil.nombre)||'', ahora = new Date().toISOString();
   let ok = 0;
   for(let i=0; i<filas.length; i+=500){
@@ -8593,7 +8614,7 @@ function mxPrecioBase(p){
   if(p.px>0) return +p.px;
   if(p.sinPx) return 0;
   if(m && m.mio && +m.mio.precio>0) return +m.mio.precio;
-  if(m) return precioAxion(m.precio_lista, m.precio_sugerido, m.codigo); // v210
+  if(m) return precioAxion(axCostoHoy(m), m.precio_sugerido, m.codigo); // v210
   return +p.pu||0;
 }
 function mxPrecioCot(p){ const b = mxPrecioBase(p); if(!(b>0)) return 0; return (window._mxRedondear!==false) ? Math.ceil(b-0.001) : Math.round(b*100)/100; }
@@ -8615,7 +8636,7 @@ function mxRender(targetId, partidas, obra){
     <tbody>${partidas.map((p,i)=>{
       const sel = p.sel>=0 ? p.alts[p.sel] : null;
       const pc = mxPrecioCot(p);
-      const nuestro = sel ? (sel.mio && +sel.mio.precio>0 ? +sel.mio.precio : precioAxion(sel.precio_lista, sel.precio_sugerido, sel.codigo)) : 0;
+      const nuestro = sel ? (sel.mio && +sel.mio.precio>0 ? +sel.mio.precio : precioAxion(axCostoHoy(sel), sel.precio_sugerido, sel.codigo)) : 0;
       const costo = sel ? (sel.mio && +sel.mio.costo>0 ? +sel.mio.costo : +sel.precio_lista) : 0;
       const mg = (fin && pc>0 && costo>0) ? margenSV(pc, costo) : null;
       const bV = {'código':'b-verde','descripción':'b-verde','parecido':'b-azul'};
@@ -8780,7 +8801,7 @@ function cotizarRequisicion(obra){
     const ley = precio>0 ? '' : ' (precio sujeto a volumen)';
     if(m){
       const costo = (m.mio && +m.mio.costo>0) ? +m.mio.costo : (+m.precio_lista||0);
-      return {codigo:m.codigo, desc:m.descripcion+ley, cantidad:p.cant, precio, costo, sugerido:(m.mio && +m.mio.precio>0) ? +m.mio.precio : precioAxion(m.precio_lista, m.precio_sugerido, m.codigo), indar:(m.mio && +m.mio.precio>0) ? 0 : (+m.precio_sugerido||0), producto_id: m.mio ? m.mio.id : null};
+      return {codigo:m.codigo, desc:m.descripcion+ley, cantidad:p.cant, precio, costo, sugerido:(m.mio && +m.mio.precio>0) ? +m.mio.precio : precioAxion(axCostoHoy(m), m.precio_sugerido, m.codigo), indar:(m.mio && +m.mio.precio>0) ? 0 : (+m.precio_sugerido||0), producto_id: m.mio ? m.mio.id : null};
     }
     return {codigo:p.cod||'', desc:p.desc+ley, cantidad:p.cant, precio, costo:0, sugerido:precio, producto_id:null};
   }).filter(Boolean);
