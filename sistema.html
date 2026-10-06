@@ -176,6 +176,7 @@ tr.oculto,tr.plegado{display:none}
       <div id="vtools" style="display:flex;gap:8px;flex-wrap:wrap"></div>
     </div>
     <div class="wrap">
+      <div id="ax-aviso-global"></div>
       <div id="v-resumen" class="view"></div>
       <div id="v-ventas" class="view"></div>
       <div id="v-cotizaciones" class="view"></div>
@@ -241,6 +242,10 @@ window.addEventListener('DOMContentLoaded', async () => {
     try{ localStorage.setItem('ax_import', location.hash.slice(8)); }catch(e){}
     history.replaceState(null, '', location.pathname);
   }
+  if(location.hash === '#axlp'){ // v214: el marcador trae la ListaPrecios.xlsx de Indar en window.name
+    try{ if(String(window.name||'').slice(0,5) === 'AXLP:'){ window._axLP = window.name.slice(5); } window.name = ''; }catch(e){}
+    history.replaceState(null, '', location.pathname);
+  }
   const {url, key} = getCfg();
   if(!url || !key){ $('scr-config').classList.remove('hidden'); return; }
   sb = supabase.createClient(url, key);
@@ -277,6 +282,7 @@ async function cargarPerfil(){
   const vGuardada = localStorage.getItem('ax_vista');
   const vValida = vGuardada && VISTAS.some(v=>v.id===vGuardada && v.roles.includes(perfil.rol) && (!v.solo || v.solo===(perfil.correo||'')));
   irA(localStorage.getItem('ax_import') && perfil.rol === 'admin' ? 'importar' : (vValida ? vGuardada : 'resumen'));
+  if(window._axLP) setTimeout(axListaRecibida, 2600); // v214: llego la lista de Indar por el marcador
   if(typeof puedeVender==='function' && puedeVender()) setTimeout(avisoTarjetasInicio, 1500); // v144: al entrar, si hay precios nuevos se abre la lista sola
 }
 
@@ -359,7 +365,7 @@ function montarNav(){
     .map(v=>`<a id="nav-${v.id}" onclick="irA('${v.id}')"><span>${v.icono}</span>${v.titulo}</a>`).join('');
 }
 async function irA(id){
-  try{ cargarPreciosAxion(); }catch(e){} // v211: refresca regla y precios fijos (a lo mucho cada minuto)
+  try{ cargarPreciosAxion(); axAvisoGlobal(); }catch(e){} // v211: refresca regla y precios fijos (a lo mucho cada minuto) · v214: aviso de promos vencidas
   document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
   document.querySelectorAll('.nav a').forEach(a=>a.classList.remove('active'));
   $('v-'+id).classList.add('active');
@@ -3204,14 +3210,12 @@ async function vCatalogo(){
         ${(fa.data||[]).map(x=>`<option value="${esc(x.familia)}">${esc(x.familia)} (${x.n})</option>`).join('')}</select>
       ${esAdmin()?`<button class="btn sm sec" title="Productos del catálogo de Indar a los que les pusiste precio fijo (y los que salgan muy por encima de Indar)" onclick="axMuyCaros()">📌 Precios fijos</button>`:''}
     </div>
-    <div id="cat-aviso"></div>
     <div id="cat-sel-bar" class="card hidden" style="position:sticky;top:60px;z-index:10;border-left:4px solid var(--rojo)"></div>
     <div id="cat-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px"></div>
     <p style="margin-top:14px"><button class="btn sec" id="cat-mas" onclick="catPagina++;pintarCatalogo(true)">Cargar más</button></p>`;
   catSel = new Map(); catPagina = 0;
   window._catMarcasIndar = $('cat-marca') ? $('cat-marca').innerHTML : ''; // v184
   ['cat-rubro','cat-fam','cat-marca'].forEach(id=>{ const e=$(id); if(e) e.style.display='none'; }); // v186: default "todo"
-  axAvisoLista(); // v213
   pintarCatalogo();
 }
 async function pintarCatalogo(agregar){
@@ -7695,6 +7699,23 @@ async function axBM(){
       location.href='https://axiontools.mx/sistema.html'+'\x23fxindar='+B(JSON.stringify({ts:Date.now(),facturas:outF}));
       return;
     }
+    if(location.hash.indexOf('\x23axlp')===0||/^\/Cliente\/ListaPrecios/i.test(location.pathname)){
+      var ML=function(t){var e=document.getElementById('axmsg');if(!e){e=document.createElement('div');e.id='axmsg';e.style.cssText='position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:99999;background:#26292b;color:#fff;padding:12px 22px;border-radius:10px;font:14px sans-serif;border-left:5px solid #E8790F';document.body.appendChild(e);}e.textContent='Axion: '+t;};
+      var cu=document.getElementById('codCust');
+      if(!cu||!cu.value){location.href='/Cliente/ListaPrecios\x23axlp=1';return;}
+      ML('bajando la lista de precios completa de Indar. Tarda como 1 minuto, no cierres esta pestana...');
+      var E2=encodeURIComponent;
+      var bd=E2('Proveedor')+'=&'+E2('Marca')+'=&'+E2('Item[codCustomer]')+'='+E2(String(cu.value).toUpperCase())+'&'+E2('Item[itemid]')+'=';
+      var so=document.querySelectorAll('select[id=inputGroupSelect03] option');
+      for(var ci=0;ci<so.length;ci++){if(so[ci].value){bd+='&'+E2('Categoria[]')+'='+E2(so[ci].value);}}
+      var rl=await fetch('/ListaPrecios/getFile',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8','X-CSRF-TOKEN':T,'X-Requested-With':'XMLHttpRequest','Accept':'application/json'},body:bd});
+      var jl=await rl.json();
+      if(!jl||!jl.description){ML('Indar no regreso la lista. Vuelve a intentar.');return;}
+      window.name='AXLP:'+jl.description;
+      ML('lista completa, regresando a Axion...');
+      location.href=A+'\x23axlp';
+      return;
+    }
     if(location.hash.indexOf('\x23axq=')===0){
       var MQ=function(t){var e=document.getElementById('axmsg');if(!e){e=document.createElement('div');e.id='axmsg';e.style.cssText='position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:99999;background:#26292b;color:#fff;padding:12px 22px;border-radius:10px;font:14px sans-serif;border-left:5px solid #E8790F';document.body.appendChild(e);}e.textContent='Axion: '+t;};
       var q0=JSON.parse(decodeURIComponent(escape(atob(location.hash.slice(5).replace(/-/g,'+').replace(/_/g,'/')))));
@@ -7935,7 +7956,8 @@ async function vImportar(){
         <div id="pl-res"></div>
       </div>
       <div class="card"><h3>📄 Actualizar lista de precios Indar (${'los 11 mil'})</h3>
-        <p class="small muted" style="margin-bottom:10px">1) En el portal Indar → Catálogo → <b>descarga la ListaPrecios.xlsx</b>. 2) Súbela aquí.
+        <p style="margin-bottom:8px"><button class="btn" onclick="axActualizarListaIndar()">🔄 Traerla de Indar con el marcador</button> <span class="small muted">lo más fácil: 2 clics, sin bajar archivos</span></p>
+        <p class="small muted" style="margin-bottom:10px">A mano: 1) En Indar → Mi cuenta → Lista de precios, selecciona <b>todas las categorías</b> y dale Descargar (ListaPrecios.xlsx). 2) Súbela aquí.
         Se actualizan precios, promociones y vigencias de TODA la lista (lo que usa el cotizador), y opcionalmente los costos/precios de tus productos.</p>
         <div class="field"><input type="file" id="lp-file" accept=".xlsx,.xls"></div>
         <div class="field"><label><input type="checkbox" id="lp-mios" checked> También actualizar el COSTO de MIS productos que aparezcan en la lista (el precio de venta NO se toca)</label></div>
@@ -8082,20 +8104,82 @@ function axPromoTxt(i){ // v213: para el admin, de donde sale el costo
   const venc = i.vig && String(i.vig).slice(0,10) < hoyMX();
   return ` · <span style="${venc?'color:#b91c1c;font-weight:700':''}" title="${venc?'La promo que tenemos cargada ya venció: sube la lista nueva de Indar para confirmar el costo':'Promo de Indar ya descontada en el costo'}">promo −${Math.round(i.promo*100)}%${venc?' VENCIDA '+String(i.vig).slice(8,10)+'/'+String(i.vig).slice(5,7):''}</span>`;
 }
-async function axAvisoLista(){ // v213: si las promos de la lista cargada ya vencieron, el costo de hoy puede ser otro
-  const el = $('cat-aviso'); if(!el || !esFinanzas()) return;
+// v214 (6-oct-2026, Andres: "siempre ponme actualizar cuando se venzan"): aviso fijo arriba de TODAS las pantallas (admin y
+// contador) cuando las promos de la lista de Indar cargada ya vencieron, con boton para actualizarla desde Indar.
+async function axListaEstado(forzar){
+  if(!forzar && window._axLE && Date.now()-window._axLE.t < 300000) return window._axLE;
+  const hoy = hoyMX();
+  const u = await sb.from('lista_indar').select('actualizado').order('actualizado',{ascending:false}).limit(1);
+  const tMax = u.data && u.data[0] && u.data[0].actualizado; if(!tMax) return null;
+  const desde = new Date(new Date(tMax).getTime() - 6*3600*1000).toISOString(); // solo la ultima carga: lo que ya no viene en la lista no cuenta
+  const [nv, na, px] = await Promise.all([
+    sb.from('lista_indar').select('codigo',{count:'exact',head:true}).gt('promo_pct',0).gte('actualizado',desde).lt('vigencia_promo',hoy),
+    sb.from('lista_indar').select('codigo',{count:'exact',head:true}).gt('promo_pct',0).gte('actualizado',desde),
+    sb.from('lista_indar').select('vigencia_promo').gt('promo_pct',0).gte('actualizado',desde).gte('vigencia_promo',hoy).order('vigencia_promo').limit(1)]);
+  window._axLE = {t:Date.now(), cargada:String(tMax).slice(0,10), venc:nv.count||0, tot:na.count||0, prox:(px.data&&px.data[0]&&px.data[0].vigencia_promo)||''};
+  return window._axLE;
+}
+async function axAvisoGlobal(forzar){
+  const el = $('ax-aviso-global'); if(!el || typeof perfil==='undefined' || !perfil || !esFinanzas()) return;
   try{
-    const hoy = hoyMX();
-    const [mx, nv, na] = await Promise.all([
-      sb.from('lista_indar').select('vigencia_promo,actualizado').gt('promo_pct',0).order('vigencia_promo',{ascending:false}).limit(1),
-      sb.from('lista_indar').select('codigo',{count:'exact',head:true}).gt('promo_pct',0).lt('vigencia_promo', hoy),
-      sb.from('lista_indar').select('codigo',{count:'exact',head:true}).gt('promo_pct',0)]);
-    const u = (mx.data||[])[0]; if(!u || !$('cat-aviso')) return;
-    const venc = nv.count||0, tot = na.count||0;
-    if(!venc){ el.innerHTML = ''; return; }
-    const f = s => String(s||'').slice(8,10)+'/'+String(s||'').slice(5,7)+'/'+String(s||'').slice(0,4);
-    el.innerHTML = `<div class="card" style="padding:10px 12px;margin-bottom:10px;background:#fef2f2;border:1px solid #fecaca"><b style="color:#b91c1c">⚠️ ${venc.toLocaleString('es-MX')} de ${tot.toLocaleString('es-MX')} promos de la lista de Indar ya vencieron</b> <span class="small">(la lista se cargó el ${f(u.actualizado)}; la promo más reciente venció el ${f(u.vigencia_promo)}). El precio Axion de esos productos se calcula con el costo de esa promo: si Indar ya la quitó, estaríamos cotizando abajo de lo que cuesta. <b>Sube la lista nueva</b> en Importar → 📄 Actualizar lista de precios Indar.</span></div>`;
+    const E = await axListaEstado(forzar);
+    if(!E || !E.venc){ el.innerHTML = ''; return; }
+    const f = s => String(s||'').slice(8,10)+'/'+String(s||'').slice(5,7);
+    const fuerte = E.venc >= 100 || (E.tot && E.venc/E.tot >= 0.1);
+    el.innerHTML = `<div class="card" style="padding:9px 12px;margin-bottom:12px;background:${fuerte?'#fef2f2':'#fffbeb'};border:1px solid ${fuerte?'#fecaca':'#fde68a'};display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <span style="flex:1;min-width:240px"><b style="color:${fuerte?'#b91c1c':'#92400e'}">⚠️ ${E.venc.toLocaleString('es-MX')} de ${E.tot.toLocaleString('es-MX')} promos de Indar ya vencieron</b>
+        <span class="small">· lista cargada el ${f(E.cargada)}${E.prox?` · las siguientes vencen el ${f(E.prox)}`:''}. El precio de esos productos se calcula con un costo que puede ya no existir: hay que actualizar la lista.</span></span>
+      ${esAdmin()?`<button class="btn sm" onclick="axActualizarListaIndar()">🔄 Actualizar lista de Indar</button>`:''}</div>`;
   }catch(e){}
+}
+function axActualizarListaIndar(){
+  abrirModal(`<h3>🔄 Actualizar la lista de precios de Indar</h3>
+    <ol style="margin:0 0 12px 18px;line-height:1.7">
+      <li>Dale a <b>Abrir Indar</b>: se abre en otra pestaña, en "Lista de precios".</li>
+      <li>Ahí dale clic a tu marcador <b>🔧 Enviar a Axion</b>. Baja la lista completa (tarda como 1 minuto) y te regresa aquí solo.</li>
+      <li>Aquí te enseño el resumen y le das <b>Actualizar lista</b>.</li>
+    </ol>
+    <p class="small muted" style="margin:0 0 12px">Si al darle al marcador no baja la lista, tu marcador es de una versión anterior: arrástralo otra vez desde <b>Importar</b> (una sola vez). También se puede a mano: en Indar → Lista de precios selecciona <b>todas</b> las categorías, Descargar, y sube el archivo en Importar.</p>
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button>
+      <button class="btn sec" onclick="cerrarModal();irA('importar')">Ir a Importar</button>
+      <button class="btn" onclick="window.open('https://indar.mx/Cliente/ListaPrecios#axlp=1','_blank')">Abrir Indar</button></div>`);
+}
+// el marcador regresa de Indar con la ListaPrecios.xlsx en window.name (se lee al arrancar y queda en window._axLP)
+async function axListaRecibida(){
+  const b64 = window._axLP; window._axLP = null; if(!b64) return;
+  if(!esAdmin()){ toast('Solo el administrador actualiza la lista de Indar', true); return; }
+  try{
+    const bin = atob(b64); const u8 = new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) u8[i] = bin.charCodeAt(i);
+    const wb = XLSX.read(u8.buffer, {type:'array'});
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {header:1, defval:null});
+    let h = -1; for(let i=0;i<10;i++){ if(rows[i] && String(rows[i][0]).trim()==='Producto'){ h=i; break; } }
+    if(h<0) throw new Error('lo que mandó Indar no trae el encabezado "Producto"');
+    const num = v => { const n = parseFloat(String(v??'').replace(/[$,]/g,'')); return isNaN(n)?0:n; };
+    const body = rows.slice(h+1).filter(r=>r && r[0]); let promos = 0; const vig = {};
+    for(const r of body){ if(num(r[8])>0){ promos++; const v = r[9] instanceof Date ? r[9].toISOString().slice(0,10).split('-').reverse().join('/') : String(r[9]||'sin fecha'); vig[v] = (vig[v]||0)+1; } }
+    if(body.length < 1000) throw new Error('la lista trae solo '+body.length+' productos; debería traer más de 20 mil');
+    let E = null; try{ E = await axListaEstado(true); }catch(e){}
+    window._axLPu8 = u8;
+    const topV = Object.entries(vig).sort((a,b)=>b[1]-a[1]).slice(0,3).map(x=>x[1].toLocaleString('es-MX')+' hasta el '+x[0]).join(' · ');
+    abrirModal(`<h3>📄 Llegó la lista de precios de Indar</h3>
+      <table style="margin-bottom:12px"><tbody>
+        <tr><td>Productos en la lista</td><td class="num"><b>${body.length.toLocaleString('es-MX')}</b></td></tr>
+        <tr><td>Con promoción</td><td class="num"><b>${promos.toLocaleString('es-MX')}</b></td></tr>
+        <tr><td>Vigencia de las promos</td><td class="small">${esc(topV||'—')}</td></tr>
+        ${E?`<tr><td>Lista que tienes cargada</td><td class="small">del ${esc(E.cargada.split('-').reverse().join('/'))}${E.venc?` · <b style="color:#b91c1c">${E.venc.toLocaleString('es-MX')} promos vencidas</b>`:''}</td></tr>`:''}
+      </tbody></table>
+      <div class="field"><label><input type="checkbox" id="axlp-mios" checked> También actualizar el COSTO de mis productos que vengan en la lista (el precio de venta NO se toca)</label></div>
+      <p id="axlp-st" class="small" style="font-weight:600;margin:6px 0"></p>
+      <div class="acciones"><button class="btn sec" onclick="window._axLPu8=null;cerrarModal()">Cancelar</button>
+        <button class="btn" id="axlp-btn" onclick="axListaAplicar()">Actualizar lista</button></div>`);
+  }catch(e){ toast('No pude leer la lista de Indar: '+errMsg(e), true); }
+}
+async function axListaAplicar(){
+  const u8 = window._axLPu8; if(!u8) return;
+  const b = $('axlp-btn'); if(b) b.disabled = true;
+  const ok = await subirListaPrecios(u8.buffer, {mios: $('axlp-mios') ? $('axlp-mios').checked : true, st:'axlp-st'});
+  if(ok){ window._axLPu8 = null; cerrarModal(); if($('cat-grid') && $('v-catalogo').classList.contains('active')) pintarCatalogo(false); }
+  else if($('axlp-btn')) $('axlp-btn').disabled = false;
 }
 async function cargarPreciosAxion(forzar){
   if(!forzar && window._pxT && Date.now()-window._pxT < 60000) return;
@@ -8810,14 +8894,16 @@ function cotizarRequisicion(obra){
   irA('cotizaciones').then(()=>{ nuevaCot(); setTimeout(()=>{ const el=$('ct-cliente-txt'); if(el && obra) el.value = 'Constructora · '+obra;
     const n=$('ct-notas'); if(n && nota) n.value = (n.value ? n.value+' · ' : '') + nota; }, 600); });
 }
-async function subirListaPrecios(){
-  const f = $('lp-file').files[0];
-  if(!f){ toast('Elige el archivo ListaPrecios.xlsx', true); return; }
-  $('lp-btn').disabled = true;
-  const st = m => $('lp-status').textContent = m;
+async function subirListaPrecios(bufExt, opt){ // v214: bufExt = archivo en memoria (marcador de Indar)
+  opt = opt || {};
+  const f = bufExt ? null : ($('lp-file') ? $('lp-file').files[0] : null);
+  if(!bufExt && !f){ toast('Elige el archivo ListaPrecios.xlsx', true); return false; }
+  if($('lp-btn')) $('lp-btn').disabled = true;
+  const st = m => { const e = $(opt.st || 'lp-status'); if(e) e.textContent = m; };
+  let listo = false;
   try{
     st('Leyendo archivo...');
-    const buf = await f.arrayBuffer();
+    const buf = bufExt || await f.arrayBuffer();
     const wb = XLSX.read(buf, {type:'array'});
     const ws = wb.Sheets[wb.SheetNames[0]];
     const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:null});
@@ -8848,7 +8934,7 @@ async function subirListaPrecios(){
       st(`Subiendo... ${Math.min(i+500,regs.length).toLocaleString('es-MX')} / ${regs.length.toLocaleString('es-MX')}`);
     }
     let actualizados = 0;
-    if($('lp-mios').checked){
+    if(opt.mios !== undefined ? opt.mios : $('lp-mios').checked){
       st('Actualizando costos de tus productos...');
       const mios = await traerTodo(()=>sb.from('productos').select('id,codigo,precio').order('id'));
       const mapa = new Map(regs.map(r=>[r.codigo, r]));
@@ -8863,9 +8949,12 @@ async function subirListaPrecios(){
       }
     }
     st('');
-    toast(`Lista actualizada: ${regs.length.toLocaleString('es-MX')} productos Indar` + (actualizados?` · ${actualizados} de tus productos con costo/precio nuevos`:''));
+    toast(`Lista actualizada: ${regs.length.toLocaleString('es-MX')} productos Indar` + (actualizados?` · ${actualizados} de tus productos con costo nuevo`:''));
+    listo = true; window._axLE = null; window._liCat = null; logEv('precios', 'lista Indar actualizada: '+regs.length+' productos');
+    try{ axAvisoGlobal(true); }catch(e){}
   }catch(e){ st(''); toast(errMsg(e), true); }
-  $('lp-btn').disabled = false;
+  if($('lp-btn')) $('lp-btn').disabled = false;
+  return listo;
 }
 async function agregarProdLista(){
   const p = impData.items[0];
