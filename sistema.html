@@ -8198,6 +8198,7 @@ function axCarosMarco(){
       <thead><tr><th>Producto</th><th class="num">Costo lista</th><th class="num">Promo</th><th class="num">Costo c/promo</th><th class="num">Indar sugiere</th><th class="num">Regla</th><th>Precio fijo</th></tr></thead>
       <tbody id="axc-tb"></tbody></table></div>
     <div class="acciones"><button class="btn sec" onclick="cerrarModal();if($('cat-grid'))pintarCatalogo(false)">Cerrar</button></div>`, true);
+  const mm = document.querySelector('#modal-root .modal'); if(mm){ mm.style.maxWidth = '1180px'; mm.style.width = '96vw'; } // v212: la tabla necesita ancho
   $('axc-modo').value = C.modo; $('axc-cat').value = C.cat; $('axc-q').value = C.q||'';
   axCarosPintar();
 }
@@ -8208,7 +8209,7 @@ function axCarosPintar(){
   tb.innerHTML = ver.map(f=>{
     const J = JSON.stringify(f.cod).replace(/'/g,"&#39;");
     const rp = precioPorMargen(f.cp, impMargenRegla(f.s));
-    return `<tr><td style="max-width:230px"><b>${esc(f.cod)}</b> <span class="badge b-gris">${esc(f.cat)}</span><br><span class="small muted">${esc(f.desc.slice(0,60))}</span></td>
+    return `<tr><td style="max-width:300px"><b>${esc(f.cod)}</b> <span class="badge b-gris">${esc(f.cat)}</span><br><span class="small muted">${esc(f.desc.slice(0,60))}</span></td>
       <td class="num">${fmt(f.l)}</td><td class="num">${f.promo?'−'+Math.round(f.promo*100)+'%':'—'}</td><td class="num">${fmt(f.cp)}</td>
       <td class="num">${fmt(f.s)}</td>
       <td class="num">${fmt(f.regla)}${f.r?`<br><span class="small" style="color:#b91c1c;font-weight:700">+${Math.round(f.r*100)}%</span>`:''}</td>
