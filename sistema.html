@@ -1521,7 +1521,7 @@ async function buscarCatSol(){
   $('sol-res').innerHTML = '<div class="muted small" style="padding:8px">Buscando en el catálogo Indar...</div>';
   const r1 = await sb.rpc('buscar_catalogo_indar', { q });
   if(r1.error){ $('sol-res').innerHTML = '<div class="small" style="padding:8px;color:#dc2626">No pude buscar en el catálogo: '+esc(r1.error.message)+'</div>'; return; }
-  const res = r1.data||[];
+  const res = await axQuitarViejos(r1.data||[]); // v215
   window._catSol = res;
   $('sol-res').innerHTML = res.slice(0,15).map((x,i)=>`
     <div class="it" style="display:flex;justify-content:space-between;padding:7px;border-bottom:1px solid var(--linea);cursor:pointer" onclick="addProdSolCat(${i})">
@@ -2798,11 +2798,14 @@ async function buscarCotYa(){
   if(q.length < 3){ $('ct-res').innerHTML = '<div class="it muted">Escribe 3+ letras…</div>'; return; }
   const like = `%${q.replace(/[%,]/g,' ')}%`;
   await cargarPreciosAxion(); // v211
+  const corteL = await axListaCorte(); // v215
+  let qInd = sb.from('lista_indar').select('codigo,descripcion,marca,unidad,precio_lista,promo_pct,precio_mayoreo,precio_sugerido,actualizado')
+      .or(`codigo.ilike.${like},descripcion.ilike.${like},marca.ilike.${like}`);
+  if(corteL && !esFinanzas()) qInd = qInd.gte('actualizado', corteL.toISOString());
   const [mios, indar] = await Promise.all([
     sb.from('productos').select('id,codigo,descripcion,precio,costo,stock').eq('activo',true)
       .or(`codigo.ilike.${like},descripcion.ilike.${like}`).limit(10),
-    sb.from('lista_indar').select('codigo,descripcion,marca,unidad,precio_lista,promo_pct,precio_mayoreo,precio_sugerido')
-      .or(`codigo.ilike.${like},descripcion.ilike.${like},marca.ilike.${like}`).limit(20),
+    qInd.limit(20),
   ]);
   const miosCod = new Set((mios.data||[]).map(p=>p.codigo));
   let html = (mios.data||[]).map(p=>`
@@ -2815,7 +2818,7 @@ async function buscarCotYa(){
     const pz = pzasDe(p.descripcion);
     const pax = precioAxion(axCostoHoy(p), p.precio_sugerido, p.codigo); // v210: precio Axion (regla de margen), no el sugerido de Indar
     return `<div class="it" onclick='agregarCot(${JSON.stringify({c:p.codigo, d:p.descripcion, pr:pax, co:costo, su:pax, ind:+p.precio_sugerido||0, pid:null}).replace(/'/g,"&#39;")})'>
-      <span><b>${esc(p.codigo)}</b> ${esc((p.descripcion||'').slice(0,42))} <span class="badge b-azul">${esc(p.marca||'Indar')}${promo?' · −'+Math.round(p.promo_pct*100)+'%':''}</span></span>
+      <span><b>${esc(p.codigo)}</b> ${esc((p.descripcion||'').slice(0,42))} <span class="badge b-azul">${esc(p.marca||'Indar')}${promo?' · −'+Math.round(p.promo_pct*100)+'%':''}</span>${axYaNoViene(p.actualizado)?AX_NOVIENE:''}</span>
       <span style="white-space:nowrap">${fmt(pax)}${axCaroBadge(pax, p.precio_sugerido, p.codigo)}${pz?`<br><span class="small" style="color:var(--azul)">${fmt(pax/pz)}/pza</span>`:''}</span></div>`;
   }).join('');
   $('ct-res').innerHTML = html || '<div class="it muted">Sin resultados en catálogo ni en lista Indar.</div>';
@@ -3137,11 +3140,12 @@ async function pintarCatalogoTodo(agregar){
   }
   const limite = 48*(catPagina+1);
   await cargarPreciosAxion(); // v211
+  await axListaCorte(); // v215
   const r = await sb.rpc('buscar_todo', {q, limite, cualquiera: !!window._catCualquiera});
   if(r.error){ toast(/buscar_todo/.test(r.error.message||'')?'Falta correr el SQL 58 (buscador único)':errMsg(r.error), true); return; }
   const todos = (r.data||[]).filter(p=>!(p.fuente==='indar' && +p.precio < 1)); const data = todos.slice(catPagina*48, catPagina*48+48); // sin los renglones promocionales de Indar a $0.01
   // v213: costo de HOY de lo de Indar (lista menos promo), para calcular el precio Axion (regla de margen)
-  const LI = {}; try{ const ci = data.filter(p=>p.fuente==='indar').map(p=>p.codigo); if(ci.length){ const rl = await sb.from('lista_indar').select('codigo,precio_lista,promo_pct,vigencia_promo').in('codigo', ci); (rl.data||[]).forEach(x=>{ LI[x.codigo] = {c:axCostoHoy(x), promo:+x.promo_pct||0, vig:x.vigencia_promo||''}; }); } }catch(e){}
+  const LI = {}; try{ const ci = data.filter(p=>p.fuente==='indar').map(p=>p.codigo); if(ci.length){ const rl = await sb.from('lista_indar').select('codigo,precio_lista,promo_pct,vigencia_promo,actualizado').in('codigo', ci); (rl.data||[]).forEach(x=>{ LI[x.codigo] = {c:axCostoHoy(x), promo:+x.promo_pct||0, vig:x.vigencia_promo||'', viejo:axYaNoViene(x.actualizado)}; }); } }catch(e){}
   // ¿alguna palabra coincide con un uso? → sugerencias
   const toks = normTxt(q).split(/\s+/).filter(t=>t.length>=4);
   const sug = window._catUso ? [] : usos.filter(u=>{ const t = normTxt(u.termino+' '+u.palabras); return toks.some(k=>t.includes(k)); }).slice(0,6);
@@ -3153,12 +3157,13 @@ async function pintarCatalogoTodo(agregar){
     const badge = p.fuente==='mio' ? '<span class="badge b-verde">🏪 nuestro</span>' : (p.fuente==='truper' ? '<span class="badge b-azul">Truper</span>' : '<span class="badge b-gris">Indar</span>');
     const esInd = p.fuente==='indar';
     const li0 = esInd ? LI[p.codigo] : null;
+    if(li0 && li0.viejo && !esFinanzas()) return ''; // v215: ya no viene en la lista de Indar -> la tienda no lo ve
     const co = esInd ? ((li0 && li0.c) || +p.costo) : +p.costo;      // v213: lo que nos cuesta hoy
     const pv = esInd ? precioAxion(co, +p.precio, p.codigo) : +p.precio;      // v210: Indar que no tenemos -> precio Axion (v211: o su precio fijo)
     const m = margenSV(pv, co);
     const precioHtml = p.fuente==='mio'
       ? `<b>${fmt(p.precio)}</b><br><span class="small muted">stock ${+p.stock||0}${esFinanzas()?` · costo ${fmt(p.costo)} (${m!==null?Math.round(m*100)+'%':'—'})`:''}</span>`
-      : `<b>${fmt(pv)}</b><br><span class="small muted">${p.fuente==='truper'?'público Truper':((esFinanzas() && axFijoDe(p.codigo)>0)?'📌 precio fijo':'precio Axion')}${esFinanzas()?` · costo ${fmt(co)} (${m!==null?Math.round(m*100)+'%':'—'})${esInd?` · Indar sugiere ${fmt(p.precio)}${axPromoTxt(li0)}`:''}`:''}</span>${(esInd && esFinanzas())?`<br>${axCaroBadge(pv, +p.precio, p.codigo)}${axLapiz(p.codigo)}`:''}`;
+      : `<b>${fmt(pv)}</b><br><span class="small muted">${p.fuente==='truper'?'público Truper':((esFinanzas() && axFijoDe(p.codigo)>0)?'📌 precio fijo':'precio Axion')}${esFinanzas()?` · costo ${fmt(co)} (${m!==null?Math.round(m*100)+'%':'—'})${esInd?` · Indar sugiere ${fmt(p.precio)}${axPromoTxt(li0)}`:''}`:''}</span>${(esInd && esFinanzas())?`<br>${(li0&&li0.viejo)?AX_NOVIENE:''}${axCaroBadge(pv, +p.precio, p.codigo)}${axLapiz(p.codigo)}`:''}`;
     const obj = {c:key, d:p.descripcion, pr:pv, co:co, su:pv, ind:(esInd?+p.precio:0), pid:p.pid||undefined};
     const link = p.fuente==='truper' ? `https://www.truper.com/CatVigente/buscador?palabra=${encodeURIComponent(p.clave)}` : (p.fuente==='indar' ? `https://indar.mx/portal/detallesProducto/${encodeURIComponent(String(p.codigo).replace(/ /g,'_'))}` : '');
     const alta = (esAdmin() && p.fuente!=='mio') ? (p.fuente==='truper' ? `<button class="btn sm sec" title="Dar de alta en mi inventario" onclick="altaProductoTruper('${esc(p.codigo)}')">➕ Alta</button> ` : `<button class="btn sm sec" title="Dar de alta en mi inventario (precio Axion: regla de margen)" onclick='altaProductoIndar(${JSON.stringify(p.codigo)})'>➕ Alta</button> `) : '';
@@ -3223,7 +3228,9 @@ async function pintarCatalogo(agregar){
   if(($('cat-prov')||{}).value==='truper') return pintarCatalogoTruper(agregar); // v184
   const q = ($('cat-q')?.value||'').trim(), marca = $('cat-marca')?.value, fam = $('cat-fam')?.value, rubro = $('cat-rubro')?.value;
   await cargarPreciosAxion(); // v211
-  let con = sb.from('lista_indar').select('codigo,descripcion,marca,categoria,precio_lista,promo_pct,vigencia_promo,precio_sugerido').order('descripcion');
+  const corteL = await axListaCorte(); // v215
+  let con = sb.from('lista_indar').select('codigo,descripcion,marca,categoria,precio_lista,promo_pct,vigencia_promo,precio_sugerido,actualizado').order('descripcion');
+  if(corteL && !esFinanzas()) con = con.gte('actualizado', corteL.toISOString());
   if(q.length>=2){
     // búsqueda por palabras: cada palabra debe aparecer en código, descripción O marca (sin acentos)
     for(const t of q.split(/\s+/).slice(0,6)){
@@ -3275,7 +3282,7 @@ function catPrecioHtml(p, mio, pz, costoD){
     return `<b>${fmt(mio.precio)}</b> <span class="badge b-verde" title="Ya lo vendemos en la tienda: este es nuestro precio">🏪 nuestro</span>${mio.granel&&+mio.precio_unidad>0?`<br><span class="small muted">${fmt(mio.precio_unidad)}/${esc(mio.unidad_venta||'u')}</span>`:''}<br><span class="small muted">stock ${+mio.stock||0}${esFinanzas()?` · Indar sugiere ${fmt(p.precio_sugerido)} · costo ${fmt(costoD)}`:''}</span>`;
   }
   const pax = precioAxion(axCostoHoy(p), p.precio_sugerido, p.codigo); // v210: precio Axion (regla de margen), no el sugerido de Indar; v211: o su precio fijo
-  return `<b>${fmt(pax)}</b>${pz?`<br><span class="small muted">${fmt(pax/pz)}/pza</span>`:''}<br><span class="small muted">${(esFinanzas() && axFijoDe(p.codigo)>0)?'📌 precio fijo':'precio Axion'}${esAdmin()?` · costo: ${fmt(costoD)}`:''}${esFinanzas()?` · Indar sugiere ${fmt(p.precio_sugerido)}${axPromoTxt({promo:+p.promo_pct||0, vig:p.vigencia_promo||''})}`:''}</span>${esFinanzas()?`<br>${axCaroBadge(pax, p.precio_sugerido, p.codigo)}${axLapiz(p.codigo)}`:''}`;
+  return `<b>${fmt(pax)}</b>${pz?`<br><span class="small muted">${fmt(pax/pz)}/pza</span>`:''}<br><span class="small muted">${(esFinanzas() && axFijoDe(p.codigo)>0)?'📌 precio fijo':'precio Axion'}${esAdmin()?` · costo: ${fmt(costoD)}`:''}${esFinanzas()?` · Indar sugiere ${fmt(p.precio_sugerido)}${axPromoTxt({promo:+p.promo_pct||0, vig:p.vigencia_promo||''})}`:''}</span>${esFinanzas()?`<br>${axYaNoViene(p.actualizado)?AX_NOVIENE:''}${axCaroBadge(pax, p.precio_sugerido, p.codigo)}${axLapiz(p.codigo)}`:''}`;
 }
 function catSelObj(p, mio){
   const co = Math.round(+p.precio_lista*(1-(+p.promo_pct||0))*100)/100;
@@ -5043,7 +5050,7 @@ async function buscarProdAp(){
   // v119: si no está en inventario, buscar en el catálogo Indar y darlo de alta al apartarlo
   if(!html && q.length>=3){
     const ci = await sb.rpc('buscar_catalogo_indar', { q });
-    window._apCat = ci.data||[];
+    window._apCat = await axQuitarViejos(ci.data||[]); // v215
     html = window._apCat.slice(0,8).map((x,i)=>`<div style="padding:7px;border-bottom:1px solid var(--linea);cursor:pointer" onclick="altaYApartar(${i})">
       <b>${esc(x.codigo)}</b> ${esc((x.descripcion||'').slice(0,42))} <span class="badge b-azul">catálogo Indar · por encargo</span></div>`).join('');
   }
@@ -8106,17 +8113,41 @@ function axPromoTxt(i){ // v213: para el admin, de donde sale el costo
 }
 // v214 (6-oct-2026, Andres: "siempre ponme actualizar cuando se venzan"): aviso fijo arriba de TODAS las pantallas (admin y
 // contador) cuando las promos de la lista de Indar cargada ya vencieron, con boton para actualizarla desde Indar.
+// v215 (6-oct-2026): lo que ya NO viene en la ultima lista COMPLETA de Indar no se le ensena a la tienda (el admin si lo ve, marcado).
+// El corte se guarda en config_sistema.lista_indar_carga = {desde, n} cada vez que se sube la lista completa.
+async function axListaCorte(){
+  if(window._axLC && Date.now()-window._axLC.t < 600000) return window._axLC.d;
+  let d = null, n = 0;
+  try{ const c = await sb.from('config_sistema').select('valor').eq('clave','lista_indar_carga').limit(1);
+    const v = c.data && c.data[0] && c.data[0].valor; if(v && v.desde){ d = new Date(v.desde); n = +v.n||0; if(isNaN(d.getTime())) d = null; } }catch(e){}
+  window._axLC = {t:Date.now(), d, n};
+  return d;
+}
+function hoyMXde(d){ try{ return new Date(d.getTime() - 6*3600*1000).toISOString().slice(0,10); }catch(e){ return ''; } } // fecha en hora de Mexico (UTC-6)
+function axYaNoViene(actualizado){ const d = window._axLC && window._axLC.d; if(!d || !actualizado) return false; return new Date(actualizado) < d; }
+async function axQuitarViejos(rows){ // filas de un buscador (con .codigo): quita las que ya no vienen en la lista de Indar
+  rows = rows || [];
+  try{
+    const d = await axListaCorte(); if(!d || !rows.length) return rows;
+    const cods = [...new Set(rows.map(x=>x.codigo).filter(Boolean))], viejos = new Set();
+    for(let i=0;i<cods.length;i+=100){ const r = await sb.from('lista_indar').select('codigo').in('codigo', cods.slice(i,i+100)).lt('actualizado', d.toISOString()); (r.data||[]).forEach(x=>viejos.add(x.codigo)); }
+    return rows.filter(x=>!viejos.has(x.codigo));
+  }catch(e){ return rows; }
+}
+const AX_NOVIENE = ' <span class="badge" style="background:#e5e7eb;color:#374151" title="Ya no viene en la última lista de Indar: la tienda no lo ve">🚫 ya no viene en Indar</span>';
 async function axListaEstado(forzar){
   if(!forzar && window._axLE && Date.now()-window._axLE.t < 300000) return window._axLE;
   const hoy = hoyMX();
   const u = await sb.from('lista_indar').select('actualizado').order('actualizado',{ascending:false}).limit(1);
   const tMax = u.data && u.data[0] && u.data[0].actualizado; if(!tMax) return null;
-  const desde = new Date(new Date(tMax).getTime() - 6*3600*1000).toISOString(); // solo la ultima carga: lo que ya no viene en la lista no cuenta
+  if(forzar) window._axLC = null;
+  const corte = await axListaCorte(); // v215: la ultima carga COMPLETA; lo que ya no viene en la lista no cuenta
+  const desde = corte ? corte.toISOString() : new Date(new Date(tMax).getTime() - 6*3600*1000).toISOString();
   const [nv, na, px] = await Promise.all([
     sb.from('lista_indar').select('codigo',{count:'exact',head:true}).gt('promo_pct',0).gte('actualizado',desde).lt('vigencia_promo',hoy),
     sb.from('lista_indar').select('codigo',{count:'exact',head:true}).gt('promo_pct',0).gte('actualizado',desde),
     sb.from('lista_indar').select('vigencia_promo').gt('promo_pct',0).gte('actualizado',desde).gte('vigencia_promo',hoy).order('vigencia_promo').limit(1)]);
-  window._axLE = {t:Date.now(), cargada:String(tMax).slice(0,10), venc:nv.count||0, tot:na.count||0, prox:(px.data&&px.data[0]&&px.data[0].vigencia_promo)||''};
+  window._axLE = {t:Date.now(), cargada:(corte ? hoyMXde(corte) : String(tMax).slice(0,10)), venc:nv.count||0, tot:na.count||0, prox:(px.data&&px.data[0]&&px.data[0].vigencia_promo)||''};
   return window._axLE;
 }
 async function axAvisoGlobal(forzar){
@@ -8916,6 +8947,7 @@ async function subirListaPrecios(bufExt, opt){ // v214: bufExt = archivo en memo
       if(v instanceof Date) return v.toISOString().slice(0,10);
       const m = String(v).match(/(\d{2})\/(\d{2})\/(\d{4})/); return m ? `${m[3]}-${m[2]}-${m[1]}` : null; };
     let regs = [];
+    const t0Lista = new Date(Date.now() - 2000).toISOString(); // v215: todo lo de esta carga queda con 'actualizado' posterior
     for(let i=h+1;i<rows.length;i++){
       const r = rows[i]; if(!r || !r[0]) continue;
       regs.push({ codigo:String(r[0]).trim(), descripcion:String(r[1]||'').trim(), marca:String(r[2]||'').trim(),
@@ -8933,6 +8965,15 @@ async function subirListaPrecios(bufExt, opt){ // v214: bufExt = archivo en memo
       if(error) throw error;
       st(`Subiendo... ${Math.min(i+500,regs.length).toLocaleString('es-MX')} / ${regs.length.toLocaleString('es-MX')}`);
     }
+    let parcial = 0; // v215: esta carga pasa a ser "la ultima lista completa" solo si de verdad viene completa
+    try{
+      const prev = await sb.from('config_sistema').select('valor').eq('clave','lista_indar_carga').limit(1);
+      const pn = +((((prev.data||[])[0]||{}).valor||{}).n) || 0;
+      if(!pn || regs.length >= pn*0.8){
+        await sb.from('config_sistema').upsert({clave:'lista_indar_carga', valor:{desde:t0Lista, n:regs.length}, por:(perfil&&perfil.nombre)||'', actualizado:new Date().toISOString()}, {onConflict:'clave'});
+        window._axLC = null;
+      } else parcial = pn;
+    }catch(e){}
     let actualizados = 0;
     if(opt.mios !== undefined ? opt.mios : $('lp-mios').checked){
       st('Actualizando costos de tus productos...');
@@ -8950,6 +8991,7 @@ async function subirListaPrecios(bufExt, opt){ // v214: bufExt = archivo en memo
     }
     st('');
     toast(`Lista actualizada: ${regs.length.toLocaleString('es-MX')} productos Indar` + (actualizados?` · ${actualizados} de tus productos con costo nuevo`:''));
+    if(parcial) setTimeout(()=>alert('⚠️ La lista que subiste viene INCOMPLETA: trae '+regs.length.toLocaleString('es-MX')+' productos y la anterior traía '+parcial.toLocaleString('es-MX')+'.\n\nSe actualizaron sus precios, pero no se ocultó ningún producto. En Indar selecciona TODAS las categorías antes de descargar (o usa el botón 🔄 con el marcador).'), 300);
     listo = true; window._axLE = null; window._liCat = null; logEv('precios', 'lista Indar actualizada: '+regs.length+' productos');
     try{ axAvisoGlobal(true); }catch(e){}
   }catch(e){ st(''); toast(errMsg(e), true); }
