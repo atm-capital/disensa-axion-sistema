@@ -2702,11 +2702,15 @@ async function cotizarSolicitud(id){
     const {data:li} = await sb.from('lista_indar').select('codigo,descripcion,precio_lista,promo_pct,precio_sugerido').in('codigo', cods);
     M = new Map((li||[]).map(x=>[x.codigo, x]));
   }
+  let MP = new Map(); // v210: si ya lo vendemos manda NUESTRO precio
+  if(cods.length){ const mp = await sb.from('productos').select('id,codigo,descripcion,precio,costo').in('codigo', cods).eq('activo', true); MP = new Map((mp.data||[]).map(x=>[x.codigo, x])); }
   window._preCot = items.map(i=>{
-    const x = M.get(i.codigo);
+    const x = M.get(i.codigo), mio = MP.get(i.codigo);
+    if(mio && +mio.precio>0) return {codigo:i.codigo, desc:i.desc || mio.descripcion || '', cantidad:+i.cantidad||1, precio:+mio.precio, costo:+mio.costo||0, sugerido:+mio.precio, producto_id:mio.id};
     const costo = x ? +x.precio_lista * (1 - (+x.promo_pct||0)/100) : 0;
+    const pax = x ? precioAxion(x.precio_lista, x.precio_sugerido) : 0; // v210: precio Axion, no el sugerido de Indar
     return {codigo:i.codigo, desc:i.desc || x?.descripcion || '', cantidad:+i.cantidad||1,
-      precio: x ? +x.precio_sugerido||0 : 0, costo, sugerido: x ? +x.precio_sugerido||0 : 0, producto_id:null};
+      precio: pax, costo, sugerido: pax, producto_id:null};
   });
   await sb.from('solicitudes').update({estado:'atendida'}).eq('id', id);
   const nF = items.filter(i=>i.ficha).length;
@@ -2740,7 +2744,7 @@ async function nuevaCot(editId){
       for(const it2 of cotCarrito){
         const a = m1.get(it2.codigo), b = m2.get(it2.codigo);
         if(a){ it2.costo = +a.costo; it2.sugerido = +a.precio; }
-        else if(b){ it2.costo = Math.round(+b.precio_lista*(1-(+b.promo_pct||0))*100)/100; it2.sugerido = +b.precio_sugerido; }
+        else if(b){ it2.costo = Math.round(+b.precio_lista*(1-(+b.promo_pct||0))*100)/100; it2.sugerido = precioAxion(b.precio_lista, b.precio_sugerido); } // v210
       }
     }
   }
@@ -2798,9 +2802,10 @@ async function buscarCotYa(){
     const promo = +p.promo_pct > 0;
     const costo = Math.round(+p.precio_lista * (1 - (+p.promo_pct||0)) * 100)/100;
     const pz = pzasDe(p.descripcion);
-    return `<div class="it" onclick='agregarCot(${JSON.stringify({c:p.codigo, d:p.descripcion, pr:+p.precio_sugerido, co:costo, su:+p.precio_sugerido, pid:null}).replace(/'/g,"&#39;")})'>
+    const pax = precioAxion(p.precio_lista, p.precio_sugerido); // v210: precio Axion (regla de margen), no el sugerido de Indar
+    return `<div class="it" onclick='agregarCot(${JSON.stringify({c:p.codigo, d:p.descripcion, pr:pax, co:costo, su:pax, pid:null}).replace(/'/g,"&#39;")})'>
       <span><b>${esc(p.codigo)}</b> ${esc((p.descripcion||'').slice(0,42))} <span class="badge b-azul">${esc(p.marca||'Indar')}${promo?' · −'+Math.round(p.promo_pct*100)+'%':''}</span></span>
-      <span style="white-space:nowrap">${fmt(p.precio_sugerido)}${pz?`<br><span class="small" style="color:var(--azul)">${fmt(+p.precio_sugerido/pz)}/pza</span>`:''}</span></div>`;
+      <span style="white-space:nowrap">${fmt(pax)}${pz?`<br><span class="small" style="color:var(--azul)">${fmt(pax/pz)}/pza</span>`:''}</span></div>`;
   }).join('');
   $('ct-res').innerHTML = html || '<div class="it muted">Sin resultados en catálogo ni en lista Indar.</div>';
 }
@@ -3123,6 +3128,8 @@ async function pintarCatalogoTodo(agregar){
   const r = await sb.rpc('buscar_todo', {q, limite, cualquiera: !!window._catCualquiera});
   if(r.error){ toast(/buscar_todo/.test(r.error.message||'')?'Falta correr el SQL 58 (buscador único)':errMsg(r.error), true); return; }
   const todos = (r.data||[]).filter(p=>!(p.fuente==='indar' && +p.precio < 1)); const data = todos.slice(catPagina*48, catPagina*48+48); // sin los renglones promocionales de Indar a $0.01
+  // v210: costo de LISTA de lo de Indar, para calcular el precio Axion (regla de margen)
+  const LI = {}; try{ const ci = data.filter(p=>p.fuente==='indar').map(p=>p.codigo); if(ci.length){ const rl = await sb.from('lista_indar').select('codigo,precio_lista').in('codigo', ci); (rl.data||[]).forEach(x=>{ LI[x.codigo] = +x.precio_lista||0; }); } }catch(e){}
   // ¿alguna palabra coincide con un uso? → sugerencias
   const toks = normTxt(q).split(/\s+/).filter(t=>t.length>=4);
   const sug = window._catUso ? [] : usos.filter(u=>{ const t = normTxt(u.termino+' '+u.palabras); return toks.some(k=>t.includes(k)); }).slice(0,6);
@@ -3132,13 +3139,16 @@ async function pintarCatalogoTodo(agregar){
     const sel = catSel.has(key);
     if(p.fuente==='truper') window._catTr[p.codigo] = {codigo:p.codigo, clave:p.clave, descripcion:p.descripcion, marca:p.marca, familia_desc:p.familia, unidad:'Pieza', ean:p.ean, precio_publico_iva:+p.precio, distribuidor:+p.costo};
     const badge = p.fuente==='mio' ? '<span class="badge b-verde">🏪 nuestro</span>' : (p.fuente==='truper' ? '<span class="badge b-azul">Truper</span>' : '<span class="badge b-gris">Indar</span>');
-    const m = margenSV(+p.precio, +p.costo);
+    const esInd = p.fuente==='indar';
+    const co = esInd ? (LI[p.codigo] || +p.costo) : +p.costo;      // v210
+    const pv = esInd ? precioAxion(co, +p.precio) : +p.precio;      // v210: Indar que no tenemos -> precio Axion
+    const m = margenSV(pv, co);
     const precioHtml = p.fuente==='mio'
       ? `<b>${fmt(p.precio)}</b><br><span class="small muted">stock ${+p.stock||0}${esFinanzas()?` · costo ${fmt(p.costo)} (${m!==null?Math.round(m*100)+'%':'—'})`:''}</span>`
-      : `<b>${fmt(p.precio)}</b><br><span class="small muted">${p.fuente==='truper'?'público Truper':'sugerido Indar'}${esFinanzas()?` · costo ${fmt(p.costo)} (${m!==null?Math.round(m*100)+'%':'—'})`:''}</span>`;
-    const obj = {c:key, d:p.descripcion, pr:+p.precio, co:+p.costo, su:+p.precio, pid:p.pid||undefined};
+      : `<b>${fmt(pv)}</b><br><span class="small muted">${p.fuente==='truper'?'público Truper':'precio Axion'}${esFinanzas()?` · costo ${fmt(co)} (${m!==null?Math.round(m*100)+'%':'—'})${esInd?` · Indar sugiere ${fmt(p.precio)}`:''}`:''}</span>`;
+    const obj = {c:key, d:p.descripcion, pr:pv, co:co, su:pv, pid:p.pid||undefined};
     const link = p.fuente==='truper' ? `https://www.truper.com/CatVigente/buscador?palabra=${encodeURIComponent(p.clave)}` : (p.fuente==='indar' ? `https://indar.mx/portal/detallesProducto/${encodeURIComponent(String(p.codigo).replace(/ /g,'_'))}` : '');
-    const alta = (esAdmin() && p.fuente!=='mio') ? (p.fuente==='truper' ? `<button class="btn sm sec" title="Dar de alta en mi inventario" onclick="altaProductoTruper('${esc(p.codigo)}')">➕ Alta</button> ` : `<button class="btn sm sec" title="Dar de alta en mi inventario (precio sugerido Indar)" onclick='altaProductoIndar(${JSON.stringify(p.codigo)})'>➕ Alta</button> `) : '';
+    const alta = (esAdmin() && p.fuente!=='mio') ? (p.fuente==='truper' ? `<button class="btn sm sec" title="Dar de alta en mi inventario" onclick="altaProductoTruper('${esc(p.codigo)}')">➕ Alta</button> ` : `<button class="btn sm sec" title="Dar de alta en mi inventario (precio Axion: regla de margen)" onclick='altaProductoIndar(${JSON.stringify(p.codigo)})'>➕ Alta</button> `) : '';
     return `<div class="card" style="margin:0;padding:12px;${sel?'outline:2px solid var(--rojo)':''}">
       ${link?`<a href="${link}" target="_blank" title="Ver en el sitio del proveedor">`:''}<img src="${catFoto(p)}" style="width:100%;height:110px;object-fit:contain" onerror="this.style.display='none'" loading="lazy">${link?'</a>':''}
       <div class="small" style="min-height:58px"><b>${esc(key)}</b> ${badge}${p.marca?` <span class="badge b-gris">${esc(p.marca)}</span>`:''}<br>${esc(p.descripcion||'')}<br><span class="muted">${esc(p.familia||'')}</span></div>
@@ -3156,10 +3166,20 @@ async function pintarCatalogoTodo(agregar){
   pintarSelBar();
 }
 async function altaProductoIndar(codigo){
-  if(!confirm('Dar de alta en el inventario (stock 0) el producto Indar '+codigo+' con precio sugerido de Indar?')) return;
+  // v210: el producto nuevo entra con el precio Axion (regla de margen sobre lista), no con el sugerido de Indar
+  const li = await sb.from('lista_indar').select('precio_lista,precio_sugerido').eq('codigo', codigo).limit(1);
+  const l0 = (li.data||[])[0];
+  const pax = l0 ? precioAxion(l0.precio_lista, l0.precio_sugerido) : 0;
+  if(!confirm('Dar de alta en el inventario (stock 0) el producto Indar '+codigo+(pax>0?' a '+fmt(pax)+' (precio Axion, regla de margen)':'')+'?')) return;
   const r = await sb.rpc('alta_producto_indar', { p_codigo: codigo });
   if(r.error){ toast(errMsg(r.error), true); return; }
-  toast('✅ '+codigo+' dado de alta a '+fmt(r.data&&r.data.precio)); pintarCatalogo(false);
+  let precio = r.data&&r.data.precio;
+  if(pax>0){
+    const u = await sb.from('productos').update({precio:pax, etiqueta_at:null}).eq('codigo', codigo).select('precio');
+    if(u.error || !(u.data||[]).length){ toast('⚠️ '+codigo+' quedó dado de alta a '+fmt(precio)+' (sugerido Indar): no pude ponerle el precio Axion '+fmt(pax)+'. Cámbialo en Inventario.', true); pintarCatalogo(false); return; }
+    precio = pax;
+  }
+  toast('✅ '+codigo+' dado de alta a '+fmt(precio)); pintarCatalogo(false);
 }
 
 async function vCatalogo(){
@@ -3232,18 +3252,20 @@ function toggleCat(p){
   if(catSel.has(p.c)) catSel.delete(p.c); else catSel.set(p.c, p);
   pintarCatalogo(false);
 }
-// v173: precio que ve la tienda en el catálogo: el NUESTRO si ya lo vendemos; si no, el sugerido de Indar.
+// v173: precio que ve la tienda en el catálogo: el NUESTRO si ya lo vendemos; si no, el precio Axion (v210: regla de margen; antes el sugerido de Indar).
 // El sugerido de Indar de un producto que ya vendemos solo lo ven admin/contador.
 function catPrecioHtml(p, mio, pz, costoD){
   if(mio && +mio.precio>0){
     return `<b>${fmt(mio.precio)}</b> <span class="badge b-verde" title="Ya lo vendemos en la tienda: este es nuestro precio">🏪 nuestro</span>${mio.granel&&+mio.precio_unidad>0?`<br><span class="small muted">${fmt(mio.precio_unidad)}/${esc(mio.unidad_venta||'u')}</span>`:''}<br><span class="small muted">stock ${+mio.stock||0}${esFinanzas()?` · Indar sugiere ${fmt(p.precio_sugerido)} · costo ${fmt(costoD)}`:''}</span>`;
   }
-  return `<b>${fmt(p.precio_sugerido)}</b>${pz?`<br><span class="small muted">${fmt(p.precio_sugerido/pz)}/pza</span>`:''}<br><span class="small muted">sugerido Indar${esAdmin()?` · costo: ${fmt(costoD)}`:''}</span>`;
+  const pax = precioAxion(p.precio_lista, p.precio_sugerido); // v210: precio Axion (regla de margen), no el sugerido de Indar
+  return `<b>${fmt(pax)}</b>${pz?`<br><span class="small muted">${fmt(pax/pz)}/pza</span>`:''}<br><span class="small muted">precio Axion${esAdmin()?` · costo: ${fmt(costoD)}`:''}${esFinanzas()?` · Indar sugiere ${fmt(p.precio_sugerido)}`:''}</span>`;
 }
 function catSelObj(p, mio){
   const co = Math.round(+p.precio_lista*(1-(+p.promo_pct||0))*100)/100;
   if(mio && +mio.precio>0) return {c:p.codigo, d:p.descripcion, pr:+mio.precio, co:(+mio.costo>0?+mio.costo:co), su:+mio.precio, pid:mio.id};
-  return {c:p.codigo, d:p.descripcion, pr:+p.precio_sugerido, co, su:+p.precio_sugerido};
+  const pax = precioAxion(p.precio_lista, p.precio_sugerido); // v210
+  return {c:p.codigo, d:p.descripcion, pr:pax, co, su:pax};
 }
 function fichaCat(cod){
   const p = (window._catData||{})[cod]; if(!p) return;
@@ -3253,7 +3275,7 @@ function fichaCat(cod){
   abrirModal(`<div style="text-align:center"><img src="https://storage.googleapis.com/indararticulos/${encodeURIComponent(p.codigo.replace(/[^A-Za-z0-9]/g,'_'))}_MD.webp" style="width:100%;max-width:380px;height:280px;object-fit:contain" onerror="this.style.display='none'"></div>
     <p class="small" style="margin:8px 0 2px"><span class="badge b-gris">${esc(p.marca||'sin marca')}</span> · <b>${esc(p.codigo)}</b> · <a href="https://indar.mx/portal/detallesProducto/${encodeURIComponent(p.codigo.replace(/ /g,'_'))}" target="_blank" class="link">📎 ficha técnica en Indar</a></p>
     <h3 style="margin:6px 0;line-height:1.4">${esc(p.descripcion)}</h3>
-    <p style="font-size:19px;margin:8px 0">${mio&&+mio.precio>0 ? `<b>${fmt(mio.precio)}</b> <span class="small muted">🏪 nuestro precio · stock ${+mio.stock||0}</span>${esFinanzas()?`<br><span class="small muted">Indar sugiere ${fmt(p.precio_sugerido)}</span>`:''}` : `<b>${fmt(p.precio_sugerido)}</b> <span class="small muted">sugerido Indar con IVA${pz?` · ${fmt(p.precio_sugerido/pz)}/pza`:''}</span>`}
+    <p style="font-size:19px;margin:8px 0">${mio&&+mio.precio>0 ? `<b>${fmt(mio.precio)}</b> <span class="small muted">🏪 nuestro precio · stock ${+mio.stock||0}</span>${esFinanzas()?`<br><span class="small muted">Indar sugiere ${fmt(p.precio_sugerido)}</span>`:''}` : `<b>${fmt(precioAxion(p.precio_lista, p.precio_sugerido))}</b> <span class="small muted">precio Axion con IVA${pz?` · ${fmt(precioAxion(p.precio_lista, p.precio_sugerido)/pz)}/pza`:''}</span>${esFinanzas()?`<br><span class="small muted">Indar sugiere ${fmt(p.precio_sugerido)}</span>`:''}`}
     ${esAdmin()?`<br><span class="small muted">costo: ${fmt(costoD)} · lista: ${fmt(p.precio_lista)}${+p.promo_pct?` · promo ${Math.round(+p.promo_pct*100)}%`:''}</span>`:''}</p>
     <p class="small" id="fcat-inv" style="margin:4px 0 8px"><span class="muted">⏳ checando inventario y pedidos...</span></p>
     <div class="acciones">
@@ -8021,6 +8043,9 @@ function impRef(i){ return +i.s>0 ? +i.s : (+i.l||0)*1.16/0.754; } // rango seg�
 function precioPorMargen(costo, m){ costo=+costo||0; m=+m||0; if(costo<=0 || m>=1) return 0; return Math.ceil(costo/(1-m)*1.16 - 0.001); } // precio con IVA para un % s/venta, redondeado ARRIBA al peso
 function margenSV(precio, costo){ precio=+precio||0; costo=+costo||0; if(precio<=0) return null; return (precio/1.16 - costo)/(precio/1.16); }
 function impPrecioRegla(i){ return precioPorMargen(i.l, impMargenRegla(impRef(i))) || redondearPrecio(i.s||i.l||0); }
+// v210 (6-oct-2026): lo que NO esta en inventario se muestra y se cotiza al PRECIO AXION = regla de margen (40/35/30 s/venta)
+// sobre el costo de LISTA de Indar. El sugerido de Indar ya no se le ensena a la tienda: solo decide el rango de la regla.
+function precioAxion(lista, sugerido){ lista=+lista||0; sugerido=+sugerido||0; if(lista<=0) return redondearPrecio(sugerido); const ref = sugerido>0 ? sugerido : lista*1.16/0.754; return precioPorMargen(lista, impMargenRegla(ref)) || redondearPrecio(sugerido); }
 function impGuardarDatos(){ try{ localStorage.setItem('ax_import', btoa(unescape(encodeURIComponent(JSON.stringify(impData)))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')); }catch(e){} }
 function impGuardarRegla(){
   const r = [1,2,3].map(k=>Math.min(89, Math.max(0, Math.round(+$('imp-m'+k).value||0))));
@@ -8363,13 +8388,13 @@ async function matchPartidas(partidas, st){
   }
   return partidas;
 }
-// precio que se va a cotizar para la partida: el del Excel (si trae) → el nuestro (si lo vendemos) → sugerido Indar
+// precio que se va a cotizar para la partida: el del Excel (si trae) → el nuestro (si lo vendemos) → precio Axion (v210: regla de margen)
 function mxPrecioBase(p){
   const m = p.sel>=0 ? p.alts[p.sel] : null;
   if(p.px>0) return +p.px;
   if(p.sinPx) return 0;
   if(m && m.mio && +m.mio.precio>0) return +m.mio.precio;
-  if(m) return +m.precio_sugerido||0;
+  if(m) return precioAxion(m.precio_lista, m.precio_sugerido); // v210
   return +p.pu||0;
 }
 function mxPrecioCot(p){ const b = mxPrecioBase(p); if(!(b>0)) return 0; return (window._mxRedondear!==false) ? Math.ceil(b-0.001) : Math.round(b*100)/100; }
@@ -8391,7 +8416,7 @@ function mxRender(targetId, partidas, obra){
     <tbody>${partidas.map((p,i)=>{
       const sel = p.sel>=0 ? p.alts[p.sel] : null;
       const pc = mxPrecioCot(p);
-      const nuestro = sel ? (sel.mio && +sel.mio.precio>0 ? +sel.mio.precio : +sel.precio_sugerido) : 0;
+      const nuestro = sel ? (sel.mio && +sel.mio.precio>0 ? +sel.mio.precio : precioAxion(sel.precio_lista, sel.precio_sugerido)) : 0;
       const costo = sel ? (sel.mio && +sel.mio.costo>0 ? +sel.mio.costo : +sel.precio_lista) : 0;
       const mg = (fin && pc>0 && costo>0) ? margenSV(pc, costo) : null;
       const bV = {'código':'b-verde','descripción':'b-verde','parecido':'b-azul'};
@@ -8473,7 +8498,7 @@ function leerPedidoLibreRefresca(){
     th.innerHTML = `<div class="small muted">${letras(i)}</div><select style="font-size:11px;padding:2px" onchange="plAsignar(${i}, this.value)">${PL_ROLES.map(([k,t])=>`<option value="${k}"${rol===k?' selected':''}>${t}</option>`).join('')}</select>`;
   });
   const ok = plPick.ds.length || plPick.cod!==null;
-  $('pl-res').innerHTML = ok ? `<p class="small muted" style="margin:8px 0 0">${plPick.c===null?'Sin columna de cantidad: cada renglón entra con cantidad 1 (lista de precios). ':''}${plPick.px!==null?`Precio del Excel ${plPick.pxIva?'con IVA':'SIN IVA (se le suma el 16%)'}: ese es el que se cotiza.`:'Sin columna de precio: se cotiza a nuestro precio o al sugerido Indar.'}</p><button class="btn" style="margin-top:8px" onclick="cruzarPedidoLibre()">Cruzar contra catálogo</button>` : '';
+  $('pl-res').innerHTML = ok ? `<p class="small muted" style="margin:8px 0 0">${plPick.c===null?'Sin columna de cantidad: cada renglón entra con cantidad 1 (lista de precios). ':''}${plPick.px!==null?`Precio del Excel ${plPick.pxIva?'con IVA':'SIN IVA (se le suma el 16%)'}: ese es el que se cotiza.`:'Sin columna de precio: se cotiza a nuestro precio o al precio Axion (regla de margen).'}</p><button class="btn" style="margin-top:8px" onclick="cruzarPedidoLibre()">Cruzar contra catálogo</button>` : '';
 }
 async function cruzarPedidoLibre(){
   const partidas = [];
@@ -8556,7 +8581,7 @@ function cotizarRequisicion(obra){
     const ley = precio>0 ? '' : ' (precio sujeto a volumen)';
     if(m){
       const costo = (m.mio && +m.mio.costo>0) ? +m.mio.costo : (+m.precio_lista||0);
-      return {codigo:m.codigo, desc:m.descripcion+ley, cantidad:p.cant, precio, costo, sugerido:(m.mio && +m.mio.precio>0) ? +m.mio.precio : +m.precio_sugerido, producto_id: m.mio ? m.mio.id : null};
+      return {codigo:m.codigo, desc:m.descripcion+ley, cantidad:p.cant, precio, costo, sugerido:(m.mio && +m.mio.precio>0) ? +m.mio.precio : precioAxion(m.precio_lista, m.precio_sugerido), producto_id: m.mio ? m.mio.id : null};
     }
     return {codigo:p.cod||'', desc:p.desc+ley, cantidad:p.cant, precio, costo:0, sugerido:precio, producto_id:null};
   }).filter(Boolean);
