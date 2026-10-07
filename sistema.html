@@ -242,6 +242,10 @@ window.addEventListener('DOMContentLoaded', async () => {
     try{ localStorage.setItem('ax_import', location.hash.slice(8)); }catch(e){}
     history.replaceState(null, '', location.pathname);
   }
+  if(location.hash === '#axtr'){ // v216: el marcador trae el pedido de Truper en window.name
+    try{ if(String(window.name||'').slice(0,5) === 'AXTR:'){ window._axTR = window.name.slice(5); } window.name = ''; }catch(e){}
+    history.replaceState(null, '', location.pathname);
+  }
   if(location.hash === '#axlp'){ // v214: el marcador trae la ListaPrecios.xlsx de Indar en window.name
     try{ if(String(window.name||'').slice(0,5) === 'AXLP:'){ window._axLP = window.name.slice(5); } window.name = ''; }catch(e){}
     history.replaceState(null, '', location.pathname);
@@ -282,6 +286,7 @@ async function cargarPerfil(){
   const vGuardada = localStorage.getItem('ax_vista');
   const vValida = vGuardada && VISTAS.some(v=>v.id===vGuardada && v.roles.includes(perfil.rol) && (!v.solo || v.solo===(perfil.correo||'')));
   irA(localStorage.getItem('ax_import') && perfil.rol === 'admin' ? 'importar' : (vValida ? vGuardada : 'resumen'));
+  if(window._axTR) setTimeout(trPedRecibido, 2600); // v216: llego un pedido de Truper por el marcador
   if(window._axLP) setTimeout(axListaRecibida, 2600); // v214: llego la lista de Indar por el marcador
   if(typeof puedeVender==='function' && puedeVender()) setTimeout(avisoTarjetasInicio, 1500); // v144: al entrar, si hay precios nuevos se abre la lista sola
 }
@@ -2966,6 +2971,159 @@ async function imprimirCot(id){
 ============================================================ */
 let catSel = new Map(), catPagina = 0;
 // ===== v184: TRUPER — lista de precios (catalogo.csv de Truper en línea) y catálogo Truper en la pestaña Catálogo =====
+/* ===== v216 (7-oct-2026): importar un pedido de Truper en linea =====
+   En Truper: Pedidos > Status de Pedidos > clic en el pedido (se abre el detalle). Ahi el marcador "Enviar a Axion" manda el
+   archivo del pedido (No. Pedido, Fecha, No. Orden, Material, Descripcion, Cantidad, Precio Unitario, Subtotal) o se baja con
+   "Guardar archivo" y se sube aqui. Costos SIN IVA = subtotal / cantidad (ya trae el descuento del pedido).
+   Productos nuevos: codigo = clave Truper, precio = publico Truper (editable), stock 0 hasta recibir. */
+function trPedParse(text){
+  const lines = String(text||'').split(/\r?\n/).filter(l=>l.trim());
+  if(!lines.length || !/No\.\s*Pedido/i.test(lines[0]) || !/Material/i.test(lines[0])) throw new Error('No parece el archivo de un pedido de Truper (debe empezar con "No. Pedido, Fecha, No. Orden, Material…")');
+  const its = []; let pedido = '', fec = '', orden = '';
+  for(const l of lines.slice(1)){
+    const p = l.split(','); if(p.length < 8) continue; // la descripcion puede traer comas y comillas sueltas
+    const sub = trNum(p[p.length-1]), precio = trNum(p[p.length-2]), cant = trNum(p[p.length-3]);
+    if(!(cant>0)) continue;
+    pedido = pedido || p[0].trim(); fec = fec || p[1].trim(); orden = orden || p[2].trim();
+    its.push({material:p[3].trim(), desc:p.slice(4, p.length-3).join(',').trim(), cantidad:cant, precioU:precio||0, subtotal:sub||0});
+  }
+  if(!its.length) throw new Error('El archivo no trae partidas');
+  const MES = {ene:'01',jan:'01',feb:'02',mar:'03',abr:'04',apr:'04',may:'05',jun:'06',jul:'07',ago:'08',aug:'08',sep:'09',oct:'10',nov:'11',dic:'12',dec:'12'};
+  const m = fec.match(/(\d{1,2})\/([A-Za-z]{3})[a-z]*\/(\d{4})/);
+  const f = (m && MES[m[2].toLowerCase()]) ? `${m[3]}-${MES[m[2].toLowerCase()]}-${String(m[1]).padStart(2,'0')}` : hoyMX();
+  return {pedido: pedido.replace(/^0+/,'') || pedido, fecha:f, orden, items:its};
+}
+async function trPedPreparar(text){
+  if(!esAdmin()){ toast('Solo el administrador registra pedidos de Truper', true); return; }
+  let P; try{ P = trPedParse(text); }catch(e){ toast(errMsg(e), true); return; }
+  toast('Cruzando el pedido contra el catálogo de Truper…');
+  try{
+    const mats = [...new Set(P.items.map(i=>i.material))], LT = new Map();
+    for(let i=0;i<mats.length;i+=200){
+      const r = await sb.from('lista_truper').select('codigo,clave,descripcion,marca,familia_desc,unidad,ean,precio_publico_iva,distribuidor').in('codigo', mats.slice(i,i+200));
+      if(r.error) throw r.error; (r.data||[]).forEach(x=>LT.set(String(x.codigo), x));
+    }
+    const claves = [...new Set([...LT.values()].map(x=>x.clave).filter(Boolean).concat(mats))], MP = new Map();
+    for(let i=0;i<claves.length;i+=100){
+      const r = await sb.from('productos').select('id,codigo,descripcion,precio,costo,stock,activo').in('codigo', claves.slice(i,i+100));
+      if(r.error) throw r.error; (r.data||[]).forEach(x=>MP.set(String(x.codigo).toUpperCase(), x));
+    }
+    P.items.forEach(it=>{
+      const t = LT.get(it.material) || null;
+      it.lt = t; it.clave = (t && t.clave) ? String(t.clave).trim() : it.material;
+      it.descripcion = (t && t.descripcion) || it.desc;
+      it.costo = Math.round(it.subtotal/it.cantidad*10000)/10000;
+      const mio = MP.get(it.clave.toUpperCase()) || MP.get(it.material.toUpperCase()) || null;
+      it.mio = mio; it.producto_id = mio ? mio.id : null;
+      it.publico = t ? redondearPrecio(+t.precio_publico_iva||0) : 0;
+      it.precioVenta = mio ? (+mio.precio||0) : (it.publico || precioPorMargen(it.costo, impMargenRegla(it.costo*1.16/0.754)));
+    });
+    const prov = await sb.from('proveedores').select('id,nombre').ilike('nombre','truper%').limit(1);
+    P.provId = (prov.data && prov.data[0]) ? prov.data[0].id : null;
+    const ya = await sb.from('pedidos_compra').select('id,estado').eq('folio_externo', P.pedido).limit(1);
+    P.yaExiste = (ya.data||[])[0] || null;
+    window._trPed = P; trPedModal();
+  }catch(e){ toast(/lista_truper/.test(errMsg(e)) ? 'Falta cargar el catálogo de Truper (Importar → Truper: lista de precios)' : errMsg(e), true); }
+}
+function trPedTot(P){ const sub = Math.round(P.items.reduce((s,i)=>s + i.subtotal, 0)*100)/100, iva = Math.round(sub*16)/100; return {sub, iva, tot:Math.round((sub+iva)*100)/100}; }
+function trPedMargenHtml(it){
+  const m = margenSV(it.precioVenta, it.costo); if(m===null) return '—';
+  const col = m<0 ? '#b91c1c' : (m>=0.25 ? 'var(--verde)' : (m>=0.15 ? 'var(--ambar)' : '#b91c1c'));
+  return `<b style="color:${col}">${Math.round(m*100)}%</b>`;
+}
+function trPedModal(){
+  const P = window._trPed; if(!P) return;
+  const T = trPedTot(P), nuevos = P.items.filter(i=>!i.producto_id), sinCat = P.items.filter(i=>!i.lt);
+  abrirModal(`<h3>🔧 Pedido de Truper #${esc(P.pedido)}</h3>
+    <p class="small muted" style="margin:0 0 10px">Orden ${esc(P.orden||'—')} · capturado el ${fecha(P.fecha)} · ${P.items.length} partidas</p>
+    ${P.yaExiste?`<div class="card" style="padding:10px;background:#fef2f2;border:1px solid #fecaca;margin-bottom:10px"><b style="color:#b91c1c">Este pedido ya está registrado en Axion</b> (estado: ${esc(P.yaExiste.estado)}). No se puede registrar dos veces.</div>`:''}
+    <div class="kpis" style="margin-bottom:10px">
+      <div class="kpi"><div class="l">Subtotal sin IVA</div><div class="v">${fmt(T.sub)}</div></div>
+      <div class="kpi"><div class="l">IVA 16%</div><div class="v">${fmt(T.iva)}</div></div>
+      <div class="kpi"><div class="l">Total a pagar</div><div class="v">${fmt(T.tot)}</div></div>
+      <div class="kpi"><div class="l">Productos nuevos</div><div class="v">${nuevos.length}</div><div class="small muted">${P.items.length-nuevos.length} ya los tenemos</div></div>
+    </div>
+    <p class="small" style="margin:0 0 8px">Los <b>nuevos</b> se dan de alta con stock 0 (entran al inventario cuando recibas el pedido) y con el precio de la columna "Precio venta": viene el <b>público de Truper</b> y lo puedes cambiar aquí mismo. A los que ya tenemos <b>no se les toca el precio</b>.${sinCat.length?` <b style="color:#b91c1c">⚠️ ${sinCat.length} no están en el catálogo de Truper que tenemos cargado</b>: revisa su precio.`:''}</p>
+    <div class="frow">
+      <div class="field"><label>Fecha del pedido</label><input type="date" id="trp-fecha" value="${esc(P.fecha)}"></div>
+      <div class="field"><label>¿Cómo se paga?</label><select id="trp-plazo"><option value="ant">Pago anticipado</option><option value="0">Contra entrega</option><option value="7">Crédito 7 días</option><option value="15">Crédito 15 días</option><option value="30">Crédito 30 días</option></select></div>
+      <div class="field"><label>Nota (opcional)</label><input id="trp-nota" placeholder="Ej. primer pedido Truper"></div>
+    </div>
+    <div class="tbl-scroll" style="max-height:44vh;overflow-y:auto"><table>
+      <thead><tr><th>Clave</th><th>Producto</th><th class="num">Cant</th><th class="num">Costo s/IVA</th><th class="num">Importe</th><th class="num">Precio venta</th><th class="num">Margen</th></tr></thead>
+      <tbody>${P.items.map((it,i)=>`<tr${it.producto_id?'':' style="background:#f0f9ff"'}>
+        <td><b>${esc(it.clave)}</b><br><span class="small muted">${esc(it.material)}</span></td>
+        <td class="small" style="max-width:330px">${esc(it.descripcion)} ${it.producto_id?'<span class="badge b-verde">ya lo tenemos</span>':'<span class="badge b-azul">nuevo</span>'}${it.lt?'':' <span class="badge b-rojo">sin catálogo</span>'}</td>
+        <td class="num">${it.cantidad}</td><td class="num">${fmt(it.costo)}</td><td class="num">${fmt(it.subtotal)}</td>
+        <td class="num">${it.producto_id?`${fmt(it.precioVenta)}`:`<input type="number" step="1" value="${it.precioVenta||''}" style="width:78px;padding:4px 6px;border:1px solid var(--linea);border-radius:6px;text-align:right" onchange="trPedPrecio(${i}, this.value)">`}</td>
+        <td class="num" id="trp-m-${i}">${trPedMargenHtml(it)}</td></tr>`).join('')}</tbody></table></div>
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cancelar</button>
+      <button class="btn" id="trp-btn" ${P.yaExiste?'disabled':''} onclick="trPedGuardar()">📦 Registrar pedido</button></div>`, true);
+  const mm = document.querySelector('#modal-root .modal'); if(mm){ mm.style.maxWidth = '1100px'; mm.style.width = '96vw'; }
+}
+function trPedPrecio(i, v){
+  const P = window._trPed; if(!P || !P.items[i]) return;
+  P.items[i].precioVenta = redondearPrecio(v);
+  const c = $('trp-m-'+i); if(c) c.innerHTML = trPedMargenHtml(P.items[i]);
+}
+async function trPedGuardar(){
+  const P = window._trPed; if(!P || !esAdmin()) return;
+  if(P.yaExiste){ toast('Ese pedido ya está registrado', true); return; }
+  if(!P.provId){ toast('No encontré al proveedor Truper en Proveedores', true); return; }
+  const nuevos = P.items.filter(i=>!i.producto_id);
+  const sinP = nuevos.filter(p=>!(p.precioVenta>0)); if(sinP.length){ toast('Falta precio de venta en '+sinP.length+' producto(s) nuevo(s): '+sinP[0].clave, true); return; }
+  const bajo = nuevos.filter(p=>p.precioVenta < Math.ceil(p.costo*1.16 - 0.001)); if(bajo.length){ toast(bajo.length+' producto(s) nuevo(s) quedan abajo del costo con IVA: '+bajo[0].clave+' ('+fmt(bajo[0].precioVenta)+' vs '+fmt(bajo[0].costo*1.16)+')', true); return; }
+  const btn = $('trp-btn'); if(btn){ btn.disabled = true; btn.textContent = 'Registrando…'; }
+  try{
+    const ya = await sb.from('pedidos_compra').select('id').eq('folio_externo', P.pedido).limit(1);
+    if((ya.data||[]).length) throw new Error('Ese pedido ya está registrado');
+    // 1) productos nuevos
+    if(nuevos.length){
+      const uni = u => { const s = String(u||'pza').toLowerCase(); return s.startsWith('pieza') ? 'pza' : s; };
+      const filas = nuevos.map(p=>({codigo:p.clave, descripcion:p.descripcion, categoria:(p.lt && p.lt.familia_desc) || 'Truper', costo:Math.round(p.costo*100)/100, precio:redondearPrecio(p.precioVenta), stock:0, stock_min:3, unidad:uni(p.lt && p.lt.unidad), codigo_barras:(p.lt && p.lt.ean) || null, activo:true}));
+      let {error:eN} = await sb.from('productos').insert(filas);
+      if(eN && /codigo_barras|duplicate|unique/i.test(eN.message||'')){ ({error:eN} = await sb.from('productos').insert(filas.map(({codigo_barras, ...r})=>r))); }
+      if(eN) throw eN;
+      const mapa = new Map(), cods = nuevos.map(p=>p.clave);
+      for(let i=0;i<cods.length;i+=100){ const r = await sb.from('productos').select('id,codigo').in('codigo', cods.slice(i,i+100)); (r.data||[]).forEach(x=>mapa.set(String(x.codigo).toUpperCase(), x.id)); }
+      nuevos.forEach(p=>{ p.producto_id = mapa.get(p.clave.toUpperCase()) || null; });
+      if(nuevos.some(p=>!p.producto_id)) throw new Error('No pude dar de alta algunos productos nuevos');
+    }
+    // 2) pedido + partidas
+    const T = trPedTot(P), pv = $('trp-plazo').value, plazo = pv==='ant' ? 0 : (+pv||0), fec = $('trp-fecha').value || P.fecha, nota = ($('trp-nota').value||'').trim();
+    const comoPaga = pv==='ant' ? 'pago anticipado' : (plazo ? 'crédito '+plazo+' días' : 'contra entrega');
+    const {data:pc, error:e1} = await sb.from('pedidos_compra').insert({proveedor_id:P.provId, folio_externo:P.pedido, fecha:fec, estado:'enviado', plazo_dias:plazo, subtotal:T.sub, iva:T.iva, total:T.tot,
+      notas:`Pedido Truper en línea #${P.pedido} (orden ${P.orden}). Pago: ${comoPaga}. ${nuevos.length?nuevos.length+' producto(s) nuevo(s) con precio público Truper. ':''}${nota}`.trim()}).select('id').single();
+    if(e1) throw e1;
+    const {error:e2} = await sb.from('pedido_compra_items').insert(P.items.map(p=>({pedido_id:pc.id, producto_id:p.producto_id, cantidad:p.cantidad, costo_unit:p.costo, importe:p.subtotal})));
+    if(e2) throw e2;
+    // 3) cuenta por pagar
+    const v = new Date(fec+'T12:00:00'); v.setDate(v.getDate()+plazo);
+    const {error:eC} = await sb.from('cuentas_pagar').insert({proveedor_id:P.provId, concepto:'Pedido Truper #'+P.pedido, referencia:(pv==='ant'?'Pago anticipado':(plazo?'Crédito '+plazo+' días':'Contra entrega'))+' · Truper',
+      fecha_emision:fec, fecha_vencimiento:v.toISOString().slice(0,10), monto:T.tot, saldo:T.tot});
+    logEv('pedido_truper', '#'+P.pedido+' '+fmt(T.tot)+' · '+P.items.length+' partidas · '+nuevos.length+' nuevos');
+    window._trPed = null; cerrarModal();
+    toast(`✅ Pedido Truper #${P.pedido} registrado: ${P.items.length} partidas${nuevos.length?', '+nuevos.length+' productos nuevos':''} · ${fmt(T.tot)}`+(eC?' · OJO: la cuenta por pagar no se creó: '+errMsg(eC):''), !!eC);
+    if($('v-pedidos') && $('v-pedidos').classList.contains('active')) vPedidos(); else irA('pedidos');
+  }catch(e){ toast(errMsg(e), true); if($('trp-btn')){ $('trp-btn').disabled = false; $('trp-btn').textContent = '📦 Registrar pedido'; } }
+}
+function trPedInicio(){
+  abrirModal(`<h3>🔧 Nuevo pedido de Truper</h3>
+    <ol style="margin:0 0 12px 18px;line-height:1.7">
+      <li>Entra a <b>Truper en línea</b> → Pedidos → <b>Status de Pedidos</b> y dale clic al pedido para abrir su detalle.</li>
+      <li>Con el detalle abierto, dale clic a tu marcador <b>🔧 Enviar a Axion</b>: te regresa aquí con el pedido listo para revisar.</li>
+    </ol>
+    <p class="small muted" style="margin:0 0 8px">O a mano: en el detalle del pedido dale a <b>Guardar archivo</b> y sube aquí el archivo que baja:</p>
+    <div class="field"><input type="file" id="trp-file" accept=".csv,.txt" onchange="trPedArchivo()"></div>
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button>
+      <button class="btn" onclick="window.open('https://www.truperenlinea.com','_blank')">Abrir Truper</button></div>`);
+}
+async function trPedArchivo(){
+  const f = $('trp-file') && $('trp-file').files[0]; if(!f) return;
+  const buf = await f.arrayBuffer(); let t; try{ t = new TextDecoder('utf-8', {fatal:true}).decode(buf); }catch(e){ t = new TextDecoder('windows-1252').decode(buf); }
+  trPedPreparar(t);
+}
+function trPedRecibido(){ const t = window._axTR; window._axTR = null; if(t) trPedPreparar(t); }
 function trParseCsv(text){ // CSV con comillas (las descripciones traen comas y pulgadas: "Llave (perica) 15"", TRUPER")
   const rows = []; let row = [], cell = '', q = false;
   for(let i=0;i<text.length;i++){
@@ -4541,6 +4699,7 @@ async function vPedidos(){
       <input type="search" id="ped-q" placeholder="🔍 Busca CUALQUIER número del papel: pedido, parte (sales order) o factura…" oninput="filtrarPedidos()" style="flex:1;min-width:280px;font-size:15px;padding:11px 13px">
       <span class="small muted" id="ped-qn"></span>
       ${puedeVender()?`<button class="btn" onclick="pedidoDesdeXML()" title="Proveedores que facturan: Plomería Universal, Truper, etc.">📄 Nuevo pedido desde factura XML</button>`:''}
+      ${esAdmin()?`<button class="btn sec" onclick="trPedInicio()" title="Trae un pedido capturado en Truper en línea">🔧 Pedido de Truper</button>`:''}
     </div>
     <p class="small muted" style="margin:0 0 10px">Indar usa <b>dos números</b>: el del pedido (ej. <b>1411378</b>) y el de la <b>parte / sales order</b> que viene en la lista de empaque (ej. <b>2957693</b>). Aquí puedes buscar con cualquiera de los dos, o con el de la factura.</p>
     <div class="toolbar" style="margin-bottom:10px">
@@ -7671,7 +7830,15 @@ async function axBM(){
   try{
     var A='https://axiontools.mx/sistema.html';
     var B=function(s){return btoa(unescape(encodeURIComponent(s))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');};
-    if(!/indar\.mx$/.test(location.hostname)){alert('Este boton se usa dentro de indar.mx (con tu sesion iniciada).');return;}
+    if(/truperenlinea\.com$/.test(location.hostname)){
+      var rt=await fetch('/reng/servlet/renglonaje.csv',{credentials:'include'});
+      var tt=new TextDecoder('windows-1252').decode(await rt.arrayBuffer());
+      if(!/^\s*No\. Pedido/i.test(tt)){alert('Axion: abre primero el DETALLE del pedido en Truper (Pedidos, Status de Pedidos, clic en el pedido) y vuelve a darle a este boton.');return;}
+      window.name='AXTR:'+tt;
+      location.href=A+'\x23axtr';
+      return;
+    }
+    if(!/indar\.mx$/.test(location.hostname)){alert('Este boton se usa dentro de indar.mx o de truperenlinea.com (con tu sesion iniciada).');return;}
     var K=document.querySelector('meta[name=csrf-token]');
     var T=K?K.getAttribute('content'):'';
     if(location.hash.indexOf('\x23axfx=')===0){
