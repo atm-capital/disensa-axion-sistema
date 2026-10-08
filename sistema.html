@@ -242,6 +242,10 @@ window.addEventListener('DOMContentLoaded', async () => {
     try{ localStorage.setItem('ax_import', location.hash.slice(8)); }catch(e){}
     history.replaceState(null, '', location.pathname);
   }
+  if(location.hash === '#axft'){ // v217: el marcador trae facturas de Truper (TruEntrega) en window.name
+    try{ if(String(window.name||'').slice(0,5) === 'AXFT:'){ window._axFT = window.name.slice(5); } window.name = ''; }catch(e){}
+    history.replaceState(null, '', location.pathname);
+  }
   if(location.hash === '#axtr'){ // v216: el marcador trae el pedido de Truper en window.name
     try{ if(String(window.name||'').slice(0,5) === 'AXTR:'){ window._axTR = window.name.slice(5); } window.name = ''; }catch(e){}
     history.replaceState(null, '', location.pathname);
@@ -286,6 +290,7 @@ async function cargarPerfil(){
   const vGuardada = localStorage.getItem('ax_vista');
   const vValida = vGuardada && VISTAS.some(v=>v.id===vGuardada && v.roles.includes(perfil.rol) && (!v.solo || v.solo===(perfil.correo||'')));
   irA(localStorage.getItem('ax_import') && perfil.rol === 'admin' ? 'importar' : (vValida ? vGuardada : 'resumen'));
+  if(window._axFT) setTimeout(trFactRecibidas, 2600); // v217
   if(window._axTR) setTimeout(trPedRecibido, 2600); // v216: llego un pedido de Truper por el marcador
   if(window._axLP) setTimeout(axListaRecibida, 2600); // v214: llego la lista de Indar por el marcador
   if(typeof puedeVender==='function' && puedeVender()) setTimeout(avisoTarjetasInicio, 1500); // v144: al entrar, si hay precios nuevos se abre la lista sola
@@ -3113,6 +3118,7 @@ function trPedInicio(){
       <li>Entra a <b>Truper en línea</b> → Pedidos → <b>Status de Pedidos</b> y dale clic al pedido para abrir su detalle.</li>
       <li>Con el detalle abierto, dale clic a tu marcador <b>🔧 Enviar a Axion</b>: te regresa aquí con el pedido listo para revisar.</li>
     </ol>
+    <p class="small" style="margin:0 0 10px"><b>🧾 Facturas:</b> cuando Truper manda el pedido te llega una liga de <b>TruEntrega</b>. Ábrela y dale al mismo marcador: baja el XML y el PDF de la factura y los liga a su pedido aquí.</p>
     <p class="small muted" style="margin:0 0 8px">O a mano: en el detalle del pedido dale a <b>Guardar archivo</b> y sube aquí el archivo que baja:</p>
     <div class="field"><input type="file" id="trp-file" accept=".csv,.txt" onchange="trPedArchivo()"></div>
     <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button>
@@ -3122,6 +3128,42 @@ async function trPedArchivo(){
   const f = $('trp-file') && $('trp-file').files[0]; if(!f) return;
   const buf = await f.arrayBuffer(); let t; try{ t = new TextDecoder('utf-8', {fatal:true}).decode(buf); }catch(e){ t = new TextDecoder('windows-1252').decode(buf); }
   trPedPreparar(t);
+}
+/* ===== v217 (8-oct-2026): facturas de Truper desde TruEntrega =====
+   Cuando Truper manda el pedido llega una liga "TruEntrega" (WhatsApp/correo). Abierta esa pagina, el marcador "Enviar a Axion"
+   baja el XML y el PDF (FF…_33.PDF) de cada factura y los manda aqui en window.name ('AXFT:' + JSON). Aqui se archivan
+   (PDF y XML al bucket facturas como <uuid>.pdf/.xml) y se ligan al pedido de Truper por su numero. */
+async function trFactRecibidas(){
+  const raw = window._axFT; window._axFT = null; if(!raw) return;
+  if(!esAdmin()){ toast('Solo el administrador archiva facturas de proveedor', true); return; }
+  let lista; try{ lista = JSON.parse(raw); }catch(e){ toast('No pude leer lo que mandó Truper', true); return; }
+  if(!Array.isArray(lista) || !lista.length){ toast('Truper no mandó facturas', true); return; }
+  const res = [];
+  for(const f of lista){
+    try{
+      const xmlFile = new File([f.xml||''], (f.factura||'factura')+'.xml', {type:'text/xml'});
+      const files = [xmlFile];
+      if(f.pdf){ const bin = atob(f.pdf); files.push(new File([Uint8Array.from(bin, c=>c.charCodeAt(0))], f.pdfN||((f.factura||'factura')+'.pdf'), {type:'application/pdf'})); }
+      const x = await xmlLeerFactura(files);
+      if(!x || !x.d || !x.d.uuid){ res.push({f, err:'el XML no se pudo leer'}); continue; }
+      const ya = await sb.from('facturas').select('id,pedido_id').eq('uuid', x.d.uuid).limit(1);
+      if((ya.data||[]).length){ res.push({f, x, ya:true}); continue; }
+      const ped = String(f.pedido||'').replace(/^0+/,'');
+      const pq = await sb.from('pedidos_compra').select('id,folio_externo,total,proveedores!inner(nombre)').ilike('proveedores.nombre','truper%').eq('folio_externo', ped).limit(1);
+      const p = (pq.data||[])[0] || null;
+      const ok = await clArchivarFactura(x, p ? p.id : null);
+      if(ok){ await sb.storage.from('facturas').upload(x.d.uuid+'.xml', xmlFile, {upsert:true, contentType:'text/xml'}); logEv('factura_truper', (x.folio||'')+' '+x.d.uuid+(p?' pedido '+ped:' sin pedido')); }
+      res.push({f, x, p, ok});
+    }catch(e){ res.push({f, err:errMsg(e)}); }
+  }
+  abrirModal(`<h3>🧾 Facturas de Truper</h3>
+    <table><thead><tr><th>Factura</th><th>Pedido</th><th class="num">Total</th><th>Resultado</th></tr></thead><tbody>
+    ${res.map(r=>`<tr><td><b>${esc((r.x&&r.x.folio)||r.f.factura||'—')}</b>${r.x&&r.x.d?`<br><span class="small muted">${esc(fecha(r.x.d.fecha))}</span>`:''}</td>
+      <td>${esc(String(r.f.pedido||'').replace(/^0+/,''))}</td><td class="num">${r.x&&r.x.d?fmt(r.x.d.total):'—'}</td>
+      <td class="small">${r.err?`<b style="color:#b91c1c">${esc(r.err)}</b>`:(r.ya?'Ya estaba archivada':(r.ok?(r.p?`✅ Archivada y ligada al pedido${r.p.total&&Math.abs(+r.p.total - r.x.d.total)>0.05?` <b style="color:#b91c1c">(el pedido dice ${fmt(r.p.total)})</b>`:''}`:'✅ Archivada, <b>sin pedido en Axion</b> (impórtalo con 🔧 Pedido de Truper)'):'No se pudo archivar'))}</td></tr>`).join('')}
+    </tbody></table>
+    <p class="small muted" style="margin:10px 0 0">Quedan en Finanzas → Facturas con su PDF y XML. Cuando llegue la mercancía, recíbela en Pedidos a proveedor.</p>
+    <div class="acciones"><button class="btn" onclick="cerrarModal();irA('pedidos')">Ir a Pedidos</button></div>`);
 }
 function trPedRecibido(){ const t = window._axTR; window._axTR = null; if(t) trPedPreparar(t); }
 function trParseCsv(text){ // CSV con comillas (las descripciones traen comas y pulgadas: "Llave (perica) 15"", TRUPER")
@@ -7831,6 +7873,25 @@ async function axBM(){
     var A='https://axiontools.mx/sistema.html';
     var B=function(s){return btoa(unescape(encodeURIComponent(s))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');};
     if(/truperenlinea\.com$/.test(location.hostname)){
+      if(/truentrega/i.test(location.pathname)){
+        var nds=document.querySelectorAll('[ng-click^=descargaArchivo]');var its=[];var vis={};
+        for(var ni=0;ni<nds.length;ni++){var sit=window.angular?angular.element(nds[ni]).scope().item:null;if(sit&&sit.factura&&!vis[sit.factura]){vis[sit.factura]=1;its.push(sit);}}
+        if(!its.length){alert('Axion: no encontre facturas en esta pagina de TruEntrega.');return;}
+        var outF=[];
+        for(var ki=0;ki<its.length;ki++){
+          var it2=its[ki];var fx=null;var fp=null;
+          for(var ji=0;ji<(it2.archivos||[]).length;ji++){var ar=it2.archivos[ji];if(/\.xml$/i.test(ar.nombre)){fx=ar;}else if(/^FF.*\.pdf$/i.test(ar.nombre)){fp=ar;}}
+          if(!fx){continue;}
+          var tx=await (await fetch(fx.url,{credentials:'include'})).text();
+          var pb='';
+          if(fp){var ab=new Uint8Array(await (await fetch(fp.url,{credentials:'include'})).arrayBuffer());var ss='';for(var qi=0;qi<ab.length;qi+=32768){ss+=String.fromCharCode.apply(null,ab.subarray(qi,qi+32768));}pb=btoa(ss);}
+          outF.push({pedido:String(it2.numeroPedido||''),factura:String(it2.factura||''),xml:tx,pdf:pb,pdfN:fp?fp.nombre:''});
+        }
+        if(!outF.length){alert('Axion: esta entrega todavia no trae el XML de la factura.');return;}
+        window.name='AXFT:'+JSON.stringify(outF);
+        location.href=A+'\x23axft';
+        return;
+      }
       var rt=await fetch('/reng/servlet/renglonaje.csv',{credentials:'include'});
       var tt=new TextDecoder('windows-1252').decode(await rt.arrayBuffer());
       if(!/^\s*No\. Pedido/i.test(tt)){alert('Axion: abre primero el DETALLE del pedido en Truper (Pedidos, Status de Pedidos, clic en el pedido) y vuelve a darle a este boton.');return;}
