@@ -4862,7 +4862,7 @@ async function verPedido(id, estado){
   const claveTr = {}; // v218: código de Truper (numérico, el que trae la caja) por código de producto
   if(/truper/i.test(pedProv)){
     try{ const cods = [...new Set(data.map(i=>i.productos&&i.productos.codigo).filter(Boolean))];
-      for(let k=0;k<cods.length;k+=200){ const q = await sb.from('lista_truper').select('codigo,clave').in('codigo', cods.slice(k,k+200)); (q.data||[]).forEach(x=>{ if(x.clave) claveTr[x.codigo] = String(x.clave); }); }
+      for(let k=0;k<cods.length;k+=200){ const q = await sb.from('lista_truper').select('codigo,clave').in('clave', cods.slice(k,k+200)); (q.data||[]).forEach(x=>{ if(x.codigo) claveTr[x.clave] = String(x.codigo); }); /* en lista_truper: codigo = número Truper (40724), clave = AR-22AB */ }
     }catch(e){}
   }
   window._pedFolioAct = pedFolio; window._recOk = false; window._pedAct = {id:id, estado:estado}; // v154: para refrescar tras adjuntar un PDF
