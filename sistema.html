@@ -4841,7 +4841,7 @@ async function hacerBuscarFolio(){
 let pedItems = [];
 async function verPedido(id, estado){
   const [it, fx, pix] = await Promise.all([
-    sb.from('pedido_compra_items').select('*, productos(codigo,descripcion)').eq('pedido_id', id).order('id'),
+    sb.from('pedido_compra_items').select('*, productos(codigo,descripcion,codigo_barras)').eq('pedido_id', id).order('id'),
     sb.from('facturas').select('id,uuid,folio,total,pdf_path,items').eq('pedido_id', id).eq('tipo','I'),
     sb.from('partes_indar').select('*').eq('pedido_id', id),
   ]);
@@ -4858,6 +4858,12 @@ async function verPedido(id, estado){
   if(pedFolio && !/indar/i.test(pedProv) && puedeVender()){
     const cq = await sb.from('cuentas_pagar').select('id,concepto,saldo,fecha_vencimiento').ilike('concepto', '%'+pedFolio+'%').neq('estado','pagada').gt('saldo', 0).limit(1);
     cxpAbierta = (cq.data||[])[0] || null;
+  }
+  const claveTr = {}; // v218: código de Truper (numérico, el que trae la caja) por código de producto
+  if(/truper/i.test(pedProv)){
+    try{ const cods = [...new Set(data.map(i=>i.productos&&i.productos.codigo).filter(Boolean))];
+      for(let k=0;k<cods.length;k+=200){ const q = await sb.from('lista_truper').select('codigo,clave').in('codigo', cods.slice(k,k+200)); (q.data||[]).forEach(x=>{ if(x.clave) claveTr[x.codigo] = String(x.clave); }); }
+    }catch(e){}
   }
   window._pedFolioAct = pedFolio; window._recOk = false; window._pedAct = {id:id, estado:estado}; // v154: para refrescar tras adjuntar un PDF
   window._pindPed = {}; pindar.forEach(z=>{ window._pindPed[String(z.parte)] = z; });
@@ -4876,10 +4882,12 @@ async function verPedido(id, estado){
     const rec = +(i.cantidad_recibida||0), pend = +i.cantidad - rec;
     if(i.cancelada) return `<tr style="opacity:.6"><td><s>${esc(i.productos?.codigo)} · ${esc((i.productos?.descripcion||'').slice(0,45))}</s> <span class="badge b-rojo">✖ cancelada por Indar</span></td>
       <td class="num"><s>${+i.cantidad}</s></td><td class="num">—</td>${recibiendo?'<td class="num">—</td>':''}${verCostos?`<td class="num muted">${fmt(i.costo_unit)}</td><td class="num muted"><s>${fmt(i.importe)}</s></td>`:''}${editando?'<td></td>':''}${puedeVender()?'<td></td>':''}</tr>`;
-    return `<tr><td>${esc(i.productos?.codigo)} · ${esc((i.productos?.descripcion||'').slice(0,45))}</td>
+    const cod = i.productos?.codigo||'', ct = claveTr[cod]||'', cb = i.productos?.codigo_barras||'';
+    const hay = [cod, ct, cb, i.productos?.descripcion||''].join(' ').toLowerCase();
+    return `<tr class="rec-fila" data-parte="${esc(i.parte||'')}" data-id="${i.id}" data-cod="${esc(cod.toLowerCase())}" data-ct="${esc(ct)}" data-cb="${esc(cb)}" data-q="${esc(hay)}"><td><b style="font-size:15px">${esc(cod)}</b>${ct?` <span class="badge b-azul" title="Código de Truper (viene en la caja)">Truper ${esc(ct)}</span>`:''}<br><span class="small">${esc((i.productos?.descripcion||'').slice(0,60))}</span>${cb?`<br><span class="small muted">▮▮ ${esc(cb)}</span>`:''}</td>
       <td class="num">${editando?`<input id="ped-cant-${i.id}" type="number" min="${Math.max(rec,1)}" value="${+i.cantidad}" style="width:64px;padding:5px;border:1px solid var(--linea);border-radius:6px;text-align:right">`:(+i.cantidad)}</td>
       <td class="num"><span class="badge ${pend<=0?'b-verde':(rec>0?'b-ambar':'b-gris')}">${rec}</span></td>
-      ${recibiendo?`<td class="num">${pend>0?`<input id="rec-${i.id}" type="number" min="0" max="${pend}" value="0" style="width:64px;padding:5px;border:1px solid var(--linea);border-radius:6px;text-align:right">`:'✓'}</td>`:''}
+      ${recibiendo?`<td class="num">${pend>0?`<input id="rec-${i.id}" type="number" min="0" max="${pend}" value="0" oninput="recTope(this)" onkeydown="recQtyKey(event)" style="width:64px;padding:5px;border:1px solid var(--linea);border-radius:6px;text-align:right">`:'✓'}</td>`:''}
       ${verCostos?`<td class="num">${fmt(i.costo_unit)}</td><td class="num">${fmt(i.importe)}</td>`:''}
       ${editando?`<td style="text-align:center">${rec===0?`<input type="checkbox" id="ped-del-${i.id}">`:''}</td>`:''}
       ${puedeVender()?`<td style="text-align:center;white-space:nowrap">${(devPorProd[i.producto_id]||[]).map(d=>`<span class="badge ${['nota_credito','repuesto'].includes(d.estado)?'b-verde':'b-ambar'}" title="${esc(d.detalle||'')}">↩️ ${+d.cantidad} ${nomDev[d.estado]||d.estado}</span>`).join(' ')}
@@ -4893,7 +4901,7 @@ async function verPedido(id, estado){
       + (fac>0 ? ' <span class="badge b-azul">🧾 facturada</span>' : ' <span class="badge b-gris" title="Aún no llega su factura XML">sin factura</span>');
   };
   const cuerpo = [...grupos.entries()].map(([p, its])=>`
-    <tr id="pt-${esc(p)}" style="background:#eef1f5"><td colspan="${nCols}" style="padding:9px 8px"><b>${p ? 'Parte '+esc(p) : (grupos.size>1 ? 'Sin parte' : 'Pedido completo')}</b> · ${its.length} partida(s) · ${badgesParte(its)}
+    <tr id="pt-${esc(p)}" class="rec-gh" data-parte="${esc(p)}" style="background:#eef1f5"><td colspan="${nCols}" style="padding:9px 8px"><b>${p ? 'Parte '+esc(p) : (grupos.size>1 ? 'Sin parte' : 'Pedido completo')}</b> · ${its.length} partida(s) · ${badgesParte(its)}
       ${recibiendo && its.some(i=>!i.cancelada && +i.cantidad>+(i.cantidad_recibida||0)) ? `<button class="btn sm" style="margin-left:8px" onclick="llenarParte('${esc(p)}')">📦 Recibir esta parte</button>` : ''}</td></tr>
     ${its.map(fila).join('')}`).join('');
   abrirModal(`<h3>Partidas del pedido (${data.length}${grupos.size>1?` · ${grupos.size} partes`:''}${nCanc?` · <span style="color:#b91c1c">${nCanc} cancelada${nCanc>1?'s':''} por Indar</span>`:''})</h3>
@@ -4908,6 +4916,10 @@ async function verPedido(id, estado){
     ${recibiendo?`<div class="card" style="border-left:4px solid var(--naranja,#e8862d);padding:10px;margin-bottom:10px">
       <b>⚠️ Antes de recibir, checa el papel:</b> el número de <b>pedido ${esc(pedFolio||'')}</b> o de <b>parte</b> que trae la lista de empaque debe aparecer en esta pantalla. Si el papel dice otro número, ciérrala y abre el pedido correcto.
       <br><span class="small muted">Luego: 📦 Recibir esta parte → coteja cantidades → sube la foto del papel firmado → Registrar recepción.</span></div>`:''}
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 8px">
+      <input id="rec-busca" type="search" autocomplete="off" placeholder="🔍 Escribe o escanea: código, código Truper, código de barras o nombre" oninput="recFiltrar()" onkeydown="recBuscaKey(event)" style="flex:1;min-width:240px;padding:9px 10px;border:2px solid var(--naranja,#e8862d);border-radius:8px;font-size:15px">
+      ${recibiendo?`<label class="small" style="white-space:nowrap;cursor:pointer" title="Con pistola de código de barras: cada escaneo suma 1 a Recibir ahora"><input type="checkbox" id="rec-scan"> 📷 Cada escaneo suma 1</label>`:''}
+      <span id="rec-cuenta" class="small muted"></span></div>
     <div class="tbl-scroll" style="max-height:400px;overflow-y:auto"><table>
     <thead><tr><th>Producto</th><th class="num">Pedida</th><th class="num">Recibida</th>${recibiendo?'<th class="num">Recibir ahora</th>':''}${verCostos?'<th class="num">Costo</th><th class="num">Importe</th>':''}${editando?'<th>Quitar</th>':''}${puedeVender()?'<th title="Reportar dañado o equivocado">Devolución</th>':''}</tr></thead>
     <tbody>${cuerpo}</tbody>
@@ -4919,6 +4931,58 @@ async function verPedido(id, estado){
       ${cxpAbierta?`<button class="btn" style="background:#15803d" onclick="pagarFacturaPedido(${cxpAbierta.id})">💵 Pagar factura · ${fmt(cxpAbierta.saldo)} (vence ${fecha(cxpAbierta.fecha_vencimiento)})</button>`:''}
       <button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
   cargarEvidencias(id);
+  setTimeout(()=>{ const b=$('rec-busca'); if(b && recibiendo) b.focus(); recCuenta(); }, 60);
+}
+/* ===== v218: buscador en la recepción ===== */
+function recFilas(){ return [...document.querySelectorAll('tr.rec-fila')]; }
+function recFiltrar(){
+  const t = String(($('rec-busca')||{}).value||'').trim().toLowerCase();
+  const pal = t.split(/\s+/).filter(Boolean);
+  const vis = {};
+  recFilas().forEach(tr=>{ const ok = !pal.length || pal.every(w=>tr.dataset.q.includes(w)); tr.style.display = ok?'':'none'; if(ok) vis[tr.dataset.parte]=1; });
+  document.querySelectorAll('tr.rec-gh').forEach(tr=>{ tr.style.display = (!pal.length || vis[tr.dataset.parte]) ? '' : 'none'; });
+  recCuenta();
+}
+function recExacta(t){
+  t = String(t||'').trim(); const tl = t.toLowerCase(); if(!t) return null;
+  const fs = recFilas();
+  return fs.find(tr=>tr.dataset.cb===t) || fs.find(tr=>tr.dataset.ct===t) || fs.find(tr=>tr.dataset.cod===tl) || null;
+}
+function recMarcar(tr){ tr.style.transition='background .2s'; tr.style.background='#fde68a'; setTimeout(()=>{ tr.style.background=''; }, 900); tr.scrollIntoView({block:'center'}); }
+function recBuscaKey(ev){
+  if(ev.key!=='Enter') return;
+  ev.preventDefault();
+  const b = $('rec-busca'), t = b.value;
+  let tr = recExacta(t);
+  if(!tr){ const vis = recFilas().filter(x=>x.style.display!=='none'); if(vis.length===1) tr = vis[0]; }
+  if(!tr){ toast(recFilas().some(x=>x.style.display!=='none') ? 'Hay varios que coinciden: escribe más o dale clic a la cantidad' : 'Ese código NO viene en este pedido', true); return; }
+  const inp = $('rec-'+tr.dataset.id);
+  recMarcar(tr);
+  if(!inp){ toast('Ese producto ya se recibió completo'); b.select(); return; }
+  if($('rec-scan') && $('rec-scan').checked){
+    const mx = +inp.max, v = +inp.value||0;
+    if(v+1 > mx){ toast('Ya van '+v+' y solo se pidieron '+mx+'. Si llegó de más, apártalo y avísale a Andrés (sobrante).', true); }
+    else { inp.value = v+1; toast((tr.dataset.cod||'').toUpperCase()+': '+(v+1)+' de '+mx); }
+    b.value=''; recFiltrar(); b.focus(); recCuenta(); return;
+  }
+  inp.focus(); inp.select();
+}
+function recQtyKey(ev){
+  if(ev.key!=='Enter') return;
+  ev.preventDefault(); recTope(ev.target);
+  const b = $('rec-busca'); if(b){ b.value=''; recFiltrar(); b.focus(); }
+}
+function recTope(inp){
+  const mx = +inp.max, v = +inp.value;
+  if(v > mx){ inp.value = mx; toast('Solo faltan '+mx+' de este. Si llegó de más, apártalo y avísale a Andrés (sobrante).', true); }
+  if(v < 0) inp.value = 0;
+  recCuenta();
+}
+function recCuenta(){
+  const el = $('rec-cuenta'); if(!el) return;
+  let pz=0, ren=0; (pedItems||[]).forEach(i=>{ const v=+(($('rec-'+i.id)||{}).value||0); if(v>0){ pz+=v; ren++; } });
+  const vis = recFilas().filter(x=>x.style.display!=='none').length, tot = recFilas().length;
+  el.innerHTML = (vis<tot?vis+' de '+tot+' renglones · ':'') + (ren?'<b>Recibiendo ahora: '+pz+' pz en '+ren+' renglón(es)</b>':'');
 }
 async function cargarEvidencias(pedidoId){
   const el = $('ev-ped'); if(!el) return;
@@ -4961,7 +5025,7 @@ async function verEvidencia(path){
 }
 function llenarParte(p){
   pedItems.forEach(i=>{ if((i.parte||'')===p && !i.cancelada){ const el=$('rec-'+i.id); if(el) el.value = Math.max(0, +i.cantidad - +(i.cantidad_recibida||0)); } });
-  toast('Cantidades de la parte llenadas — coteja contra la factura y registra la recepción');
+  toast('Cantidades de la parte llenadas — coteja contra la factura y registra la recepción'); recCuenta();
 }
 async function guardarCambiosPedido(pedidoId){
   try{
@@ -4985,7 +5049,7 @@ async function guardarCambiosPedido(pedidoId){
   }catch(e){ toast(errMsg(e), true); }
 }
 function llenarPendiente(){
-  pedItems.forEach(i=>{ if(i.cancelada) return; const el=$('rec-'+i.id); if(el) el.value = +i.cantidad - +(i.cantidad_recibida||0); });
+  pedItems.forEach(i=>{ if(i.cancelada) return; const el=$('rec-'+i.id); if(el) el.value = +i.cantidad - +(i.cantidad_recibida||0); }); recCuenta();
 }
 async function registrarRecepcion(pedidoId){
   const items = pedItems.map(i=>({item_id:i.id, cantidad:+($('rec-'+i.id)?.value||0)})).filter(x=>x.cantidad>0);
