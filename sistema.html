@@ -3567,6 +3567,7 @@ async function vInventario(){
     <button class="btn sec" id="btn-sol-res" onclick="verSolicitudesRes()">📥 Solicitudes</button>
     <button class="btn sec" id="btn-eti-nuevas" onclick="elegirEtiquetas()">🏷️ Etiquetas</button>
     <button class="btn sec" id="btn-precios-sug" onclick="revisarPreciosSugeridos()">💲 Revisar precios</button>
+    <button class="btn sec" onclick="invPrecioLote()" title="Cambia el precio de todos los productos que estás viendo con el filtro">✏️ Precio en lote</button>
     <button class="btn sec" onclick="compararStockSafdi()">⚖️ Stock SAFDI</button>
     <button class="btn sec" onclick="exportarInv()">Exportar CSV</button>`;
     sb.from('resurtido_solicitudes').select('id',{count:'exact',head:true}).eq('estado','pendiente')
@@ -3581,6 +3582,7 @@ async function vInventario(){
   ]);
   if(error) throw error;
   invData = data;
+  const _filtPrev = {}; ['inv-q','inv-cat','inv-prov','inv-est','inv-orden'].forEach(k=>{ const e=$(k); if(e) _filtPrev[k]=e.value; }); { const e=$('inv-bajo'); if(e) _filtPrev.bajo=e.checked; } // v220
   window._invVend = new Set((mv.data||[]).map(x=>x.producto_id));
   window._invRec = new Set((mr.data||[]).map(x=>x.producto_id));
   // v148: último proveedor que surtió cada producto (para filtrar el inventario por proveedor)
@@ -3630,6 +3632,7 @@ async function vInventario(){
       ${esFinanzas()?'<th class="num">Costo</th>':''}<th class="num">Precio</th>${esFinanzas()?'<th class="num">Margen</th>':''}<th class="num">Stock</th><th></th></tr></thead>
       <tbody id="inv-body"></tbody></table></div>
       <p class="small muted" id="inv-pie" style="margin-top:10px"></p></div>`;
+  Object.keys(_filtPrev).forEach(k=>{ if(k==='bajo'){ const e=$('inv-bajo'); if(e) e.checked=_filtPrev.bajo; } else { const e=$(k); if(e && [...(e.options||[{value:_filtPrev[k]}])].some(o=>o.value===_filtPrev[k])) e.value=_filtPrev[k]; } }); // v220
   pintarInv();
 }
 function pintarInv(){
@@ -3644,6 +3647,7 @@ function pintarInv(){
     (!q || codMatch(p.codigo,q) || p.descripcion.toLowerCase().includes(q) || (p.codigo_barras && nbarra(p.codigo_barras).includes(nbarra(q)))) &&
     (!cat || p.categoria === cat) && (!soloBajo || +p.stock <= +p.stock_min) && (!prov || provDe(p)===prov) &&
     (est==='' || (est==='con' && +p.stock>0) || (est==='agotado' && +p.stock<=0) || (est==='sinmov' && sinMov(p)) || (est==='sincb' && !(p.codigo_barras||'').trim()) || (est==='vendidos' && ((window._invVendCnt||{})[p.id]||0)>0)));
+  window._invRows = rows; // v220: para precio en lote
   const orden = $('inv-orden')?.value || 'az';
   const vc = window._invVendCnt || {};
   if(orden==='vendidos') rows.sort((a,b)=>(vc[b.id]||0)-(vc[a.id]||0));
@@ -3677,6 +3681,73 @@ function pintarInv(){
     <div class="kpi"><div class="l">Valor a precio de venta</div><div class="v">${fmt(valorV)}</div><div class="s">ya con IVA incluido</div></div>
     <div class="kpi"><div class="l">Ganancia si se vende todo</div><div class="v">${fmt(Math.round(ganancia*100)/100)}</div><div class="s">venta sin IVA − costo</div></div>`;
   $('inv-pie').textContent = `Mostrando ${Math.min(rows.length,400)} de ${rows.length} filtrado(s) · ${invData.length} productos en total — las tarjetas de arriba se recalculan con los filtros`;
+}
+/* ===== v220: cambiar precio en lote (lo filtrado en Inventario) ===== */
+function invPrecioLote(){
+  const rows = (window._invRows||[]).filter(p=>!esGranel(p));
+  const q = ($('inv-q')||{}).value||'', cat = ($('inv-cat')||{}).value||'';
+  if(!rows.length){ toast('No hay productos en el filtro', true); return; }
+  if(!q.trim() && !cat && rows.length > 300){ toast('Primero filtra (busca o elige categoría): son '+rows.length+' productos', true); return; }
+  if(rows.length > 300){ toast('Son '+rows.length+'; filtra más (máximo 300 a la vez)', true); return; }
+  window._plRows = rows;
+  abrirModal(`<h3>✏️ Cambiar precio en lote</h3>
+    <p class="small muted" style="margin:0 0 8px">Son los <b>${rows.length}</b> productos que estás viendo${q?` (búsqueda "<b>${esc(q)}</b>")`:''}${cat?` · categoría <b>${esc(cat)}</b>`:''}. Quita la palomita a los que no quieras cambiar.</p>
+    <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;margin-bottom:8px">
+      <div><label>¿Cómo?</label><select id="pl-modo" onchange="plPintar()"><option value="fijo">Mismo precio a todos</option><option value="pct">Subir / bajar %</option><option value="pesos">Sumar / restar pesos</option></select></div>
+      <div><label id="pl-lbl">Precio nuevo (con IVA)</label><input type="number" id="pl-val" step="0.5" style="width:120px" oninput="plPintar()" onkeydown="if(event.key==='Enter')plAplicar()"></div>
+      <span id="pl-res" class="small"></span>
+    </div>
+    <div class="tbl-scroll" style="max-height:340px;overflow-y:auto;border:1px solid var(--linea);border-radius:8px"><table>
+      <thead><tr><th><input type="checkbox" checked onchange="document.querySelectorAll('.pl-ck').forEach(c=>c.checked=this.checked);plPintar()"></th><th>Código</th><th>Descripción</th><th class="num">Costo</th><th class="num">Ahora</th><th class="num">Nuevo</th><th class="num">Margen</th></tr></thead>
+      <tbody id="pl-body"></tbody></table></div>
+    <p class="small muted" style="margin:8px 0 0">Se redondea hacia arriba al peso. No deja guardar abajo del costo. Los que cambien salen en 🏷️ Etiquetas para cambiar la tarjeta.</p>
+    <div class="acciones"><button class="btn" id="pl-btn" onclick="plAplicar()">Aplicar</button><button class="btn sec" onclick="cerrarModal()">Cancelar</button></div>`, true);
+  plPintar(true);
+  setTimeout(()=>{ const v=$('pl-val'); if(v) v.focus(); }, 50);
+}
+function plNuevo(p){
+  const modo = ($('pl-modo')||{}).value||'fijo', v = parseFloat(($('pl-val')||{}).value);
+  if(!isFinite(v)) return null;
+  const n = modo==='fijo' ? v : (modo==='pct' ? +p.precio*(1+v/100) : +p.precio + v);
+  return n>0 ? redondearPrecio(n) : null;
+}
+function plPintar(primera){
+  const modo = ($('pl-modo')||{}).value||'fijo';
+  const lbl = $('pl-lbl'); if(lbl) lbl.textContent = modo==='fijo' ? 'Precio nuevo (con IVA)' : (modo==='pct' ? '% (ej. 10 o -5)' : 'Pesos (ej. 5 o -3)');
+  const marcados = primera ? null : new Set([...document.querySelectorAll('.pl-ck')].filter(c=>c.checked).map(c=>+c.dataset.id));
+  let nCam=0, nBajo=0;
+  $('pl-body').innerHTML = window._plRows.map(p=>{
+    const nv = plNuevo(p), ck = marcados ? marcados.has(p.id) : true;
+    const bajo = nv!=null && nv/1.16 < +p.costo;
+    const pct = nv!=null && nv>0 ? ((nv/1.16 - +p.costo)/(nv/1.16)*100) : null;
+    if(ck && nv!=null && nv !== +p.precio && !bajo) nCam++;
+    if(ck && bajo) nBajo++;
+    return `<tr${bajo?' style="background:#fee2e2"':''}><td><input type="checkbox" class="pl-ck" data-id="${p.id}" ${ck?'checked':''} onchange="plPintar()"></td><td><b>${esc(p.codigo)}</b></td><td class="small">${esc((p.descripcion||'').slice(0,50))}</td>
+      <td class="num">${fmt(p.costo)}</td><td class="num">${fmt(p.precio)}</td>
+      <td class="num"><b>${nv==null?'—':fmt(nv)}</b></td>
+      <td class="num">${pct==null?'—':`<span class="badge ${bajo?'b-rojo':(pct>=25?'b-verde':'b-ambar')}">${bajo?'¡bajo costo!':pct.toFixed(0)+'%'}</span>`}</td></tr>`;
+  }).join('');
+  const r = $('pl-res'); if(r) r.innerHTML = nCam ? `<b>${nCam}</b> cambiarán de precio`+(nBajo?` · <span style="color:#b91c1c">${nBajo} abajo del costo (no se cambian)</span>`:'') : (nBajo?`<span style="color:#b91c1c">${nBajo} abajo del costo</span>`:'');
+}
+async function plAplicar(){
+  const ids = new Set([...document.querySelectorAll('.pl-ck')].filter(c=>c.checked).map(c=>+c.dataset.id));
+  const cambios = window._plRows.filter(p=>ids.has(p.id)).map(p=>({p, nv:plNuevo(p)})).filter(x=>x.nv!=null && x.nv !== +x.p.precio && x.nv/1.16 >= +x.p.costo);
+  if(!cambios.length){ toast('No hay cambios que aplicar', true); return; }
+  if(!confirm('¿Cambiar el precio de '+cambios.length+' producto(s)?')) return;
+  const b = $('pl-btn'); if(b) b.disabled = true;
+  let ok = 0;
+  try{
+    // agrupados por precio nuevo para hacer pocas llamadas
+    const grupos = {}; cambios.forEach(x=>{ (grupos[x.nv] = grupos[x.nv]||[]).push(x.p.id); });
+    for(const [nv, lista] of Object.entries(grupos)){
+      for(let i=0;i<lista.length;i+=100){
+        const {data, error} = await sb.from('productos').update({precio:+nv, etiqueta_at:null}).in('id', lista.slice(i,i+100)).select('id');
+        if(error) throw error; ok += (data||[]).length;
+      }
+    }
+    logEv('precio', 'precio en lote: '+ok+' producto(s) · '+cambios.slice(0,6).map(x=>x.p.codigo+' '+x.p.precio+'→'+x.nv).join(', ')+(cambios.length>6?'…':''));
+    cerrarModal(); toast(ok+' precio(s) cambiados ✓ — imprime las tarjetas en 🏷️ Etiquetas'); vInventario();
+  }catch(e){ if(b) b.disabled=false; toast(errMsg(e), true); }
 }
 async function fichaProducto(id){
   let p = invData.find(x=>x.id===id);
