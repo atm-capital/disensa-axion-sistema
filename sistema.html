@@ -1995,7 +1995,8 @@ function agregarProd(id){
   if(enCarrito + 1 > +p.stock){ toast('No hay más stock', true); return; }
   const ya = carrito.find(x=>x.producto_id===id);
   if(ya){ ya.cantidad++; }
-  else { const pm = pctMaestro(); carrito.push({producto_id:id, codigo:p.codigo, desc:p.descripcion, cantidad:1, base:+p.precio, precio_unit: Math.round(+p.precio*(100-pm))/100, max:+p.stock}); }
+  else { const pm = pctMaestro(); carrito.push({producto_id:id, codigo:p.codigo, desc:p.descripcion, cantidad:1, base:+p.precio, precio_unit: Math.round(+p.precio*(100-pm))/100, max:+p.stock});
+    if(!(String(p.codigo).toUpperCase() in window._trTiers)) trTiers([p.codigo]).then(()=>{ if(window._trTiers[String(p.codigo).toUpperCase()]) pintarCarrito(); }); } // v222
   pintarCarrito();
 }
 // ===== v102: vender por metro o kilo =====
@@ -2216,7 +2217,7 @@ function aplicarMaestro(){
 }
 function pintarCarrito(){
   $('nv-carrito').innerHTML = carrito.map((c,i)=>`
-    <tr><td style="max-width:180px"><b>${esc(c.codigo)}</b>${c.granel?' <span class="badge b-azul">📏</span>':''}${c.libre?' <span class="badge b-gris">✍️</span>':''}<br><span class="small muted">${esc(c.desc.slice(0,40))}</span></td>
+    <tr><td style="max-width:180px"><b>${esc(c.codigo)}</b>${c.granel?' <span class="badge b-azul">📏</span>':''}${c.libre?' <span class="badge b-gris">✍️</span>':''}<br><span class="small muted">${esc(c.desc.slice(0,40))}</span>${c.libre||c.granel?'':trTierHtml(c.codigo)}</td>
     ${c.granel
       ? `<td><input value="${c.cantidad}" readonly style="background:#eef2ff;cursor:pointer" title="Clic para cambiar los ${esc(c.unidad||'')}s" onclick="pedirCantidadGranel(${c.producto_id})"></td>
          <td><input value="${c.precio_unit}" readonly style="background:#eef2ff" title="El precio por ${esc(c.unidad||'unidad')} es fijo"></td>`
@@ -3240,10 +3241,27 @@ async function subirListaTruper(){
   }catch(e){ st(''); toast(errMsg(e), true); }
   btn.disabled = false;
 }
+// v222: precios Truper de medio mayoreo y mayoreo (con IVA), por clave (AR-22AB)
+window._trTiers = window._trTiers || {};
+async function trTiers(claves){
+  const faltan = [...new Set((claves||[]).filter(Boolean).map(c=>String(c).toUpperCase()))].filter(c=>!(c in window._trTiers));
+  for(let i=0;i<faltan.length;i+=200){
+    const lote = faltan.slice(i,i+200);
+    try{ const r = await sb.from('lista_truper').select('clave,medio_mayoreo_iva,mayoreo_iva,precio_publico_iva').in('clave', lote);
+      lote.forEach(c=>{ window._trTiers[c] = null; });
+      (r.data||[]).forEach(x=>{ if(+x.mayoreo_iva>0 || +x.medio_mayoreo_iva>0) window._trTiers[String(x.clave).toUpperCase()] = {mm:+x.medio_mayoreo_iva||0, may:+x.mayoreo_iva||0, pub:+x.precio_publico_iva||0}; });
+    }catch(e){}
+  }
+  return window._trTiers;
+}
+function trTierHtml(clave){
+  const t = window._trTiers[String(clave||'').toUpperCase()]; if(!t) return '';
+  return `<br><span class="small" style="color:#1d4ed8" title="Precios Truper con IVA por volumen">Truper: ${t.mm?'medio may. <b>'+fmt(t.mm)+'</b>':''}${t.mm&&t.may?' · ':''}${t.may?'mayoreo <b>'+fmt(t.may)+'</b>':''}</span>`;
+}
 // ---- Catálogo Truper (pestaña Catálogo → Proveedor: Truper) ----
 async function pintarCatalogoTruper(agregar){
   const q = ($('cat-q')?.value||'').trim();
-  let con = sb.from('lista_truper').select('codigo,clave,descripcion,marca,familia_desc,unidad,ean,inner_pack,precio_publico_iva,precio_publico,precio_minimo,distribuidor,distribuidor_iva,alta_rotacion').order('descripcion');
+  let con = sb.from('lista_truper').select('codigo,clave,descripcion,marca,familia_desc,unidad,ean,inner_pack,precio_publico_iva,precio_publico,precio_minimo,distribuidor,distribuidor_iva,alta_rotacion,medio_mayoreo_iva,mayoreo_iva').order('descripcion');
   if(q.length>=2){
     for(const t of q.split(/\s+/).slice(0,6)){
       const tt = normTxt(t).replace(/[%,()]/g,' ').trim(); if(tt.length<2) continue;
@@ -3258,15 +3276,15 @@ async function pintarCatalogoTruper(agregar){
   const mios = {};
   try{ const cods = (data||[]).map(p=>p.clave).filter(Boolean); if(cods.length){ const rm = await sb.from('productos').select('id,codigo,precio,costo,stock').in('codigo', cods).eq('activo', true); (rm.data||[]).forEach(m=>{ mios[String(m.codigo).toUpperCase()] = m; }); } }catch(e){}
   if(q.length>=2 && !catPagina){ clearTimeout(window._evT); window._evT=setTimeout(function(){ logEv('busqueda_truper', q); }, 1500); }
-  window._catTr = window._catTr || {}; (data||[]).forEach(p=>{ window._catTr[p.codigo] = p; });
+  window._catTr = window._catTr || {}; (data||[]).forEach(p=>{ window._catTr[p.codigo] = p; if(+p.mayoreo_iva>0 || +p.medio_mayoreo_iva>0) window._trTiers[String(p.clave).toUpperCase()] = {mm:+p.medio_mayoreo_iva||0, may:+p.mayoreo_iva||0, pub:+p.precio_publico_iva||0}; });
   const html = (data||[]).map(p=>{
     const mio = mios[String(p.clave).toUpperCase()];
     const sel = catSel.has(p.clave);
     const co = +p.distribuidor||0, pubI = +p.precio_publico_iva||0;
     const m = margenSV(pubI, co);
     const precioHtml = (mio && +mio.precio>0)
-      ? `<b>${fmt(mio.precio)}</b> <span class="badge b-verde" title="Ya lo vendemos: este es nuestro precio">🏪 nuestro</span><br><span class="small muted">stock ${+mio.stock||0}${esFinanzas()?` · público Truper ${fmt(pubI)}`:''}</span>`
-      : `<b>${fmt(pubI)}</b><br><span class="small muted">público Truper${esFinanzas()?` · costo ${fmt(co)} (${m!==null?Math.round(m*100)+'%':'—'})`:''}</span>`;
+      ? `<b>${fmt(mio.precio)}</b> <span class="badge b-verde" title="Ya lo vendemos: este es nuestro precio">🏪 nuestro</span><br><span class="small muted">stock ${+mio.stock||0}${esFinanzas()?` · público Truper ${fmt(pubI)}`:''}</span>${trTierHtml(p.clave)}`
+      : `<b>${fmt(pubI)}</b><br><span class="small muted">público Truper${esFinanzas()?` · costo ${fmt(co)} (${m!==null?Math.round(m*100)+'%':'—'})`:''}</span>${trTierHtml(p.clave)}`;
     const obj = {c:p.clave, d:p.descripcion, pr:(mio&&+mio.precio>0)?+mio.precio:pubI, co:(mio&&+mio.costo>0)?+mio.costo:co, su:pubI, pid:mio?mio.id:undefined, tr:p.codigo};
     return `<div class="card" style="margin:0;padding:12px;${sel?'outline:2px solid var(--rojo)':''}">
       <a href="https://www.truper.com/CatVigente/buscador?palabra=${encodeURIComponent(p.clave)}" target="_blank" title="Ver en el catálogo Truper"><img src="https://www.truper.com/admin/images/ch/${encodeURIComponent(p.codigo)}.jpg" style="width:100%;height:110px;object-fit:contain" onerror="this.style.display='none'" loading="lazy"></a>
@@ -3350,6 +3368,7 @@ async function pintarCatalogoTodo(agregar){
   const toks = normTxt(q).split(/\s+/).filter(t=>t.length>=4);
   const sug = window._catUso ? [] : usos.filter(u=>{ const t = normTxt(u.termino+' '+u.palabras); return toks.some(k=>t.includes(k)); }).slice(0,6);
   window._catData = window._catData||{}; window._catTr = window._catTr||{}; window._catMios = window._catMios||{};
+  await trTiers(data.filter(p=>p.fuente!=='indar').map(p=>p.fuente==='truper'?p.clave:p.codigo)); // v222
   const html = data.map(p=>{
     const key = p.fuente==='truper' ? p.clave : p.codigo;
     const sel = catSel.has(key);
@@ -3362,8 +3381,8 @@ async function pintarCatalogoTodo(agregar){
     const pv = esInd ? precioAxion(co, +p.precio, p.codigo) : +p.precio;      // v210: Indar que no tenemos -> precio Axion (v211: o su precio fijo)
     const m = margenSV(pv, co);
     const precioHtml = p.fuente==='mio'
-      ? `<b>${fmt(p.precio)}</b><br><span class="small muted">stock ${+p.stock||0}${esFinanzas()?` · costo ${fmt(p.costo)} (${m!==null?Math.round(m*100)+'%':'—'})`:''}</span>`
-      : `<b>${fmt(pv)}</b><br><span class="small muted">${p.fuente==='truper'?'público Truper':((esFinanzas() && axFijoDe(p.codigo)>0)?'📌 precio fijo':'precio Axion')}${esFinanzas()?` · costo ${fmt(co)} (${m!==null?Math.round(m*100)+'%':'—'})${esInd?` · Indar sugiere ${fmt(p.precio)}${axPromoTxt(li0)}`:''}`:''}</span>${(esInd && esFinanzas())?`<br>${(li0&&li0.viejo)?AX_NOVIENE:''}${axCaroBadge(pv, +p.precio, p.codigo)}${axLapiz(p.codigo)}`:''}`;
+      ? `<b>${fmt(p.precio)}</b><br><span class="small muted">stock ${+p.stock||0}${esFinanzas()?` · costo ${fmt(p.costo)} (${m!==null?Math.round(m*100)+'%':'—'})`:''}</span>${trTierHtml(p.codigo)}`
+      : `<b>${fmt(pv)}</b><br><span class="small muted">${p.fuente==='truper'?'público Truper':((esFinanzas() && axFijoDe(p.codigo)>0)?'📌 precio fijo':'precio Axion')}${esFinanzas()?` · costo ${fmt(co)} (${m!==null?Math.round(m*100)+'%':'—'})${esInd?` · Indar sugiere ${fmt(p.precio)}${axPromoTxt(li0)}`:''}`:''}</span>${p.fuente==='truper'?trTierHtml(p.clave):''}${(esInd && esFinanzas())?`<br>${(li0&&li0.viejo)?AX_NOVIENE:''}${axCaroBadge(pv, +p.precio, p.codigo)}${axLapiz(p.codigo)}`:''}`;
     const obj = {c:key, d:p.descripcion, pr:pv, co:co, su:pv, ind:(esInd?+p.precio:0), pid:p.pid||undefined};
     const link = p.fuente==='truper' ? `https://www.truper.com/CatVigente/buscador?palabra=${encodeURIComponent(p.clave)}` : (p.fuente==='indar' ? `https://indar.mx/portal/detallesProducto/${encodeURIComponent(String(p.codigo).replace(/ /g,'_'))}` : '');
     const alta = (esAdmin() && p.fuente!=='mio') ? (p.fuente==='truper' ? `<button class="btn sm sec" title="Dar de alta en mi inventario" onclick="altaProductoTruper('${esc(p.codigo)}')">➕ Alta</button> ` : `<button class="btn sm sec" title="Dar de alta en mi inventario (precio Axion: regla de margen)" onclick='altaProductoIndar(${JSON.stringify(p.codigo)})'>➕ Alta</button> `) : '';
