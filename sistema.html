@@ -3999,6 +3999,7 @@ function elegirEtiquetas(){
       <button class="btn sec sm" onclick="etiFiltro('pend')">🆕 Sin etiqueta impresa</button>
       <button class="btn sec sm" onclick="etiFiltro('stock')">📦 Con stock</button>
       <button class="btn sec sm" onclick="etiFiltro('todos')">Todos</button>
+      <button class="btn sec sm" onclick="etiFiltro('agotado')">🚫 Agotados</button>
       <button class="btn sec sm" onclick="etiSel=new Set(); pintarEti()">✖ Limpiar selección</button>
     </div>
     <input type="search" id="eti-q" placeholder="Buscar por código, descripción o categoría..." oninput="pintarEti()" style="margin-bottom:6px">
@@ -4010,6 +4011,8 @@ function elegirEtiquetas(){
     <div id="eti-lista" class="tbl-scroll" style="max-height:340px;overflow-y:auto;border:1px solid var(--linea);border-radius:8px"></div>
     <div class="acciones">
       <button class="btn" id="eti-btn" onclick="imprimirEtiSel()">🖨 Imprimir seleccionadas</button>
+      <button class="btn sec" onclick="imprimirAgotadoSel()" title="Etiqueta roja 'Temporalmente agotado' con el nombre del producto">🚫 Imprimir como AGOTADO</button>
+      <button class="btn sec" onclick="pintarAgotados([])" title="Hoja de 24 etiquetas genéricas, sin producto">🚫 Hoja de AGOTADO en blanco</button>
       <button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
   window._etiFiltro = 'pend';
   pintarEti();
@@ -4019,7 +4022,7 @@ function etiFilas(){
   const q = ($('eti-q')?($('eti-q').value||''):'').toLowerCase().trim();
   const f = window._etiFiltro||'pend';
   return invData.filter(p => p.activo && +p.precio>0
-    && (f==='todos' || (f==='pend' ? !p.etiqueta_at : +p.stock>0))
+    && (f==='todos' || (f==='agotado' ? (+p.stock<=0 && +(p.abierto||0)<=0) : (f==='pend' ? !p.etiqueta_at : +p.stock>0)))
     && (!q || (p.codigo+' '+p.descripcion+' '+(p.categoria||'')).toLowerCase().includes(q)))
     .sort((a,b)=>(a.categoria||'').localeCompare(b.categoria||'')||a.descripcion.localeCompare(b.descripcion));
 }
@@ -4067,7 +4070,9 @@ function pintarEtiquetas(rows){
   <p class="noprint" style="margin:0 0 10px"><button onclick="window.print()" style="padding:10px 18px;background:#E8790F;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer">🖨 Imprimir</button> <span style="font-size:12px;color:#777">${rows.length} etiquetas · 24 por hoja carta (recorta por la línea punteada)</span></p>
   <div class="grid">${rows.map(p=>`<div class="tag">
     <div><div class="cod">${esc(p.codigo)} · ${esc(p.categoria)}</div><div class="desc">${esc(p.descripcion)}</div></div>
-    <div class="pre">${fmt(p.precio)}<small>IVA incluido · por ${esc(p.unidad||'pza')}</small></div>
+    ${esGranel(p) && +p.precio_unidad>0
+      ? `<div class="pre">${fmt(p.precio_unidad)}<small>IVA incluido · por ${esc(p.unidad_venta||'pza')} · ${esc(p.unidad_compra||'caja')} de ${+p.contenido}: <b>${fmt(p.precio)}</b></small></div>`
+      : `<div class="pre">${fmt(p.precio)}<small>IVA incluido · por ${esc(p.unidad||'pza')}</small></div>`}
     <div class="marca">AXION TOOLS</div></div>`).join('')}</div>
   </body></html>`);
   w.document.close();
@@ -4078,6 +4083,33 @@ function pintarEtiquetas(rows){
     const be = $('btn-eti-nuevas');
     if(be){ const nNue = invData.filter(p=>p.activo && +p.precio>0 && !p.etiqueta_at).length; be.innerHTML = '🏷️ Etiquetas' + (nNue?' <span class="badge b-ambar">'+nNue+'</span>':''); }
   });
+}
+/* v221: etiquetas de "temporalmente agotado" (mismo tamaño que las de precio: 24 por hoja) */
+function imprimirAgotadoSel(){
+  if(!etiSel.size){ toast('Selecciona los productos agotados (o usa la hoja en blanco)', true); return; }
+  const rows = invData.filter(p=>etiSel.has(p.id)).sort((a,b)=>(a.categoria||'').localeCompare(b.categoria||'')||a.descripcion.localeCompare(b.descripcion));
+  cerrarModal(); pintarAgotados(rows);
+}
+function pintarAgotados(rows){
+  const lista = rows && rows.length ? rows : Array.from({length:24}, ()=>null);
+  const w = window.open('','_blank');
+  if(!w){ toast('Permite las ventanas emergentes para imprimir', true); return; }
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Temporalmente agotado · Axion Tools</title>
+  <style>@page{size:letter;margin:5mm} body{font-family:'Segoe UI',sans-serif;margin:0;color:#26292b}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:2mm 0}
+  .tag{border:1px dashed #bbb;padding:6px 10px;height:31mm;box-sizing:border-box;display:flex;flex-direction:column;justify-content:space-between;page-break-inside:avoid;break-inside:avoid;overflow:hidden}
+  .ag{background:#c62828;color:#fff;font-weight:800;text-align:center;border-radius:4px;padding:5px 4px;line-height:1.1;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .ag .t1{font-size:11px;letter-spacing:.5px}.ag .t2{font-size:19px}
+  .cod{font-size:9.5px;color:#888}.desc{font-size:11px;font-weight:600;line-height:1.2;max-height:27px;overflow:hidden}
+  .pie{display:flex;justify-content:space-between;font-size:9px}.marca{color:#E8790F;font-weight:700}.muted{color:#888}
+  @media print{.noprint{display:none}}</style></head><body>
+  <p class="noprint" style="margin:0 0 10px"><button onclick="window.print()" style="padding:10px 18px;background:#c62828;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer">🖨 Imprimir</button> <span style="font-size:12px;color:#777">${lista.length} etiquetas · 24 por hoja carta (recorta por la línea punteada)</span></p>
+  <div class="grid">${lista.map(p=>`<div class="tag">
+    ${p?`<div><div class="cod">${esc(p.codigo)}</div><div class="desc">${esc(p.descripcion)}</div></div>`:''}
+    <div class="ag"><div class="t1">ARTÍCULO</div><div class="t2">TEMPORALMENTE AGOTADO</div></div>
+    <div class="pie"><span class="muted">Pregunta por él en mostrador</span><span class="marca">AXION TOOLS</span></div></div>`).join('')}</div>
+  </body></html>`);
+  w.document.close();
 }
 function exportarInv(){
   const enc = ['codigo','descripcion','categoria','unidad','codigo_barras','costo','precio','stock','stock_min','activo'];
