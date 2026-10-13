@@ -2929,11 +2929,14 @@ async function cotDatosFichas(items){
       sb.from('productos').select('codigo,codigo_barras,unidad').in('codigo', lote)]);
     (t.data||[]).forEach(x=>{ TR[x.clave] = x; }); (n.data||[]).forEach(x=>{ IN[x.codigo] = x; }); (p.data||[]).forEach(x=>{ PR[x.codigo] = x; });
   }
+  // v224: fichas públicas en axiontools.mx/fichas/<CODIGO>.pdf (las de Indar piden cuenta en su portal; ahí las publicamos)
+  const PUB = {}; const fichaPub = c => '/fichas/'+String(c).replace(/[ -]/g,'_')+'.pdf';
+  await Promise.all(cods.filter(c=>!TR[c]).map(async c=>{ try{ const r = await fetch(fichaPub(c), {method:'HEAD', cache:'no-store'}); if(r.ok) PUB[c] = 'https://axiontools.mx'+fichaPub(c); }catch(e){} }));
   return items.map(i=>{
     const t = TR[i.codigo], n = IN[i.codigo], p = PR[i.codigo];
     const sd = cotSepararDesc(i.descripcion);
     const foto = t ? `https://www.truper.com/admin/images/ch/${encodeURIComponent(t.codigo)}.jpg` : (i.codigo ? `https://storage.googleapis.com/indararticulos/${encodeURIComponent(String(i.codigo).replace(/[^A-Za-z0-9]/g,'_'))}_MD.webp` : '');
-    const ficha = t ? `https://www.truper.com/ficha_merca/ficha-print.php?code=${encodeURIComponent(t.codigo)}` : (n ? `https://indar.mx/portal/detallesProducto/${encodeURIComponent(String(i.codigo).replace(/ /g,'_'))}` : '');
+    const ficha = t ? `https://www.truper.com/ficha_merca/ficha-print.php?code=${encodeURIComponent(t.codigo)}` : (PUB[i.codigo] || '');
     const datos = [];
     if(t){ datos.push(['Marca', t.marca||'Truper'], ['Línea', t.familia_desc||''], ['Código fabricante', t.clave+' · '+t.codigo], ['Unidad', t.unidad||'']);
       if(t.inner_pack) datos.push(['Empaque', 'inner '+(+t.inner_pack)+(t.master_pack?' · master '+(+t.master_pack):'')]);
