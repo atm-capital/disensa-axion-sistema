@@ -2773,7 +2773,7 @@ async function nuevaCot(editId){
   abrirModal(`<h3>${cotEditId?'Editar cotización C-'+ed.folio:'Nueva cotización'}</h3>
     <div class="pos">
       <div>
-        <div class="field"><label>Buscar producto (mi catálogo + lista Indar completa)</label>
+        <div class="field"><label>Buscar producto (mi catálogo + Indar + Truper)</label>
           <input id="ct-buscar" placeholder="Escribe 3+ letras: cemento, pinza, taquete..." oninput="buscarCot()"></div>
         <div class="prod-res" id="ct-res"><div class="it muted">Escribe para buscar…</div></div>
         <p class="small muted" style="margin-top:6px">También puedes agregar una <button class="link" onclick="agregarLibreCot()">partida libre</button> (texto y precio a mano).</p>
@@ -2814,11 +2814,14 @@ async function buscarCotYa(){
   let qInd = sb.from('lista_indar').select('codigo,descripcion,marca,unidad,precio_lista,promo_pct,precio_mayoreo,precio_sugerido,actualizado')
       .or(`codigo.ilike.${like},descripcion.ilike.${like},marca.ilike.${like}`);
   if(corteL && !esFinanzas()) qInd = qInd.gte('actualizado', corteL.toISOString());
-  const [mios, indar] = await Promise.all([
+  const [mios, indar, trup] = await Promise.all([
     sb.from('productos').select('id,codigo,descripcion,precio,costo,stock').eq('activo',true)
       .or(`codigo.ilike.${like},descripcion.ilike.${like}`).limit(10),
     qInd.limit(20),
+    sb.from('lista_truper').select('codigo,clave,descripcion,marca,ean,precio_publico_iva,distribuidor,medio_mayoreo_iva,mayoreo_iva') // v226: también Truper
+      .or(`clave.ilike.${like},descripcion.ilike.${like},codigo.ilike.${like},ean.ilike.${like}`).limit(15),
   ]);
+  (trup.data||[]).forEach(t=>{ if(+t.mayoreo_iva>0 || +t.medio_mayoreo_iva>0) window._trTiers[String(t.clave).toUpperCase()] = {mm:+t.medio_mayoreo_iva||0, may:+t.mayoreo_iva||0, pub:+t.precio_publico_iva||0}; });
   const miosCod = new Set((mios.data||[]).map(p=>p.codigo));
   let html = (mios.data||[]).map(p=>`
     <div class="it" onclick='agregarCot(${JSON.stringify({c:p.codigo, d:p.descripcion, pr:+p.precio, co:+p.costo, su:+p.precio, pid:p.id}).replace(/'/g,"&#39;")})'>
@@ -2833,7 +2836,14 @@ async function buscarCotYa(){
       <span><b>${esc(p.codigo)}</b> ${esc((p.descripcion||'').slice(0,42))} <span class="badge b-azul">${esc(p.marca||'Indar')}${promo?' · −'+Math.round(p.promo_pct*100)+'%':''}</span>${axYaNoViene(p.actualizado)?AX_NOVIENE:''}</span>
       <span style="white-space:nowrap">${fmt(pax)}${axCaroBadge(pax, p.precio_sugerido, p.codigo)}${pz?`<br><span class="small" style="color:var(--azul)">${fmt(pax/pz)}/pza</span>`:''}</span></div>`;
   }).join('');
-  $('ct-res').innerHTML = html || '<div class="it muted">Sin resultados en catálogo ni en lista Indar.</div>';
+  const miosUp = new Set([...miosCod].map(c=>String(c).toUpperCase()));
+  html += (trup.data||[]).filter(t=>!miosUp.has(String(t.clave).toUpperCase())).map(t=>{
+    const pub = redondearPrecio(+t.precio_publico_iva||0);
+    return `<div class="it" onclick='agregarCot(${JSON.stringify({c:t.clave, d:t.descripcion, pr:pub, co:+t.distribuidor||0, su:pub, pid:null}).replace(/'/g,"&#39;")})'>
+      <span><b>${esc(t.clave)}</b> ${esc((t.descripcion||'').slice(0,42))} <span class="badge b-azul">Truper${t.marca&&t.marca!=='Truper'?' · '+esc(t.marca):''}</span>${trTierHtml(t.clave)}</span>
+      <span style="white-space:nowrap">${fmt(pub)}<br><span class="small muted">público Truper</span></span></div>`;
+  }).join('');
+  $('ct-res').innerHTML = html || '<div class="it muted">Sin resultados en tu catálogo, Indar ni Truper.</div>';
 }
 function agregarCot(p){
   const ya = cotCarrito.find(x=>x.codigo===p.c);
