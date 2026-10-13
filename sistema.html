@@ -2624,6 +2624,7 @@ async function vCotizaciones(){
       <td><select onchange="cambiarEstadoCot(${x.id}, this.value)" ${puedeVender()?'':'disabled'}>
         ${['borrador','enviada','aceptada','rechazada','vencida'].map(e=>`<option ${x.estado===e?'selected':''}>${e}</option>`).join('')}</select></td>
       <td style="white-space:nowrap"><button class="btn sec sm" onclick="imprimirCot(${x.id})">🖨 PDF</button>
+        <button class="btn sm" onclick="propuestaCot(${x.id})" title="Portada + cotización + ficha de cada producto con foto y QR a su ficha técnica">📑 Propuesta</button>
         <button class="btn sec sm" onclick="fichasCot(${x.id})">📎 Fichas</button>
         ${puedeVender()?`<button class="btn sec sm" onclick="nuevaCot(${x.id})">✏ Editar</button>`:''}
         ${esAdmin()?`<button class="btn sec sm" onclick="borrarCot(${x.id}, ${x.folio})">🗑</button>`:''}</td>
@@ -2913,6 +2914,115 @@ async function guardarCot(){
     imprimirCot(cotId);
   }catch(e){ toast(errMsg(e), true); $('ct-guardar').disabled = false; }
 }
+/* ===== v223 (13-oct-2026): PROPUESTA CON FICHAS — portada + cotización + una ficha por producto (foto, datos, equivalencia, QR a ficha técnica oficial)
+   Si la descripción de la partida trae "· Equivale a: X" o "· Alternativa a: X", la ficha muestra el cuadro "Lo que pidió / Lo que ofrecemos". */
+function cotTipoPartida(d){ d = String(d||''); if(/·\s*Alternativa a:/i.test(d)) return 'parecido'; if(/·\s*Equivale a:/i.test(d)) return 'equivalente'; return 'exacto'; }
+function cotSepararDesc(d){ d = String(d||''); const m = d.match(/^(.*?)\s*·\s*(Equivale a|Alternativa a):\s*(.*)$/i); return m ? {prod:m[1], pidio:m[3], tipo:/altern/i.test(m[2])?'parecido':'equivalente'} : {prod:d, pidio:'', tipo:'exacto'}; }
+async function cotDatosFichas(items){
+  const cods = [...new Set(items.map(i=>i.codigo).filter(Boolean))];
+  const TR = {}, IN = {}, PR = {};
+  for(let k=0;k<cods.length;k+=200){
+    const lote = cods.slice(k,k+200);
+    const [t, n, p] = await Promise.all([
+      sb.from('lista_truper').select('codigo,clave,descripcion,marca,familia_desc,unidad,ean,inner_pack,master_pack,peso_kg').in('clave', lote),
+      sb.from('lista_indar').select('codigo,descripcion,marca,categoria,unidad,multiplo').in('codigo', lote),
+      sb.from('productos').select('codigo,codigo_barras,unidad').in('codigo', lote)]);
+    (t.data||[]).forEach(x=>{ TR[x.clave] = x; }); (n.data||[]).forEach(x=>{ IN[x.codigo] = x; }); (p.data||[]).forEach(x=>{ PR[x.codigo] = x; });
+  }
+  return items.map(i=>{
+    const t = TR[i.codigo], n = IN[i.codigo], p = PR[i.codigo];
+    const sd = cotSepararDesc(i.descripcion);
+    const foto = t ? `https://www.truper.com/admin/images/ch/${encodeURIComponent(t.codigo)}.jpg` : (i.codigo ? `https://storage.googleapis.com/indararticulos/${encodeURIComponent(String(i.codigo).replace(/[^A-Za-z0-9]/g,'_'))}_MD.webp` : '');
+    const ficha = t ? `https://www.truper.com/ficha_merca/ficha-print.php?code=${encodeURIComponent(t.codigo)}` : (n ? `https://indar.mx/portal/detallesProducto/${encodeURIComponent(String(i.codigo).replace(/ /g,'_'))}` : '');
+    const datos = [];
+    if(t){ datos.push(['Marca', t.marca||'Truper'], ['Línea', t.familia_desc||''], ['Código fabricante', t.clave+' · '+t.codigo], ['Unidad', t.unidad||'']);
+      if(t.inner_pack) datos.push(['Empaque', 'inner '+(+t.inner_pack)+(t.master_pack?' · master '+(+t.master_pack):'')]);
+      if(t.ean) datos.push(['Código de barras', t.ean]); if(+t.peso_kg>0) datos.push(['Peso', (+t.peso_kg)+' kg']);
+      datos.push(['Descripción del fabricante', t.descripcion||'']); }
+    else if(n){ datos.push(['Marca', n.marca||''], ['Categoría', n.categoria||''], ['Código', n.codigo], ['Unidad', n.unidad||(p&&p.unidad)||'']);
+      if(+n.multiplo>1) datos.push(['Múltiplo de venta', +n.multiplo]); if(p && p.codigo_barras) datos.push(['Código de barras', p.codigo_barras]);
+      datos.push(['Descripción del fabricante', n.descripcion||'']); }
+    else if(p && p.codigo_barras) datos.push(['Código de barras', p.codigo_barras]);
+    return {i, sd, foto, ficha, datos, marca:(t&&t.marca)||(n&&n.marca)||''};
+  });
+}
+async function propuestaCot(id){
+  const w = window.open('','_blank');
+  if(!w){ toast('Permite las ventanas emergentes', true); return; }
+  w.document.write('<p style="font-family:sans-serif;padding:30px">Armando la propuesta con fichas…</p>');
+  const [c, it] = await Promise.all([
+    sb.from('cotizaciones').select('*, clientes(nombre,telefono,correo)').eq('id',id).single(),
+    sb.from('cotizacion_items').select('*').eq('cotizacion_id',id).order('id')]);
+  if(c.error||it.error){ w.close(); toast(errMsg(c.error||it.error),true); return; }
+  const q = c.data, F = await cotDatosFichas(it.data);
+  const cliente = q.clientes?.nombre || q.cliente_texto || 'Cliente';
+  const vence = new Date(q.fecha); vence.setDate(vence.getDate()+q.vigencia_dias);
+  const lin = F.map(x=>{ const pu = Math.round(+x.i.precio_unit/1.16*100)/100; return {...x, pu, imp: Math.round(+x.i.cantidad*pu*100)/100}; });
+  const subSinIva = Math.round(lin.reduce((s,l)=>s+l.imp,0)*100)/100, ivaCot = Math.round((+q.total-subSinIva)*100)/100;
+  const nT = {exacto:0, equivalente:0, parecido:0}; lin.forEach(l=>{ nT[l.sd.tipo]++; });
+  const tag = t => t==='exacto' ? '<span class="tg tg1">Exacto</span>' : (t==='equivalente' ? '<span class="tg tg2">Equivalente</span>' : '<span class="tg tg3">Alternativa</span>');
+  const qr = u => u ? `<img class="qr" src="https://api.qrserver.com/v1/create-qr-code/?size=120x120&margin=0&data=${encodeURIComponent(u)}" alt="QR">` : '';
+  const cab = `<div class="top"><div><img src="https://axiontools.mx/logo-axion.png" alt="Axion Tools" style="height:40px"><div class="mut">Distribuidora Axion · Disensa Sta. Elena Estadio · Guadalajara · Tel 33 1010 7423</div></div><div style="text-align:right"><b>PROPUESTA C-${q.folio}</b><div class="mut">${esc(cliente)} · ${fecha(q.fecha)}</div></div></div>`;
+  const fichas = lin.map((l,k)=>`<div class="ficha">
+      <div class="fimg">${l.foto?`<img src="${l.foto}" onerror="this.style.display='none'">`:''}</div>
+      <div class="fcuerpo">
+        <div class="fcod">${k+1}. ${esc(l.i.codigo||'')} ${tag(l.sd.tipo)}</div>
+        <div class="fdesc">${esc(l.sd.prod)}</div>
+        ${l.sd.pidio?`<div class="feq ${l.sd.tipo==='parecido'?'feq3':''}"><b>${l.sd.tipo==='parecido'?'Alternativa propuesta para':'Equivalente a lo solicitado'}:</b> ${esc(l.sd.pidio)}</div>`:''}
+        <table class="fdat">${l.datos.map(d=>`<tr><td>${esc(d[0])}</td><td>${esc(String(d[1]))}</td></tr>`).join('')}
+          <tr><td>Cantidad</td><td><b>${+l.i.cantidad}</b> · P. unitario ${fmt(l.pu)} + IVA</td></tr></table>
+      </div>
+      <div class="fqr">${qr(l.ficha)}${l.ficha?`<div class="mut" style="font-size:9px;margin-top:3px">Ficha técnica oficial</div><a href="${l.ficha}" style="font-size:9px;word-break:break-all">${l.ficha.replace(/^https:\/\//,'').slice(0,60)}</a>`:''}</div>
+    </div>`).join('');
+  w.document.open();
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Propuesta C-${q.folio} · ${esc(cliente)} · Axion Tools</title>
+  <style>@page{size:letter;margin:12mm}body{font-family:'Segoe UI',Arial,sans-serif;color:#26292b;margin:0;font-size:12px}
+  .pag{page-break-after:always}.top{display:flex;justify-content:space-between;align-items:center;border-bottom:3px solid #E8790F;padding-bottom:8px;margin-bottom:12px}
+  .mut{color:#777;font-size:10.5px}h1{font-size:30px;margin:60px 0 6px}h2{font-size:15px;border-left:4px solid #E8790F;padding-left:8px;margin:18px 0 8px}
+  table{border-collapse:collapse;width:100%}th{text-align:left;background:#26292b;color:#fff;padding:6px 8px;font-size:10px;text-transform:uppercase}
+  td{padding:6px 8px;border-bottom:1px solid #e5e5e5;vertical-align:top}.num{text-align:right}.tot{font-size:15px;font-weight:bold}
+  thead{display:table-header-group}tr{page-break-inside:avoid}
+  .tg{font-size:9px;font-weight:700;padding:1px 6px;border-radius:9px;margin-left:4px;vertical-align:middle}.tg1{background:#dcfce7;color:#166534}.tg2{background:#dbeafe;color:#1e40af}.tg3{background:#fef3c7;color:#92400e}
+  .kpi{display:inline-block;border:1px solid #ddd;border-radius:8px;padding:10px 16px;margin:4px 8px 4px 0}.kpi b{display:block;font-size:20px}
+  .ficha{display:grid;grid-template-columns:150px 1fr 120px;gap:12px;border:1px solid #ddd;border-radius:8px;padding:10px;margin-bottom:10px;page-break-inside:avoid;break-inside:avoid}
+  .fimg img{width:150px;height:150px;object-fit:contain}.fcod{font-weight:700;font-size:12px}.fdesc{font-size:13px;margin:3px 0 6px}
+  .feq{background:#eff6ff;border-left:3px solid #2563eb;padding:5px 8px;margin-bottom:6px;font-size:11px}.feq3{background:#fffbeb;border-left-color:#d97706}
+  .fdat td{padding:2px 6px;border-bottom:1px dotted #e5e5e5;font-size:10.5px}.fdat td:first-child{color:#777;width:130px}
+  .fqr{text-align:center}.qr{width:100px;height:100px}
+  @media print{.noprint{display:none}}</style></head><body>
+  <p class="noprint" style="background:#fff7ed;padding:10px;border-radius:8px">Para guardar: <button onclick="window.print()" style="padding:8px 14px;background:#E8790F;color:#fff;border:none;border-radius:6px;cursor:pointer">🖨 Imprimir / Guardar como PDF</button> <span class="mut">(en "Destino" elige "Guardar como PDF")</span></p>
+  <div class="pag">
+    <div class="top" style="border:none"><img src="https://axiontools.mx/logo-axion.png" alt="Axion Tools" style="height:64px"><div class="mut" style="text-align:right">Distribuidora Axion · Ferretería y materiales · Disensa<br>Av. Fidel Velázquez Sánchez 788, Santa Elena Estadio, Guadalajara, Jal.<br>Tel 33 1010 7423</div></div>
+    <h1>Propuesta comercial</h1>
+    <div style="font-size:18px">para <b>${esc(cliente)}</b></div>
+    <div class="mut" style="font-size:12px;margin-top:6px">Folio C-${q.folio} · ${fecha(q.fecha)} · Válida hasta ${fecha(vence)}</div>
+    <div style="margin:26px 0">
+      <div class="kpi">Partidas<b>${lin.length}</b></div>
+      <div class="kpi">Total con IVA<b>${fmt(q.total)}</b></div>
+      ${nT.exacto?`<div class="kpi">Exactos a lo solicitado<b>${nT.exacto}</b></div>`:''}
+      ${nT.equivalente?`<div class="kpi">Equivalentes (otra marca)<b>${nT.equivalente}</b></div>`:''}
+      ${nT.parecido?`<div class="kpi">Alternativas a revisar<b>${nT.parecido}</b></div>`:''}
+    </div>
+    <h2>Contenido</h2>
+    <ol><li>Cotización detallada</li><li>Ficha de cada producto: foto, datos del fabricante y código QR a su ficha técnica oficial</li></ol>
+    ${(nT.equivalente||nT.parecido)?`<h2>Cómo leer esta propuesta</h2><p>${tag('exacto')} es el producto solicitado. ${nT.equivalente?tag('equivalente')+' es otra marca con las mismas características (potencia, medida, función); en su ficha se indica a qué producto sustituye. ':''}${nT.parecido?tag('parecido')+' es la opción más cercana disponible pero con alguna diferencia (potencia, instalación o acabado) que conviene revisar antes de autorizar.':''}</p>`:''}
+    ${q.notas?`<h2>Condiciones</h2><p>${esc(q.notas)}</p>`:''}
+  </div>
+  <div class="pag">${cab}
+    <h2>Cotización detallada</h2>
+    <table><thead><tr><th>#</th><th></th><th>Código</th><th>Descripción</th><th class="num">Cant.</th><th class="num">P. unit. s/IVA</th><th class="num">Importe s/IVA</th></tr></thead>
+    <tbody>${lin.map((l,k)=>`<tr><td>${k+1}</td><td style="width:40px">${l.foto?`<img src="${l.foto}" style="width:36px;height:36px;object-fit:contain" onerror="this.style.display='none'">`:''}</td>
+      <td>${esc(l.i.codigo||'')}</td><td>${esc(l.sd.prod)} ${tag(l.sd.tipo)}${l.sd.pidio?`<br><span class="mut">${l.sd.tipo==='parecido'?'Alternativa para':'Equivale a'}: ${esc(l.sd.pidio)}</span>`:''}</td>
+      <td class="num">${+l.i.cantidad}</td><td class="num">${fmt(l.pu)}</td><td class="num">${fmt(l.imp)}</td></tr>`).join('')}</tbody>
+    <tfoot><tr><td colspan="6" class="num">Subtotal (sin IVA)</td><td class="num"><b>${fmt(subSinIva)}</b></td></tr>
+    <tr><td colspan="6" class="num">IVA 16%</td><td class="num"><b>${fmt(ivaCot)}</b></td></tr>
+    <tr><td colspan="6" class="num tot">TOTAL (IVA incluido)</td><td class="num tot">${fmt(q.total)}</td></tr></tfoot></table>
+  </div>
+  <div>${cab}<h2>Fichas de producto</h2>${fichas}
+    <p class="mut" style="margin-top:14px">Las fotos son ilustrativas. Las especificaciones completas están en la ficha técnica oficial de cada fabricante (código QR). Precios en pesos mexicanos.</p></div>
+  </body></html>`);
+  w.document.close();
+}
 async function fichasCot(id){
   const {data, error} = await sb.from('cotizacion_items').select('codigo,descripcion').eq('cotizacion_id',id).order('id');
   if(error){ toast(errMsg(error),true); return; }
@@ -2934,6 +3044,7 @@ async function imprimirCot(id){
   ]);
   if(c.error||it.error){ toast(errMsg(c.error||it.error),true); return; }
   const q = c.data, items = it.data;
+  let FOTO = {}; try{ (await cotDatosFichas(items)).forEach(x=>{ FOTO[x.i.id] = x.foto; }); }catch(e){} // v223: fotos Truper también
   const cliente = q.clientes?.nombre || q.cliente_texto || 'Público en general';
   const vence = new Date(q.fecha); vence.setDate(vence.getDate()+q.vigencia_dias);
   // v179: cada partida se imprime SIN IVA (precio ÷ 1.16); el subtotal es la suma de esos importes y el IVA es la diferencia al total (que es lo que paga el cliente)
@@ -2959,7 +3070,7 @@ async function imprimirCot(id){
   <p style="margin-top:14px"><b>Cliente:</b> ${esc(cliente)}${q.clientes?.telefono?' · '+esc(q.clientes.telefono):''}</p>
   <table><thead><tr><th></th><th>Código</th><th>Descripción</th><th class="num">Cantidad</th><th class="num">P. Unitario<br>(sin IVA)</th><th class="num">Importe<br>(sin IVA)</th></tr></thead>
   <tbody>${lin.map(({i,pu,imp})=>`<tr>
-    <td style="width:46px">${i.codigo?`<img src="https://storage.googleapis.com/indararticulos/${encodeURIComponent(i.codigo.replace(/[^A-Za-z0-9]/g,'_'))}_MD.webp" style="width:42px;height:42px;object-fit:contain;border-radius:4px" onerror="this.style.display='none'">`:''}</td>
+    <td style="width:46px">${FOTO[i.id]?`<img src="${FOTO[i.id]}" style="width:42px;height:42px;object-fit:contain;border-radius:4px" onerror="this.style.display='none'">`:''}</td>
     <td>${esc(i.codigo)}</td><td>${esc(i.descripcion)}</td>
     <td class="num">${+i.cantidad}</td><td class="num">${fmt(pu)}</td><td class="num">${fmt(imp)}</td></tr>`).join('')}</tbody>
   <tfoot><tr><td colspan="5" class="num" style="border-bottom:none;padding-top:12px">Subtotal (sin IVA)</td><td class="num" style="border-bottom:none;padding-top:12px"><b>${fmt(subSinIva)}</b></td></tr>
