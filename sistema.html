@@ -5034,14 +5034,25 @@ async function desplazamientoPed(id){
   try{
     const pr = await sb.from('pedidos_compra').select('id,folio_externo,fecha,fecha_recibido,total,estado,proveedores(nombre)').eq('id', id).single();
     if(pr.error) throw pr.error; const P = pr.data;
-    const its = await traerTodo(()=>sb.from('pedido_compra_items').select('producto_id,cantidad,cantidad_recibida,costo_unit,productos(codigo,descripcion,stock,precio,costo,granel,contenido,precio_unidad)').eq('pedido_id', id).order('id'));
-    const desde = new Date((P.fecha_recibido || P.fecha) + (String(P.fecha_recibido||P.fecha).length<=10?'T00:00:00':''));
+    const its = await traerTodo(()=>sb.from('pedido_compra_items').select('producto_id,cantidad,cantidad_recibida,costo_unit,parte,productos(codigo,descripcion,stock,precio,costo,granel,contenido,precio_unidad)').eq('pedido_id', id).order('id'));
+    // v228: Indar llega por partes → cada producto cuenta desde la factura de SU parte (fecha_recibido es cuando se cerró todo el pedido)
+    const aDia = s => new Date(String(s).slice(0,10)+'T00:00:00');
+    const [ptR, fxR] = await Promise.all([ sb.from('partes_indar').select('parte,num_factura').eq('pedido_id', id), sb.from('facturas').select('folio,fecha').eq('pedido_id', id) ]);
+    const fFx = {}; (fxR.data||[]).forEach(f=>{ if(f.fecha) fFx[String(f.folio)] = f.fecha; });
+    const fParte = {}; (ptR.data||[]).forEach(z=>{ const f = z.num_factura && fFx[String(z.num_factura)]; if(f) fParte[String(z.parte)] = f; });
+    const fxs = Object.values(fFx).sort();
+    const base = (ptR.data||[]).length && fxs.length ? fxs[0] : (P.fecha_recibido || fxs[0] || P.fecha);
+    const desdeDe = i => aDia((i.parte && fParte[String(i.parte)]) || base);
+    its.forEach(i=>{ i._desde = desdeDe(i); });
+    const desde = new Date(Math.min(...its.map(i=>i._desde.getTime()).filter(x=>!isNaN(x)), aDia(base).getTime()));
     const ids = [...new Set(its.filter(i=>i.producto_id).map(i=>i.producto_id))];
     let vend = [];
     for(let k=0;k<ids.length;k+=150){
       const ch = ids.slice(k,k+150);
       vend = vend.concat(await traerTodo(()=>sb.from('venta_items').select('producto_id,cantidad,precio_unit,importe,costo_unit,ventas!inner(fecha,cancelada)').in('producto_id', ch).gte('ventas.fecha', desde.toISOString()).eq('ventas.cancelada', false).order('id')));
     }
+    const dP = {}; its.forEach(i=>{ if(i.producto_id && (!dP[i.producto_id] || i._desde < dP[i.producto_id])) dP[i.producto_id] = i._desde; });
+    vend = vend.filter(v=>!dP[v.producto_id] || new Date(v.ventas.fecha) >= dP[v.producto_id]);
     const V = {}; vend.forEach(v=>{ const x = V[v.producto_id] = V[v.producto_id]||{pz:0, $:0, c:0};
       x.pz += +v.cantidad; x.$ += (v.importe!=null ? +v.importe : +v.cantidad * +v.precio_unit); x.c += +v.cantidad * +(v.costo_unit||0); });
     const R = {}; its.forEach(i=>{ if(!i.producto_id) return; const p = i.productos||{};
@@ -5053,7 +5064,7 @@ async function desplazamientoPed(id){
       const v = V[pid] || {pz:0, $:0, c:0};
       const pct = recU>0 ? Math.min(999, v.pz / recU * 100) : 0;
       const stock = +(p.stock||0);
-      return {pid, cod:p.codigo||'', desc:p.descripcion||'', gr, recU, vpz:v.pz, v$:v.$, vu:v.$-v.c, pct, stock,
+      return {pid, dsd:dP[pid], cod:p.codigo||'', desc:p.descripcion||'', gr, recU, vpz:v.pz, v$:v.$, vu:v.$-v.c, pct, stock,
         stCosto: stock * (gr ? +(p.costo||0)/f : +(p.costo||0)), stVenta: stock * precioUnidad(p), costoCompra:r.costoCompra};
     }).sort((a,b)=>b.v$-a.v$ || a.desc.localeCompare(b.desc));
     const T = filas.reduce((s,x)=>({rec:s.rec+x.recU, vpz:s.vpz+x.vpz, v$:s.v$+x.v$, vu:s.vu+x.vu, stC:s.stC+x.stCosto, stV:s.stV+x.stVenta, cc:s.cc+x.costoCompra}), {rec:0,vpz:0,v$:0,vu:0,stC:0,stV:0,cc:0});
@@ -5062,7 +5073,7 @@ async function desplazamientoPed(id){
     const fin = esFinanzas();
     window._despRows = {P, filas, desde};
     abrirModal(`<h3>📈 Desplazamiento · ${esc(P.proveedores?.nombre||'')} · pedido ${esc(P.folio_externo||('#'+P.id))}</h3>
-      <p class="small muted" style="margin:0 0 8px">Ventas de estos productos desde que llegó el pedido (<b>${desde.toLocaleDateString('es-MX')}</b>, hace ${dias} día${dias>1?'s':''}). Incluye ventas de ese producto aunque la pieza viniera de otro pedido.</p>
+      <p class="small muted" style="margin:0 0 8px">Ventas de cada producto desde que llegó (${new Set(filas.map(x=>x.dsd&&x.dsd.getTime())).size>1?'por partes: cada producto cuenta desde la factura de su parte, la primera el':'desde el'} <b>${desde.toLocaleDateString('es-MX')}</b>, hace ${dias} día${dias>1?'s':''}). Incluye ventas de ese producto aunque la pieza viniera de otro pedido.</p>
       <div class="kpis">
         ${fin?`<div class="kpi"><div class="l">Pedido (con IVA)</div><div class="v">${fmt(P.total)}</div></div>`:''}
         <div class="kpi"><div class="l">Vendido desde entonces</div><div class="v">${fin?fmt(T.v$):Math.round(T.vpz)+' pz'}</div></div>
@@ -5073,9 +5084,9 @@ async function desplazamientoPed(id){
       </div>
       <div class="toolbar" style="margin:6px 0"><label class="small"><input type="checkbox" id="desp-cero" onchange="despFiltrar()"> Solo los que no se han vendido</label>
         <button class="btn sec sm" onclick="despExcel()">⬇ Excel</button></div>
-      <div class="tbl-scroll" style="max-height:55vh"><table id="desp-tbl"><thead><tr><th>Código</th><th>Producto</th><th class="num">Llegó</th><th class="num">Vendido</th><th class="num">%</th>${fin?'<th class="num">Venta $</th><th class="num">Utilidad</th>':''}<th class="num">Stock hoy</th>${fin?'<th class="num">Stock a costo</th>':''}</tr></thead><tbody>
+      <div class="tbl-scroll" style="max-height:55vh"><table id="desp-tbl"><thead><tr><th>Código</th><th>Producto</th><th>Desde</th><th class="num">Llegó</th><th class="num">Vendido</th><th class="num">%</th>${fin?'<th class="num">Venta $</th><th class="num">Utilidad</th>':''}<th class="num">Stock hoy</th>${fin?'<th class="num">Stock a costo</th>':''}</tr></thead><tbody>
       ${filas.map(x=>`<tr data-cero="${x.vpz<=0?1:0}"${x.vpz<=0?' style="background:#fff7ed"':''}><td class="small">${esc(x.cod)}</td><td class="small">${esc(x.desc)}${x.gr?' <span class="badge b-gris">granel</span>':''}</td>
-        <td class="num">${+x.recU.toFixed(2)}</td><td class="num"><b>${+x.vpz.toFixed(2)}</b></td><td class="num">${Math.round(x.pct)}%</td>
+        <td class="small">${x.dsd?x.dsd.toLocaleDateString('es-MX',{day:'numeric',month:'short'}):''}</td><td class="num">${+x.recU.toFixed(2)}</td><td class="num"><b>${+x.vpz.toFixed(2)}</b></td><td class="num">${Math.round(x.pct)}%</td>
         ${fin?`<td class="num">${fmt(x.v$)}</td><td class="num">${fmt(x.vu)}</td>`:''}<td class="num">${+x.stock.toFixed(2)}</td>${fin?`<td class="num">${fmt(x.stCosto)}</td>`:''}</tr>`).join('')}
       </tbody></table></div>
       <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
@@ -5083,7 +5094,7 @@ async function desplazamientoPed(id){
 }
 function despFiltrar(){ const s = $('desp-cero')?.checked; document.querySelectorAll('#desp-tbl tbody tr').forEach(tr=>{ tr.style.display = (!s || tr.dataset.cero==='1')?'':'none'; }); }
 function despExcel(){ const D = window._despRows; if(!D) return; const fin = esFinanzas();
-  const rows = D.filas.map(x=>{ const o = {Codigo:x.cod, Producto:x.desc, Llego:+x.recU.toFixed(2), Vendido:+x.vpz.toFixed(2), Pct:Math.round(x.pct)};
+  const rows = D.filas.map(x=>{ const o = {Codigo:x.cod, Producto:x.desc, Desde:x.dsd?x.dsd.toISOString().slice(0,10):'', Llego:+x.recU.toFixed(2), Vendido:+x.vpz.toFixed(2), Pct:Math.round(x.pct)};
     if(fin){ o.Venta = +x.v$.toFixed(2); o.Utilidad = +x.vu.toFixed(2); } o.Stock_hoy = +x.stock.toFixed(2); if(fin) o.Stock_a_costo = +x.stCosto.toFixed(2); return o; });
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Desplazamiento');
   XLSX.writeFile(wb, 'Desplazamiento_'+String(D.P.proveedores?.nombre||'prov').replace(/\W+/g,'_').slice(0,25)+'_'+(D.P.folio_externo||D.P.id)+'.xlsx'); }
