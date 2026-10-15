@@ -5042,7 +5042,7 @@ async function desplazamientoPed(id){
     const fParte = {}; (ptR.data||[]).forEach(z=>{ const f = z.num_factura && fFx[String(z.num_factura)]; if(f) fParte[String(z.parte)] = f; });
     const fxs = Object.values(fFx).sort();
     const base = (ptR.data||[]).length && fxs.length ? fxs[0] : (P.fecha_recibido || fxs[0] || P.fecha);
-    const desdeDe = i => aDia((i.parte && fParte[String(i.parte)]) || base);
+    const desdeDe = i => aDia((i.parte && fParte[String(i.parte)]) || (i.parte && fxs.length && (ptR.data||[]).length ? fxs[fxs.length-1] : base)); // v229: parte sin factura ligada → la factura más reciente
     its.forEach(i=>{ i._desde = desdeDe(i); });
     const desde = new Date(Math.min(...its.map(i=>i._desde.getTime()).filter(x=>!isNaN(x)), aDia(base).getTime()));
     const ids = [...new Set(its.filter(i=>i.producto_id).map(i=>i.producto_id))];
