@@ -4973,6 +4973,7 @@ async function vPedidos(){
   const perP = window._pedPer||{tipo:'todo'}, rgP = pedRango(perP); // v191
   if(rgP) dataF = dataF.filter(p=>{ const f = pedFechaYmd(p); return f>=rgP.ini && f<rgP.fin; });
   if(fEst) dataF = dataF.filter(p=>p.estado===fEst);
+  const fProv = window._pedProv||''; if(fProv) dataF = dataF.filter(p=>(p.proveedores?.nombre||'')===fProv); // v227
   if(fCla==='condev') dataF = dataF.filter(p=>window._pdev && window._pdev[p.id]);
   else if(fCla) dataF = dataF.filter(p=>clase(p)===fCla);
   window._pedDataF = dataF; // v191: lo que se ve es lo que se exporta
@@ -4997,6 +4998,7 @@ async function vPedidos(){
       <button class="btn ${fCla==='completo'?'':'sec'} sm" onclick="window._pedClase='completo'; vPedidos()">✅ Completos (${cl.completo||0})</button>
       ${Object.keys(window._pdev||{}).length?`<button class="btn ${fCla==='condev'?'':'sec'} sm" onclick="window._pedClase='condev'; vPedidos()">↩️ Con devolución (${Object.keys(window._pdev).length})</button>`:''}
       ${pedPeriodoHtml()}
+      <select onchange="window._pedProv=this.value; vPedidos()" title="Filtrar por proveedor" style="max-width:220px"><option value="">Todos los proveedores</option>${[...new Set(data.map(p=>p.proveedores?.nombre).filter(Boolean))].sort().map(n=>`<option ${n===fProv?'selected':''} value="${esc(n)}">${esc(n)}</option>`).join('')}</select>
     </div>
     ${puedeVender()?`<button class="btn sm" style="float:right;margin-left:10px" onclick="buscarFolio()">🔍 ¿Qué me están entregando?</button>`:''}
     <button class="btn sm" style="float:right;margin-left:10px" onclick="syncIndar()">🔄 Actualizar estatus Indar</button><button class="btn sm sec" style="float:right" onclick="traerFacturasIndar()">🧾 Traer facturas de Indar</button><p class="small muted" style="margin-bottom:10px">Los pedidos se capturan en el portal del proveedor (Indar / Holcim) y aquí se registran para dar seguimiento. Al marcar <b>Recibido</b>, las cantidades se suman al inventario automáticamente.</p>
@@ -5014,7 +5016,7 @@ async function vPedidos(){
         <td class="small">${p.fecha_recibido?fecha(p.fecha_recibido):'<span class="muted">—</span>'}</td>
         <td><span class="badge ${badges[p.estado]}">${p.estado}</span></td>
         <td class="small" style="white-space:nowrap">${resParteHTML(window._pp[p.id], window._pind && window._pind[p.id])}${(window._pdev&&window._pdev[p.id])?`<br><span class="badge ${window._pdev[p.id].abiertas?'b-ambar':'b-verde'}" title="Tiene devolución con Indar">↩️ ${window._pdev[p.id].pz} devuelta(s)${window._pdev[p.id].abiertas?'':' ✓'}</span>`:''}</td><td>${p.plazo_dias||0} días</td>${esFinanzas()?`<td class="num"><b>${fmt(p.total)}</b></td>`:''}
-        <td style="white-space:nowrap" onclick="event.stopPropagation()"><button class="btn sec sm" onclick="verPedido(${p.id}, '${p.estado}')">Ver / Recibir</button>${p.estado==='cancelado'&&esAdmin()?` <button class="btn sm" title="Deshacer la cancelación" onclick="reactivarPedido(${p.id})">↩ Reactivar</button>`:''}
+        <td style="white-space:nowrap" onclick="event.stopPropagation()"><button class="btn sec sm" onclick="verPedido(${p.id}, '${p.estado}')">Ver / Recibir</button>${['recibido','parcial'].includes(p.estado)?` <button class="btn sec sm" title="Cuánto se ha vendido de lo que llegó en este pedido" onclick="desplazamientoPed(${p.id})">📈 Vendido</button>`:''}${p.estado==='cancelado'&&esAdmin()?` <button class="btn sm" title="Deshacer la cancelación" onclick="reactivarPedido(${p.id})">↩ Reactivar</button>`:''}
         ${esAdmin() && ['enviado','parcial'].includes(p.estado) ? `<button class="btn sm" onclick="recibirPedido(${p.id})">Recibir todo ✓</button>`:''}</td>
       </tr>`;}).join('') || '<tr><td colspan="9" class="muted">Sin pedidos con este filtro.</td></tr>'}
       <tr id="ped-vacio" style="display:none"><td colspan="9" class="muted">Ese número no aparece en ningún pedido. Revisa que esté bien escrito, o usa el botón <b>🔍 ¿Qué me están entregando?</b>.</td></tr></tbody></table></div></div>
@@ -5026,6 +5028,65 @@ async function vPedidos(){
       <td>${x.portal?`<a href="${esc(x.portal)}" target="_blank">${esc(x.portal)}</a>`:''}</td>
       <td class="small">${esc(x.contacto)}</td></tr>`).join('')}</tbody>`;
 }
+/* ===== v227: 📈 Desplazamiento de un pedido — cuánto se ha vendido de lo que llegó ===== */
+async function desplazamientoPed(id){
+  abrirModal('<h3>📈 Desplazamiento</h3><p class="small muted">Calculando…</p>', true);
+  try{
+    const pr = await sb.from('pedidos_compra').select('id,folio_externo,fecha,fecha_recibido,total,estado,proveedores(nombre)').eq('id', id).single();
+    if(pr.error) throw pr.error; const P = pr.data;
+    const its = await traerTodo(()=>sb.from('pedido_compra_items').select('producto_id,cantidad,cantidad_recibida,costo_unit,productos(codigo,descripcion,stock,precio,costo,granel,contenido,precio_unidad)').eq('pedido_id', id).order('id'));
+    const desde = new Date((P.fecha_recibido || P.fecha) + (String(P.fecha_recibido||P.fecha).length<=10?'T00:00:00':''));
+    const ids = [...new Set(its.filter(i=>i.producto_id).map(i=>i.producto_id))];
+    let vend = [];
+    for(let k=0;k<ids.length;k+=150){
+      const ch = ids.slice(k,k+150);
+      vend = vend.concat(await traerTodo(()=>sb.from('venta_items').select('producto_id,cantidad,precio_unit,importe,costo_unit,ventas!inner(fecha,cancelada)').in('producto_id', ch).gte('ventas.fecha', desde.toISOString()).eq('ventas.cancelada', false).order('id')));
+    }
+    const V = {}; vend.forEach(v=>{ const x = V[v.producto_id] = V[v.producto_id]||{pz:0, $:0, c:0};
+      x.pz += +v.cantidad; x.$ += (v.importe!=null ? +v.importe : +v.cantidad * +v.precio_unit); x.c += +v.cantidad * +(v.costo_unit||0); });
+    const R = {}; its.forEach(i=>{ if(!i.producto_id) return; const p = i.productos||{};
+      const r = R[i.producto_id] = R[i.producto_id] || {p, rec:0, costoCompra:0};
+      const q = +(i.cantidad_recibida||0); r.rec += q; r.costoCompra += q * +(i.costo_unit||0); });
+    const filas = Object.entries(R).map(([pid, r])=>{
+      const p = r.p, gr = esGranel(p), f = gr ? +p.contenido : 1;
+      const recU = r.rec * f;                 // en unidades de venta
+      const v = V[pid] || {pz:0, $:0, c:0};
+      const pct = recU>0 ? Math.min(999, v.pz / recU * 100) : 0;
+      const stock = +(p.stock||0);
+      return {pid, cod:p.codigo||'', desc:p.descripcion||'', gr, recU, vpz:v.pz, v$:v.$, vu:v.$-v.c, pct, stock,
+        stCosto: stock * (gr ? +(p.costo||0)/f : +(p.costo||0)), stVenta: stock * precioUnidad(p), costoCompra:r.costoCompra};
+    }).sort((a,b)=>b.v$-a.v$ || a.desc.localeCompare(b.desc));
+    const T = filas.reduce((s,x)=>({rec:s.rec+x.recU, vpz:s.vpz+x.vpz, v$:s.v$+x.v$, vu:s.vu+x.vu, stC:s.stC+x.stCosto, stV:s.stV+x.stVenta, cc:s.cc+x.costoCompra}), {rec:0,vpz:0,v$:0,vu:0,stC:0,stV:0,cc:0});
+    const cero = filas.filter(x=>x.vpz<=0);
+    const dias = Math.max(1, Math.round((Date.now()-desde.getTime())/86400000));
+    const fin = esFinanzas();
+    window._despRows = {P, filas, desde};
+    abrirModal(`<h3>📈 Desplazamiento · ${esc(P.proveedores?.nombre||'')} · pedido ${esc(P.folio_externo||('#'+P.id))}</h3>
+      <p class="small muted" style="margin:0 0 8px">Ventas de estos productos desde que llegó el pedido (<b>${desde.toLocaleDateString('es-MX')}</b>, hace ${dias} día${dias>1?'s':''}). Incluye ventas de ese producto aunque la pieza viniera de otro pedido.</p>
+      <div class="kpis">
+        ${fin?`<div class="kpi"><div class="l">Pedido (con IVA)</div><div class="v">${fmt(P.total)}</div></div>`:''}
+        <div class="kpi"><div class="l">Vendido desde entonces</div><div class="v">${fin?fmt(T.v$):Math.round(T.vpz)+' pz'}</div></div>
+        ${fin?`<div class="kpi"><div class="l">Utilidad de eso</div><div class="v">${fmt(T.vu)}</div></div>`:''}
+        <div class="kpi"><div class="l">Piezas vendidas / llegaron</div><div class="v">${Math.round(T.vpz)} / ${Math.round(T.rec)} <span class="small">(${T.rec?Math.round(T.vpz/T.rec*100):0}%)</span></div></div>
+        ${fin?`<div class="kpi"><div class="l">Queda en tienda (costo / venta)</div><div class="v" style="font-size:16px">${fmt(T.stC)} / ${fmt(T.stV)}</div></div>`:''}
+        <div class="kpi"><div class="l">Sin ninguna venta</div><div class="v">${cero.length} de ${filas.length}</div></div>
+      </div>
+      <div class="toolbar" style="margin:6px 0"><label class="small"><input type="checkbox" id="desp-cero" onchange="despFiltrar()"> Solo los que no se han vendido</label>
+        <button class="btn sec sm" onclick="despExcel()">⬇ Excel</button></div>
+      <div class="tbl-scroll" style="max-height:55vh"><table id="desp-tbl"><thead><tr><th>Código</th><th>Producto</th><th class="num">Llegó</th><th class="num">Vendido</th><th class="num">%</th>${fin?'<th class="num">Venta $</th><th class="num">Utilidad</th>':''}<th class="num">Stock hoy</th>${fin?'<th class="num">Stock a costo</th>':''}</tr></thead><tbody>
+      ${filas.map(x=>`<tr data-cero="${x.vpz<=0?1:0}"${x.vpz<=0?' style="background:#fff7ed"':''}><td class="small">${esc(x.cod)}</td><td class="small">${esc(x.desc)}${x.gr?' <span class="badge b-gris">granel</span>':''}</td>
+        <td class="num">${+x.recU.toFixed(2)}</td><td class="num"><b>${+x.vpz.toFixed(2)}</b></td><td class="num">${Math.round(x.pct)}%</td>
+        ${fin?`<td class="num">${fmt(x.v$)}</td><td class="num">${fmt(x.vu)}</td>`:''}<td class="num">${+x.stock.toFixed(2)}</td>${fin?`<td class="num">${fmt(x.stCosto)}</td>`:''}</tr>`).join('')}
+      </tbody></table></div>
+      <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
+  }catch(e){ abrirModal(`<h3>📈 Desplazamiento</h3><p style="color:#b91c1c">Error: ${esc(e.message||String(e))}</p><div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`); }
+}
+function despFiltrar(){ const s = $('desp-cero')?.checked; document.querySelectorAll('#desp-tbl tbody tr').forEach(tr=>{ tr.style.display = (!s || tr.dataset.cero==='1')?'':'none'; }); }
+function despExcel(){ const D = window._despRows; if(!D) return; const fin = esFinanzas();
+  const rows = D.filas.map(x=>{ const o = {Codigo:x.cod, Producto:x.desc, Llego:+x.recU.toFixed(2), Vendido:+x.vpz.toFixed(2), Pct:Math.round(x.pct)};
+    if(fin){ o.Venta = +x.v$.toFixed(2); o.Utilidad = +x.vu.toFixed(2); } o.Stock_hoy = +x.stock.toFixed(2); if(fin) o.Stock_a_costo = +x.stCosto.toFixed(2); return o; });
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Desplazamiento');
+  XLSX.writeFile(wb, 'Desplazamiento_'+String(D.P.proveedores?.nombre||'prov').replace(/\W+/g,'_').slice(0,25)+'_'+(D.P.folio_externo||D.P.id)+'.xlsx'); }
 /* Filtra la lista de pedidos sin re-dibujar (no pierde el foco al escribir) — v95 */
 function filtrarPedidos(){
   const inp = $('ped-q'); if(!inp) return;
