@@ -6228,17 +6228,18 @@ async function guardarConteoChica(){
   logEv('caja','conteo caja chica: '+fmt(monto)+(esperado!==null?' (esperado '+fmt(esperado)+')':''));
   vCaja();
 }
+const noCP = v => !/CONSUMO PROPIO/i.test((v && v.notas) || ''); // v231: el consumo propio no es dinero que entra a caja
 async function vCaja(){
   const f = window._cajaFecha || hoyMX();
   const [cfgR, vtR, mvR, ctR, hisR] = await Promise.all([
     sb.from('caja_config').select('fondo_fijo').eq('id',1).maybeSingle(),
-    sb.from('ventas').select('folio,total,metodo_pago,fecha,efectivo').gte('fecha', f+'T00:00:00-06:00').lt('fecha', f+'T23:59:59.999-06:00').eq('cancelada', false),
+    sb.from('ventas').select('folio,total,metodo_pago,fecha,efectivo,notas').gte('fecha', f+'T00:00:00-06:00').lt('fecha', f+'T23:59:59.999-06:00').eq('cancelada', false),
     sb.from('caja_movs').select('*').eq('fecha', f).order('creado'),
     sb.from('cortes_caja').select('*').eq('fecha', f).maybeSingle(),
     sb.from('cortes_caja').select('fecha,contado,esperado,diferencia,deposito,deja_fondo,nombre').order('fecha',{ascending:false}).limit(15)
   ]);
   const fondoFijo = +((cfgR.data||{}).fondo_fijo||0);
-  const vts = vtR.data||[], movs = mvR.data||[], corte = ctR.data, his = hisR.data||[];
+  const vts = (vtR.data||[]).filter(noCP), movs = mvR.data||[], corte = ctR.data, his = hisR.data||[];
   const prev = his.find(c=>c.fecha < f); // lo que dejó el corte anterior manda sobre el fondo fijo
   const efectivo = Math.round(vts.reduce((s,v)=>s + (v.metodo_pago==='efectivo' ? +v.total : (v.metodo_pago==='mixto' ? +(v.efectivo||0) : 0)),0)*100)/100; // v159: mixto → solo su parte en efectivo
   const otros = {}; vts.filter(v=>v.metodo_pago!=='efectivo').forEach(v=>{ const k = v.metodo_pago==='mixto' ? 'mixto (no efectivo)' : v.metodo_pago; const m = v.metodo_pago==='mixto' ? (+v.total - +(v.efectivo||0)) : +v.total; if(m>0) otros[k]=(otros[k]||0)+m; });
@@ -6300,7 +6301,7 @@ async function vCaja(){
 async function acumHistorico(){
   const el = $('caja-hist'); if(!el) return;
   const [v, m] = await Promise.all([
-    traerTodo(()=>sb.from('ventas').select('total,metodo_pago,efectivo').eq('cancelada',false).order('id')).then(d=>({data:d})),
+    traerTodo(()=>sb.from('ventas').select('total,metodo_pago,efectivo,notas').eq('cancelada',false).order('id')).then(d=>({data:(d||[]).filter(noCP)})),
     traerTodo(()=>sb.from('caja_movs').select('tipo,monto').order('id')).then(d=>({data:d}))
   ]);
   const ef = (v.data||[]).reduce((s,x)=>s + (x.metodo_pago==='efectivo' ? +x.total : (x.metodo_pago==='mixto' ? +(x.efectivo||0) : 0)),0);
@@ -7261,8 +7262,8 @@ async function calcularDinero(hoy){
     // v122: se compara contra el MOMENTO exacto de la captura (lo de antes ya viene dentro del saldo capturado)
     const desdeISO = D.cap.creado || new Date(D.cap.fecha+'T00:00:00').toISOString();
     // ENTRÓ: ventas no-crédito DESPUÉS de la captura
-    const vts = await traerTodo(()=>sb.from('ventas').select('total,metodo_pago,cancelada,efectivo').gt('fecha', desdeISO).eq('cancelada',false).order('id'));
-    const vivasV = (vts||[]).filter(v=>v.metodo_pago!=='credito' && v.metodo_pago!=='apartado'); // v157: apartado → el dinero entra por sus pagos
+    const vts = await traerTodo(()=>sb.from('ventas').select('total,metodo_pago,cancelada,efectivo,notas').gt('fecha', desdeISO).eq('cancelada',false).order('id'));
+    const vivasV = (vts||[]).filter(v=>v.metodo_pago!=='credito' && v.metodo_pago!=='apartado' && noCP(v)); // v157: apartado → el dinero entra por sus pagos
     D.entroVentas = vivasV.reduce((s,v)=>s+ +v.total,0);
     // v157: pagos de apartados después de la captura — efectivo al cajón (caja_movs origen 'apartado'), lo demás al banco
     D.apBanco = 0; D.apEf = 0;
@@ -7303,8 +7304,8 @@ async function calcularDinero(hoy){
     const hoyS = hoyMX();
     const corteHoy = (D.corte && String(D.corte.fecha)===hoyS) ? D.corte : null;
     let ventasEfHoy = 0;
-    try{ const vh = await sb.from('ventas').select('total,metodo_pago,efectivo').gte('fecha', hoyS+'T00:00:00-06:00').eq('cancelada',false);
-      ventasEfHoy = (vh.data||[]).reduce((s,v)=>s + (v.metodo_pago==='efectivo' ? +v.total : (v.metodo_pago==='mixto' ? +(v.efectivo||0) : 0)),0); }catch(e){}
+    try{ const vh = await sb.from('ventas').select('total,metodo_pago,efectivo,notas').gte('fecha', hoyS+'T00:00:00-06:00').eq('cancelada',false);
+      ventasEfHoy = (vh.data||[]).filter(noCP).reduce((s,v)=>s + (v.metodo_pago==='efectivo' ? +v.total : (v.metodo_pago==='mixto' ? +(v.efectivo||0) : 0)),0); }catch(e){}
     const movsHoy = (mvc.data||[]).filter(m=>String(m.fecha)===hoyS);
     const entHoy = movsHoy.filter(m=>m.tipo==='entrada').reduce((s,m)=>s+ +m.monto,0);
     const retHoy = movsHoy.filter(m=>m.tipo!=='entrada' && m.origen!=='chica').reduce((s,m)=>s+ +m.monto,0);
