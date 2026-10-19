@@ -1384,8 +1384,9 @@ async function rechazarCanc(id){
   if(error){ toast(errMsg(error),true); return; }
   toast('Solicitud rechazada'); logEv('venta','cancelación rechazada · venta id '+id); vVentas();
 }
+function cotNotaVenta(){ const cons = ($('nv-consumo') && $('nv-consumo').checked); return cons ? 'CONSUMO PROPIO' : (window._cotVenta ? 'Cotización C-'+window._cotVenta.folio : ''); } // v230
 async function nuevaVenta(){
-  carrito = [];
+  carrito = []; window._cotVenta = null;
   const [p, c] = await Promise.all([
     traerTodo(()=>sb.from('productos').select('*').eq('activo',true).order('descripcion')).then(d=>({data:d})),
     sb.from('clientes').select('id,nombre,oficio,desc_pct,credito_estado,credito_limite,credito_plazo').order('nombre'),
@@ -2327,15 +2328,16 @@ async function guardarVenta(){
     precio_unit:c.precio_unit, descripcion: c.producto_id ? null : c.desc}));
   const {data, error} = esMixto
     ? await sb.rpc('registrar_venta_mixta', { p_items: items, p_cliente_id: $('nv-cliente').value ? +$('nv-cliente').value : null,
-        p_descuento: +($('nv-desc').value||0), p_notas: ($('nv-consumo') && $('nv-consumo').checked) ? 'CONSUMO PROPIO' : '', p_pagos: pagosMx })
+        p_descuento: +($('nv-desc').value||0), p_notas: cotNotaVenta(), p_pagos: pagosMx })
     : await sb.rpc('registrar_venta', {
     p_items: items,
     p_cliente_id: $('nv-cliente').value ? +$('nv-cliente').value : null,
     p_metodo: $('nv-metodo').value,
     p_descuento: +($('nv-desc').value||0),
-    p_notas: ($('nv-consumo') && $('nv-consumo').checked) ? 'CONSUMO PROPIO' : ''
+    p_notas: cotNotaVenta()
   });
   if(error){ toast(errMsg(error), true); $('nv-guardar').disabled = false; return; }
+  cotMarcarVendida(data.folio); // v230
   const cliSel = $('nv-cliente');
   const tk = {
     folio: data.folio, fecha: fechaHora(new Date().toISOString()),
@@ -2589,11 +2591,13 @@ let cotCarrito = [], cotClientes = [];
 async function vCotizaciones(){
   if(puedeVender()) $('vtools').innerHTML = `<button class="btn" onclick="nuevaCot()">+ Nueva cotización</button>`;
   const [c, li, so] = await Promise.all([
-    sb.from('cotizaciones').select('*, clientes(nombre), perfiles(nombre)').order('fecha',{ascending:false}).limit(100),
+    sb.from('cotizaciones').select('*, clientes(nombre,telefono), perfiles(nombre)').order('fecha',{ascending:false}).limit(100),
     sb.from('lista_indar').select('codigo', {count:'exact', head:true}),
     sb.from('solicitudes').select('*').order('creado',{ascending:false}).limit(50),
   ]);
   if(c.error) throw c.error;
+  window._cotRows = c.data; // v230
+  const _nAuto = await cotAutoCierre(c.data); if(_nAuto) toast(_nAuto+' cotización(es) sin respuesta por más de '+COT_AUTOCIERRE_DIAS+' días después de su vigencia se cerraron como NO vendidas');
   const sols = so.error ? null : (so.data||[]); // null = falta correr 08_portal_clientes.sql
   window._sols = sols || [];
   const nNuevas = (sols||[]).filter(s=>s.estado==='nueva').length;
@@ -2614,6 +2618,11 @@ async function vCotizaciones(){
       </tr>`).join('') || '<tr><td colspan="7" class="muted">Sin solicitudes aún. Comparte el link del portal con tus clientes.</td></tr>'}</tbody></table></div></div>`}
     ${nLista===0?`<div class="card" style="border-left:4px solid var(--ambar)"><b>Aún no has cargado la lista de precios Indar.</b>
       <span class="small muted">Ve a <b>Importar</b> y sube el archivo ListaPrecios.xlsx (se descarga del portal Indar). Sin ella solo puedes cotizar tus ${''}productos en catálogo.</span></div>`:''}
+    ${(()=>{ const pend = c.data.filter(x=>cotAbierta(x) && cotDias(x) >= 3); if(!pend.length) return ''; return `<div class="card" style="border-left:4px solid var(--ambar)"><h3>⏰ Esperando respuesta (${pend.length})</h3>
+      <p class="small muted" style="margin-bottom:8px">Cotizaciones de hace 3 días o más que no se han vendido. Mándales recordatorio, pásalas a venta si ya aceptaron, o ciérralas. Las que siguen abiertas ${COT_AUTOCIERRE_DIAS} días después de su vigencia se cierran solas como <b>no vendidas</b>.</p>
+      <div class="tbl-scroll"><table><tbody>${pend.map(x=>`<tr><td><b>C-${x.folio}</b></td><td>${esc(x.clientes?.nombre||x.cliente_texto||'Sin cliente')}</td><td class="num">${fmt(x.total)}</td>
+        <td class="small">hace ${cotDias(x)} días${cotDias(x)>(+x.vigencia_dias||7)?' · <b style="color:#b91c1c">vigencia vencida</b>':''}</td>
+        <td style="white-space:nowrap">${puedeVender()?`<button class="btn sm" onclick="cotAVenta(${x.id})">🛒 Vender</button> <button class="btn sec sm" onclick="cotRecordar(${x.id})" title="Abre WhatsApp con un mensaje de seguimiento">💬 Recordar</button> <button class="btn sec sm" onclick="cotNoVendida(${x.id},${x.folio})">✖ No se vendió</button>`:''}</td></tr>`).join('')}</tbody></table></div></div>`; })()}
     <div class="card"><h3>Cotizaciones ${nLista?`<span class="small muted">· lista Indar cargada: ${nLista.toLocaleString('es-MX')} productos</span>`:''}</h3>
     <div class="tbl-scroll"><table><thead><tr><th>Folio</th><th>Fecha</th><th>Cliente</th><th>Hizo</th><th class="num">Total</th><th>Estado</th><th></th></tr></thead>
     <tbody>${c.data.map(x=>`<tr>
@@ -2622,8 +2631,8 @@ async function vCotizaciones(){
       <td>${esc(x.perfiles?.nombre||'')}</td>
       <td class="num"><b>${fmt(x.total)}</b></td>
       <td><select onchange="cambiarEstadoCot(${x.id}, this.value)" ${puedeVender()?'':'disabled'}>
-        ${['borrador','enviada','aceptada','rechazada','vencida'].map(e=>`<option ${x.estado===e?'selected':''}>${e}</option>`).join('')}</select></td>
-      <td style="white-space:nowrap"><button class="btn sec sm" onclick="imprimirCot(${x.id})">🖨 PDF</button>
+        ${['borrador','enviada','aceptada','rechazada','vencida'].map(e=>`<option value="${e}" ${x.estado===e?'selected':''}>${({aceptada:'aceptada / vendida', vencida:'no vendida'})[e]||e}</option>`).join('')}</select></td>
+      <td style="white-space:nowrap">${puedeVender()?`<button class="btn sm" onclick="cotAVenta(${x.id})" title="El cliente aceptó: pásala al punto de venta con sus precios">🛒 Vender</button> `:''}<button class="btn sec sm" onclick="imprimirCot(${x.id})">🖨 PDF</button>
         <button class="btn sm" onclick="propuestaCot(${x.id})" title="Portada + cotización + ficha de cada producto con foto y QR a su ficha técnica">📑 Propuesta</button>
         <button class="btn sec sm" onclick="fichasCot(${x.id})">📎 Fichas</button>
         ${puedeVender()?`<button class="btn sec sm" onclick="nuevaCot(${x.id})">✏ Editar</button>`:''}
@@ -2738,6 +2747,137 @@ async function cotizarSolicitud(id){
   toast('Solicitud de '+s.nombre+' cargada al cotizador ('+s.contacto+')'+(nF?' · PIDE '+nF+' FICHA(S) TÉCNICA(S) 📎':'')+(s.tipo==='proyecto'?' · es PROYECTO: revisa sus archivos 📁':''));
   nuevaCot();
 }
+/* ===== v230 (20-oct-2026): PRECIOS POR CLIENTE · COTIZACIÓN → VENTA · SEGUIMIENTO =====
+   - Al cotizar, cada renglón muestra lo último que se le cotizó / vendió a ESE cliente y avisa si el precio cambia más de 5%.
+   - Clientes → 💲 Precios dados: historial por producto.
+   - Cotización aceptada → 🛒 Vender: la carga al punto de venta con sus precios y el cliente.
+   - Cotizaciones sin respuesta: recordatorio por WhatsApp y cierre como "no vendida" (automático a los 30 días). */
+window._cotHist = {};
+const COT_TOL = 0.05, COT_AUTOCIERRE_DIAS = 30;
+function cotKey(c){ return String(c||'').toUpperCase().replace(/\s+/g,' ').trim(); }
+async function cotHistCliente(cliId, cliTxt, excluirId){
+  const H = {};
+  if(!cliId && !cliTxt) return H;
+  const add = (k, o) => { k = cotKey(k); if(!k) return; (H[k] = H[k] || []).push(o); };
+  const mkC = () => { let q = sb.from('cotizacion_items').select('codigo,descripcion,precio_unit,cantidad,cotizaciones!inner(id,folio,fecha,cliente_id,cliente_texto,estado)');
+    q = cliId ? q.eq('cotizaciones.cliente_id', cliId) : q.ilike('cotizaciones.cliente_texto', cliTxt);
+    return q.order('id'); };
+  const [rc, rv] = await Promise.all([
+    traerTodo(mkC),
+    cliId ? traerTodo(()=>sb.from('venta_items').select('precio_unit,cantidad,productos(codigo,descripcion),ventas!inner(folio,fecha,cliente_id,cancelada)')
+      .eq('ventas.cliente_id', cliId).eq('ventas.cancelada', false).order('id')) : Promise.resolve([])
+  ]);
+  rc.forEach(x=>{ const q = x.cotizaciones; if(!q || (excluirId && q.id===excluirId)) return;
+    add(x.codigo, {tipo:'cot', precio:+x.precio_unit, cant:+x.cantidad, folio:'C-'+q.folio, fecha:q.fecha, estado:q.estado, desc:x.descripcion}); });
+  rv.forEach(x=>{ const v = x.ventas; if(!v || !x.productos) return;
+    add(x.productos.codigo, {tipo:'venta', precio:+x.precio_unit, cant:+x.cantidad, folio:'V-'+v.folio, fecha:v.fecha, desc:x.productos.descripcion}); });
+  Object.values(H).forEach(a=>a.sort((a,b)=>String(b.fecha).localeCompare(String(a.fecha))));
+  return H;
+}
+async function cotCargarHist(){
+  const cid = $('ct-cliente')?.value ? +$('ct-cliente').value : null;
+  const txt = cid ? '' : ($('ct-cliente-txt')?.value||'').trim();
+  try{ window._cotHist = await cotHistCliente(cid, txt.length>=3 ? txt : '', cotEditId); }catch(e){ window._cotHist = {}; }
+  if($('ct-carrito')) pintarCot();
+}
+function cotUlt(codigo){ const a = (window._cotHist||{})[cotKey(codigo)]; return a && a.length ? a : null; }
+function cotDifPct(precio, ref){ return (ref>0 && precio>0) ? (precio/ref - 1) : 0; }
+function cotHistHtml(c, i){
+  const a = c.codigo ? cotUlt(c.codigo) : null; if(!a) return '';
+  const u = a[0], uv = a.find(x=>x.tipo==='venta');
+  const d = cotDifPct(c.precio, u.precio), fuera = Math.abs(d) > COT_TOL;
+  const f = x => new Date(x.fecha).toLocaleDateString('es-MX',{day:'numeric',month:'short'});
+  return `<div class="small" style="margin-top:3px;${fuera?'color:#b91c1c;font-weight:700':'color:var(--azul)'}">${fuera?'⚠️':'🔁'} ${u.tipo==='venta'?'Se le vendió':'Se le cotizó'} ${fmt(u.precio)} (${u.folio}, ${f(u)})${fuera?` · ahora ${d>0?'+':''}${Math.round(d*100)}%`:''}
+    ${fuera?` <button class="link small" onclick="cotPrecio(${i}, ${u.precio})">usar ${fmt(u.precio)}</button>`:''}</div>${uv && uv!==u?`<div class="small muted">vendido ${fmt(uv.precio)} (${uv.folio}, ${f(uv)})</div>`:''}`;
+}
+/* --- Clientes → 💲 Precios dados --- */
+async function preciosCliente(id){
+  const c = (cliData||[]).find(x=>x.id===id) || {nombre:''};
+  abrirModal(`<h3>💲 Precios dados · ${esc(c.nombre)}</h3><p class="small muted">Cargando…</p>`, true);
+  let H = {};
+  try{ H = await cotHistCliente(id, '', null); }catch(e){ abrirModal(`<h3>💲 Precios dados</h3><p style="color:#b91c1c">${esc(errMsg(e))}</p><div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`); return; }
+  const f = x => x ? new Date(x.fecha).toLocaleDateString('es-MX',{day:'numeric',month:'short',year:'2-digit'}) : '';
+  const rows = Object.entries(H).map(([k,a])=>({k, a, uc:a.find(x=>x.tipo==='cot'), uv:a.find(x=>x.tipo==='venta')}))
+    .sort((x,y)=>String(y.a[0].fecha).localeCompare(String(x.a[0].fecha)));
+  window._pcRows = {c, rows};
+  abrirModal(`<h3>💲 Precios dados · ${esc(c.nombre)}</h3>
+    <p class="small muted" style="margin:0 0 8px">Lo último que se le cotizó y vendió de cada producto. ${rows.length} producto(s).</p>
+    <div class="toolbar" style="margin-bottom:6px"><input type="search" id="pc-q" placeholder="Buscar producto…" oninput="document.querySelectorAll('#pc-tbl tbody tr').forEach(tr=>tr.style.display=tr.dataset.b.includes(this.value.toLowerCase())?'':'none')">
+      <button class="btn sec sm" onclick="preciosClienteExcel()">⬇ Excel</button></div>
+    <div class="tbl-scroll" style="max-height:60vh"><table id="pc-tbl"><thead><tr><th>Código</th><th>Producto</th><th class="num">Último cotizado</th><th>Cuándo</th><th class="num">Último vendido</th><th>Cuándo</th><th class="num">Veces</th></tr></thead><tbody>
+    ${rows.map(r=>{ const desc = (r.a[0].desc||''); const camb = r.uc && r.a.filter(x=>x.tipo==='cot').some(x=>Math.abs(cotDifPct(x.precio, r.uc.precio))>COT_TOL);
+      return `<tr data-b="${esc((r.k+' '+desc).toLowerCase())}"><td class="small"><b>${esc(r.k)}</b></td><td class="small">${esc(desc.slice(0,50))}</td>
+      <td class="num">${r.uc?fmt(r.uc.precio):'—'}${camb?' <span title="Se le han dado precios distintos (más de 5% de diferencia)">⚠️</span>':''}</td><td class="small">${r.uc?esc(r.uc.folio)+' · '+f(r.uc):''}</td>
+      <td class="num">${r.uv?fmt(r.uv.precio):'—'}</td><td class="small">${r.uv?esc(r.uv.folio)+' · '+f(r.uv):''}</td><td class="num">${r.a.length}</td></tr>`; }).join('') || '<tr><td colspan="7" class="muted">Aún no hay cotizaciones ni ventas a este cliente.</td></tr>'}
+    </tbody></table></div>
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
+}
+function preciosClienteExcel(){ const P = window._pcRows; if(!P) return;
+  const rows = P.rows.map(r=>({Codigo:r.k, Producto:r.a[0].desc||'', Ultimo_cotizado:r.uc?r.uc.precio:'', Folio_cot:r.uc?r.uc.folio:'', Fecha_cot:r.uc?String(r.uc.fecha).slice(0,10):'',
+    Ultimo_vendido:r.uv?r.uv.precio:'', Folio_venta:r.uv?r.uv.folio:'', Fecha_venta:r.uv?String(r.uv.fecha).slice(0,10):'', Veces:r.a.length}));
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Precios');
+  XLSX.writeFile(wb, 'Precios_dados_'+String(P.c.nombre||'cliente').replace(/\W+/g,'_').slice(0,30)+'.xlsx'); }
+/* --- Cotización → venta --- */
+async function cotAVenta(id){
+  const [q, it] = await Promise.all([ sb.from('cotizaciones').select('*, clientes(nombre)').eq('id', id).single(), sb.from('cotizacion_items').select('*').eq('cotizacion_id', id).order('id') ]);
+  if(q.error||it.error){ toast(errMsg(q.error||it.error), true); return; }
+  const Q = q.data;
+  if(Q.estado==='aceptada' && !confirm('La C-'+Q.folio+' ya está marcada como aceptada/vendida. ¿Cargarla otra vez al punto de venta?')) return;
+  if(!Q.cliente_id && !confirm('La C-'+Q.folio+' no tiene cliente registrado ('+(Q.cliente_texto||'sin nombre')+'). Se venderá a Mostrador, o elige el cliente en la venta. ¿Seguir?')) return;
+  await nuevaVenta();
+  if(!$('nv-carrito')) return;
+  const faltan = [], libres = [];
+  for(const i of it.data){
+    const p = i.producto_id ? prodCache.find(x=>x.id===i.producto_id) : null;
+    if(p && !esGranel(p)){
+      const disp = Math.max(0, +p.stock - +(window._apRes && window._apRes[p.id] || 0));
+      const n = Math.min(+i.cantidad, disp);
+      if(n < +i.cantidad) faltan.push(p.codigo+': cotizado '+(+i.cantidad)+', hay '+disp);
+      if(n>0) carrito.push({producto_id:p.id, codigo:p.codigo, desc:p.descripcion, cantidad:n, base:+i.precio_unit, precio_unit:+i.precio_unit, max:+p.stock});
+    } else {
+      carrito.push({producto_id:null, codigo:'LIBRE', desc:((i.codigo?i.codigo+' · ':'')+(i.descripcion||'')).slice(0,120), cantidad:+i.cantidad, base:+i.precio_unit, precio_unit:+i.precio_unit, max:99999, libre:true});
+      libres.push(i.codigo||i.descripcion);
+    }
+  }
+  window._cotVenta = {id:Q.id, folio:Q.folio};
+  if(Q.cliente_id && $('nv-cliente')){ $('nv-cliente').value = String(Q.cliente_id); }
+  pintarCarrito();
+  const box = document.createElement('div'); box.className = 'small'; box.id = 'nv-desdecot';
+  box.style.cssText = 'margin:0 0 8px;padding:8px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px';
+  box.innerHTML = `📋 <b>Viene de la cotización C-${Q.folio}</b> con sus precios. Elige cómo paga y cobra; la cotización se marca como vendida.`+
+    (faltan.length?`<div style="color:#b91c1c;margin-top:4px">⚠️ No alcanza el stock: ${faltan.map(esc).join(' · ')}. Se cargó lo que hay; pide el resto antes de entregar.</div>`:'')+
+    (libres.length?`<div style="color:#b45309;margin-top:4px">✍️ ${libres.length} renglón(es) no están en inventario (${libres.slice(0,4).map(esc).join(', ')}${libres.length>4?'…':''}): van como renglón libre y no descuentan stock. Si ya llegaron, mejor agrégalos desde el catálogo.</div>`:'');
+  const anc = $('nv-carrito').closest('table'); anc.parentNode.insertBefore(box, anc);
+}
+async function cotMarcarVendida(folioVenta){
+  const cv = window._cotVenta; window._cotVenta = null; if(!cv) return;
+  const r = await sb.from('cotizaciones').update({estado:'aceptada'}).eq('id', cv.id);
+  if(!r.error){ logEv('cotizacion','C-'+cv.folio+' vendida · venta '+folioVenta); toast('Cotización C-'+cv.folio+' marcada como vendida ✓'); }
+}
+/* --- Seguimiento: recordatorio y cierre --- */
+function cotDias(x){ return Math.floor((Date.now() - new Date(x.fecha).getTime())/86400000); }
+function cotAbierta(x){ return ['borrador','enviada'].includes(x.estado); }
+function cotRecordar(id){
+  const x = (window._cotRows||[]).find(z=>z.id===id); if(!x) return;
+  const cli = x.clientes || {}; const tel = String(cli.telefono||'').replace(/\D/g,'');
+  const msg = `Hola${cli.nombre?' '+cli.nombre:''}, buen día. Le escribo de Axion Tools para dar seguimiento a la cotización C-${x.folio} por ${fmt(x.total)} que le enviamos el ${new Date(x.fecha).toLocaleDateString('es-MX',{day:'numeric',month:'long'})}. ¿Pudo revisarla? Con gusto la actualizamos o ajustamos cantidades. Quedo atento.`;
+  window.open('https://wa.me/'+(tel.length===10?'52'+tel:tel)+'?text='+encodeURIComponent(msg), '_blank');
+  logEv('cotizacion','recordatorio C-'+x.folio+(tel?'':' (sin teléfono del cliente)'));
+}
+async function cotNoVendida(id, folio){
+  if(!confirm('¿Cerrar la C-'+folio+' como NO vendida?')) return;
+  const r = await sb.from('cotizaciones').update({estado:'vencida'}).eq('id', id);
+  if(r.error){ toast(errMsg(r.error), true); return; }
+  logEv('cotizacion','C-'+folio+' cerrada como no vendida'); toast('C-'+folio+' cerrada como no vendida'); vCotizaciones();
+}
+async function cotAutoCierre(rows){
+  const viejas = rows.filter(x=>cotAbierta(x) && cotDias(x) > (+x.vigencia_dias||7) + COT_AUTOCIERRE_DIAS);
+  if(!viejas.length || !puedeVender()) return 0;
+  const r = await sb.from('cotizaciones').update({estado:'vencida'}).in('id', viejas.map(x=>x.id));
+  if(r.error) return 0;
+  viejas.forEach(x=>{ x.estado='vencida'; }); logEv('cotizacion','cierre automático como no vendidas: '+viejas.map(x=>'C-'+x.folio).join(', '));
+  return viejas.length;
+}
 let cotEditId = null;
 async function nuevaCot(editId){
   cotCarrito = []; cotEditId = editId || null;
@@ -2781,8 +2921,8 @@ async function nuevaCot(editId){
       <div>
         <div class="frow">
           <div class="field"><label>Cliente registrado</label>
-            <select id="ct-cliente"><option value="">— ninguno —</option>${cotClientes.map(x=>`<option value="${x.id}" ${ed&&ed.cliente_id==x.id?'selected':''}>${esc(x.nombre)}</option>`).join('')}</select></div>
-          <div class="field"><label>O nombre libre (obra/empresa)</label><input id="ct-cliente-txt" placeholder="Ej. Totalplay obra GDL" value="${ed?esc(ed.cliente_texto||''):''}"></div>
+            <select id="ct-cliente" onchange="cotCargarHist()"><option value="">— ninguno —</option>${cotClientes.map(x=>`<option value="${x.id}" ${ed&&ed.cliente_id==x.id?'selected':''}>${esc(x.nombre)}</option>`).join('')}</select></div>
+          <div class="field"><label>O nombre libre (obra/empresa)</label><input id="ct-cliente-txt" onchange="cotCargarHist()" placeholder="Ej. Totalplay obra GDL" value="${ed?esc(ed.cliente_texto||''):''}"></div>
         </div>
         <div class="frow">
           <div class="field"><label>Vigencia (días)</label><input id="ct-vigencia" type="number" value="${ed?ed.vigencia_dias:7}"></div>
@@ -2794,7 +2934,7 @@ async function nuevaCot(editId){
           <button class="btn" id="ct-guardar" onclick="guardarCot()">${cotEditId?'Guardar cambios':'Guardar cotización'}</button></div>
       </div>
     </div>`, true);
-  pintarCot();
+  window._cotHist = {}; pintarCot(); cotCargarHist(); // v230
   $('ct-buscar').focus();
 }
 let ctTimer = null;
@@ -2878,7 +3018,7 @@ function pintarCot(){
     <td><input value="${c.precio}" onchange="cotPrecio(${i},this.value)">
       <select onchange="cotPreset(${i},this.value);this.value=''" style="width:64px;padding:4px;border:1px solid var(--linea);border-radius:6px;font-size:11px">
         <option value="">precio…</option><option value="pub">Público</option><option value="m25">Margen 25%</option><option value="m20">Margen 20%</option><option value="m15">Margen 15%</option><option value="m10">Margen 10%</option></select>
-      ${pz?`<br><span class="small" style="color:var(--azul)">≈ ${fmt(c.precio/pz)} por pieza (${pz} pzas)</span>`:''}</td>
+      ${pz?`<br><span class="small" style="color:var(--azul)">≈ ${fmt(c.precio/pz)} por pieza (${pz} pzas)</span>`:''}${cotHistHtml(c,i)}</td>
     <td class="num">${fmt(c.cantidad*c.precio)}${esAdmin()?`<br>
       <span class="small" style="color:${col}" title="El precio trae IVA y el costo no: se compara el precio sin IVA (÷1.16) contra el costo">${costoD>0?`${fmt(c.precio/1.16)} s/IVA − ${fmt(c.costo)} costo = <b>${fmt(c.precio/1.16-costoD)}</b> · marg ${pct.toFixed(0)}%`:'sin costo'}</span>${(!c.producto_id && axMuyCaro(c.precio, c.indar))?`<br><span class="small" style="color:#b91c1c;font-weight:700" title="Muy por encima de lo que sugiere Indar: revisa el precio">⚠️ +${Math.round(axMuyCaro(c.precio, c.indar)*100)}% arriba de Indar (${fmt(c.indar)})</span>`:''}`:''}</td>
     <td><span class="x" onclick="cotCarrito.splice(${i},1);pintarCot()">✕</span></td></tr>`;
@@ -2890,6 +3030,9 @@ function pintarCot(){
 }
 async function guardarCot(){
   if(!cotCarrito.length){ toast('Agrega al menos una partida', true); return; }
+  if(!$('ct-cliente').value && !$('ct-cliente-txt').value.trim()){ toast('Elige el cliente o escribe su nombre (aunque sea "Público en general") — así el sistema recuerda qué precios le diste', true); return; } // v230
+  const _dif = cotCarrito.map(c=>{ const a = c.codigo ? cotUlt(c.codigo) : null; return a ? {c, u:a[0], d:cotDifPct(c.precio, a[0].precio)} : null; }).filter(x=>x && Math.abs(x.d) > COT_TOL);
+  if(_dif.length && !confirm('⚠️ OJO: a este cliente ya le dimos OTRO precio en '+_dif.length+' producto(s):\n\n'+_dif.slice(0,12).map(x=>'• '+x.c.codigo+': ahora '+fmt(x.c.precio)+' vs '+fmt(x.u.precio)+' ('+x.u.folio+') → '+(x.d>0?'+':'')+Math.round(x.d*100)+'%').join('\n')+'\n\n¿Guardar así?')) return;
   $('ct-guardar').disabled = true;
   try{
     const total = Math.round(cotCarrito.reduce((s,c)=>s+c.cantidad*c.precio,0)*100)/100;
@@ -4690,7 +4833,7 @@ function pintarClientes(){
     <td>${crBadgeCliente(c)||'<span class="small muted">—</span>'}</td>
     <td>${esc(c.telefono)}</td><td>${esc(c.correo)}</td>
     <td>${esc(c.rfc)}</td><td class="small muted">${esc(c.notas)}</td>
-    <td style="white-space:nowrap">${puedeVender()?`<button class="btn sec sm" onclick="editarCliente(${c.id})">Editar</button> <button class="btn sec sm" title="Expediente de crédito" onclick="expedienteCredito(${c.id})">💳</button>`:''}</td></tr>`).join('')
+    <td style="white-space:nowrap">${puedeVender()?`<button class="btn sec sm" onclick="editarCliente(${c.id})">Editar</button> <button class="btn sec sm" title="Expediente de crédito" onclick="expedienteCredito(${c.id})">💳</button> <button class="btn sec sm" title="Qué precios le hemos cotizado y vendido" onclick="preciosCliente(${c.id})">💲 Precios</button>`:''}</td></tr>`).join('')
     || '<tr><td colspan="8" class="muted">Aún no hay clientes. Los clientes son opcionales: puedes vender a "Mostrador".</td></tr>';
   const nM = cliData.filter(c=>c.oficio).length, nC = cliData.filter(c=>c.credito_estado==='autorizado').length, nT = cliData.filter(c=>c.credito_estado==='tramite').length;
   $('cl-pie').textContent = `${rows.length} cliente(s) · ${nM} maestro(s) registrados 🔧 · ${nC} con crédito autorizado 💳${nT?` · ${nT} en trámite`:''}`;
