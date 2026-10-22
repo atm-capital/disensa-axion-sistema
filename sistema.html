@@ -6488,7 +6488,7 @@ async function clDesdeXML(){
       const em = doc.getElementsByTagName('cfdi:Emisor')[0] || doc.getElementsByTagName('Emisor')[0];
       emisor = em ? (em.getAttribute('Nombre')||'') : ''; rfc = em ? (em.getAttribute('Rfc')||'') : '';
       serie = doc.documentElement.getAttribute('Serie')||''; formaPago = doc.documentElement.getAttribute('FormaPago')||'';
-      [...doc.getElementsByTagName('cfdi:Concepto')].concat([...doc.getElementsByTagName('Concepto')]).forEach(c=>{ const k=(c.getAttribute('NoIdentificacion')||'').trim(); if(k && !descs[k]) descs[k] = (c.getAttribute('Descripcion')||'').trim(); });
+      [...doc.getElementsByTagName('cfdi:Concepto')].concat([...doc.getElementsByTagName('Concepto')]).forEach(c=>{ const d0=(c.getAttribute('Descripcion')||'').trim(), mb=d0.match(/^\s*\[([^\]]{1,30})\]\s*/); const k=(c.getAttribute('NoIdentificacion')||'').trim() || (mb?mb[1].trim():''); if(k && !descs[k]) descs[k] = mb ? d0.slice(mb[0].length) : d0; });
       d = p;
     }catch(e){}
   }
@@ -6554,7 +6554,7 @@ async function xmlLeerFactura(files){ // lee XML (+PDF) y regresa {d, pdf, emiso
       const em = doc.getElementsByTagName('cfdi:Emisor')[0] || doc.getElementsByTagName('Emisor')[0];
       emisor = em ? (em.getAttribute('Nombre')||'') : ''; rfc = em ? (em.getAttribute('Rfc')||'') : '';
       serie = doc.documentElement.getAttribute('Serie')||''; formaPago = doc.documentElement.getAttribute('FormaPago')||''; cond = doc.documentElement.getAttribute('CondicionesDePago')||'';
-      [...doc.getElementsByTagName('cfdi:Concepto')].concat([...doc.getElementsByTagName('Concepto')]).forEach(c=>{ const k=(c.getAttribute('NoIdentificacion')||'').trim(); if(k && !descs[k]) descs[k] = (c.getAttribute('Descripcion')||'').trim(); });
+      [...doc.getElementsByTagName('cfdi:Concepto')].concat([...doc.getElementsByTagName('Concepto')]).forEach(c=>{ const d0=(c.getAttribute('Descripcion')||'').trim(), mb=d0.match(/^\s*\[([^\]]{1,30})\]\s*/); const k=(c.getAttribute('NoIdentificacion')||'').trim() || (mb?mb[1].trim():''); if(k && !descs[k]) descs[k] = mb ? d0.slice(mb[0].length) : d0; });
       d = p;
     }catch(e){}
   }
@@ -6593,6 +6593,7 @@ async function pxLeer(){
   const x = await xmlLeerFactura(files);
   if(!x){ info.innerHTML = '<span style="color:#b91c1c">No encontré un XML válido (CFDI).</span>'; return; }
   if(x.d.tipo !== 'I'){ info.innerHTML = '<span style="color:#b91c1c">Ese XML es tipo '+esc(x.d.tipo)+', no una factura de compra.</span>'; return; }
+  if(!x.d.items.length){ info.innerHTML = '<span style="color:#b91c1c">La factura no trae partidas que pueda leer.</span>'; return; }
   info.textContent = 'Leyendo factura '+x.folio+'…';
   const {data:ya} = await sb.from('facturas').select('id,pedido_id').eq('uuid', x.d.uuid);
   if(ya && ya.length){ info.innerHTML = '<span style="color:#b91c1c">⚠️ Esta factura ya está registrada'+(ya[0].pedido_id?' (pedido #'+ya[0].pedido_id+')':'')+'. No se captura dos veces.</span>'; return; }
@@ -6623,10 +6624,20 @@ async function pxLeer(){
     <b>${nEx}</b> ya están en el inventario${nNew?` · <b style="color:#b45309">${nNew} NUEVOS</b> (revisa su precio de venta)`:''}${x.pdf?' · PDF listo para archivar':' · <span style="color:#b45309">falta el PDF (se puede subir después con 📎 en el pedido)</span>'}${provId==='nuevo'?' · <b style="color:#b45309">proveedor nuevo: se da de alta con el nombre de la factura</b>':''}.`;
 }
 function pxSet(i, k, v){ pxItems[i][k] = +v||0; pxPintar(); }
+async function pxVincular(i, cod){ // v236: el proveedor usa otro código → lo ligo a un producto que ya tengo
+  cod = String(cod||'').trim(); if(!cod) return;
+  const r = await sb.from('productos').select('id,codigo,descripcion,costo,precio').or(`codigo.ilike.${cod.replace(/[%,()]/g,'')},codigo_barras.eq.${cod.replace(/[%,()]/g,'')}`).limit(1);
+  let m = (r.data||[])[0];
+  if(!m && r.error){ const r2 = await sb.from('productos').select('id,codigo,descripcion,costo,precio').ilike('codigo', cod.replace(/[%,()]/g,'')).limit(1); m = (r2.data||[])[0]; }
+  if(!m){ toast('No encontré el producto '+cod, true); return; }
+  const x = pxItems[i]; x.codProv = x.codProv || x.codigo;
+  Object.assign(x, {producto_id:m.id, codigo:m.codigo, descripcion:m.descripcion, precioVenta:+m.precio, costoAntes:+m.costo});
+  toast(x.codProv+' → '+m.codigo+' ✓'); pxPintar();
+}
 function pxPintar(){
   const sub = Math.round(pxItems.reduce((s,x)=>s + x.cantidad*x.costo, 0)*100)/100, iva = Math.round(sub*16)/100;
   $('px-sub').textContent = fmt(sub); $('px-iva').textContent = fmt(iva); $('px-tot').textContent = fmt(Math.round((sub+iva)*100)/100);
-  $('px-tabla').innerHTML = pxItems.map((x,i)=>`<tr><td><b>${esc(x.codigo)}</b>${x.producto_id?'':' <span class="badge b-azul">NUEVO</span>'}<br><span class="small muted">${esc(x.descripcion.slice(0,52))}</span></td>
+  $('px-tabla').innerHTML = pxItems.map((x,i)=>`<tr><td><b>${esc(x.codigo)}</b>${x.producto_id?(x.codProv?` <span class="small muted">(proveedor: ${esc(x.codProv)})</span>`:''):' <span class="badge b-azul">NUEVO</span>'}<br><span class="small muted">${esc(x.descripcion.slice(0,52))}</span>${x.producto_id?'':`<br><input placeholder="¿Ya lo tengo? mi código" style="width:150px;margin-top:3px;font-size:12px" onchange="pxVincular(${i},this.value)">`}</td>
     <td><input type="number" step="1" min="0.01" value="${x.cantidad}" style="width:62px" onchange="pxSet(${i},'cantidad',this.value)"></td>
     <td><input type="number" step="0.01" min="0" value="${x.costo}" style="width:80px" onchange="pxSet(${i},'costo',this.value)"></td>
     <td class="num">${fmt(Math.round(x.cantidad*x.costo*100)/100)}</td>
@@ -9298,13 +9309,11 @@ function fxParseXML(texto, nombre){
   const tfd = doc.getElementsByTagName('tfd:TimbreFiscalDigital')[0] || doc.getElementsByTagName('TimbreFiscalDigital')[0];
   const uuid = ((tfd && tfd.getAttribute('UUID')) || nombre.replace(/\.xml$/i,'')).toUpperCase();
   const conceptos = [...doc.getElementsByTagName('cfdi:Concepto')].concat([...doc.getElementsByTagName('Concepto')]);
-  const items = conceptos.map(c=>({
-    cod: (c.getAttribute('NoIdentificacion')||'').trim(),
-    cant: parseFloat(c.getAttribute('Cantidad')||'0'),
-    pu: parseFloat(c.getAttribute('ValorUnitario')||'0'),
-    imp: parseFloat(c.getAttribute('Importe')||'0'),
-    desc: (c.getAttribute('Descripcion')||'').slice(0,60),
-  })).filter(i=>i.cod);
+  const items = conceptos.map(c=>{ // v236: si no trae NoIdentificacion, el código sale de "[COD] descripción" o de la clave SAT
+    const d0 = (c.getAttribute('Descripcion')||'').trim(), mb = d0.match(/^\s*\[([^\]]{1,30})\]\s*/);
+    const cod = (c.getAttribute('NoIdentificacion')||'').trim() || (mb ? mb[1].trim() : '') || (c.getAttribute('ClaveProdServ') ? 'SAT-'+c.getAttribute('ClaveProdServ') : '');
+    return { cod, cant: parseFloat(c.getAttribute('Cantidad')||'0'), pu: parseFloat(c.getAttribute('ValorUnitario')||'0'),
+      imp: parseFloat(c.getAttribute('Importe')||'0'), desc: (mb ? d0.slice(mb[0].length) : d0).slice(0,60) }; }).filter(i=>i.cod);
   const cond = comp.getAttribute('CondicionesDePago')||'';
   const dias = parseInt((cond.match(/(\d+)/)||[])[1]) || 30;
   return { nombre, uuid, folio: comp.getAttribute('Folio')||'?', fecha: (comp.getAttribute('Fecha')||'').slice(0,10),
