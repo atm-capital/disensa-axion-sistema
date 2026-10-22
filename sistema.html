@@ -4038,7 +4038,7 @@ async function plAplicar(){
     setTimeout(()=>famRevisar(cambios.map(x=>x.p.id)), 1200); // v232
   }catch(e){ if(b) b.disabled=false; toast(errMsg(e), true); }
 }
-/* ===== v232 (22-oct-2026): REGLA DE LÍNEA Y COLORES =====
+/* ===== v232/v233 (22-oct-2026): REGLA DE LÍNEA Y COLORES =====
    Familia = mismo prefijo de código + misma descripción quitando medidas y colores.
    · Colores: el mismo producto en distintos colores lleva el MISMO precio.
    · Línea: todas las medidas de una familia llevan margen parejo (diferencia máxima 10 puntos) y
@@ -4049,15 +4049,24 @@ const FAM_TOL = 0.10;
 const FAM_COL = /\b(negro|negra|blanco|blanca|rojo|roja|azul|verde|amarillo|amarilla|gris|naranja|cafe|café|marfil|beige|cromo|cromad[oa]|niquel(ado)?|satinado|brillante|mate|laton|latón|cobre|antiguo|izq(uierda)?|der(echa)?|metalico|metálico|aluminio|terracota|rosa|morado|plata|oro|dorado|transparente|natural|claro|polarizado|chica|chico|grande|mediano|mediana|calida|cálida|de dia|suave|ambar|ámbar)\b/gi;
 const FAM_MED = /(\d+(\.\d+)?\s*[-\/.]?\s*\d*\/?\d*\s*("|''|pulg|plg|mm|cm|mt|m|ml|lt|l|kg|gr|g|oz|lb|w|a|v|pzas?|piezas?|polos|entradas|dientes|escalones|peldaños|años|ft|awg|k)\b|\d+\s*\/\s*\d+|\d+(\.\d+)?)/gi;
 function famNorm(d){ return String(d||'').toLowerCase().replace(/\(.*?\)/g,' ').replace(FAM_COL,' ').replace(FAM_MED,' # ').replace(/[^a-záéíóúñ# ]/g,' ').replace(/\s+/g,' ').trim(); }
-function famColorKey(d){ return String(d||'').toLowerCase().replace(/\(.*?\)/g,' ').replace(FAM_COL,' ').replace(/\s+/g,' ').trim(); }
+const FAM_COLOR = /\b(negro|negra|blanco|blanca|rojo|roja|azul|verde|amarillo|amarilla|gris|naranja|cafe|café|marfil|beige|mate|brillante|terracota|rosa|morado|izq(uierda)?|der(echa)?|chica|chico|mediano|mediana|grande)\b/gi; // v233: solo colores/lado/talla, no materiales
+function famColorKey(d){ return String(d||'').toLowerCase().replace(FAM_COLOR,' ').replace(/\s+/g,' ').trim(); }
+function famCodCerca(a,b){ a=String(a); b=String(b); let i=0; while(i<a.length && i<b.length && a[i]===b[i]) i++; return i >= Math.max(a.length,b.length)-3; }
+function famGruposColor(a){ // mismo producto en otro color: misma descripción sin color Y código casi igual
+  const C = {}; a.forEach(p=>{ const k = String(p.codigo).slice(0,2)+'|'+famColorKey(p.descripcion); (C[k]=C[k]||[]).push(p); });
+  const out = [];
+  Object.values(C).forEach(g=>{ if(g.length<2) return; const s=[...g].sort((x,y)=>String(x.codigo).localeCompare(String(y.codigo))); let cur=[s[0]];
+    for(let i=1;i<s.length;i++){ if(famCodCerca(s[i].codigo, cur[0].codigo)) cur.push(s[i]); else { if(cur.length>1) out.push(cur); cur=[s[i]]; } }
+    if(cur.length>1) out.push(cur); });
+  return out;
+}
 function famKey(p){ return String(p.codigo||'').slice(0,2).toUpperCase()+'|'+famNorm(p.descripcion); }
 function famMargen(p){ const v = +p.precio/1.16; return v>0 ? (v - +p.costo)/v : 0; }
 function famProblemas(arr){
   const a = arr.filter(p=>+p.precio>0 && +p.costo>0 && !p.granel);
   if(a.length<2) return null;
   const prob = [];
-  const C = {}; a.forEach(p=>{ const k = String(p.codigo).slice(0,2)+'|'+famColorKey(p.descripcion); (C[k]=C[k]||[]).push(p); });
-  Object.values(C).forEach(g=>{ if(g.length>1 && new Set(g.map(p=>+p.precio)).size>1) prob.push('Mismo producto en distinto color con precio distinto'); });
+  famGruposColor(a).forEach(g=>{ if(new Set(g.map(p=>+p.precio)).size>1) prob.push('Mismo producto en distinto color con precio distinto'); });
   const ms = a.map(famMargen), dif = Math.max(...ms) - Math.min(...ms);
   if(dif > FAM_TOL) prob.push('Margen disparejo en la línea: de '+Math.round(Math.min(...ms)*100)+'% a '+Math.round(Math.max(...ms)*100)+'%');
   const s = [...a].sort((x,y)=>+x.costo - +y.costo);
@@ -4068,8 +4077,7 @@ function famPropuesta(arr){ // siempre hacia arriba
   const a = arr.filter(p=>+p.precio>0 && +p.costo>0 && !p.granel);
   const mMax = Math.min(0.45, Math.max(...a.map(famMargen)));
   const np = {}; a.forEach(p=>{ np[p.id] = Math.max(+p.precio, Math.ceil(+p.costo/(1-mMax)*1.16 - 0.001)); });
-  const C = {}; a.forEach(p=>{ const k = String(p.codigo).slice(0,2)+'|'+famColorKey(p.descripcion); (C[k]=C[k]||[]).push(p); });
-  Object.values(C).forEach(g=>{ const mx = Math.max(...g.map(p=>np[p.id])); g.forEach(p=>{ np[p.id] = mx; }); });
+  famGruposColor(a).forEach(g=>{ const mx = Math.max(...g.map(p=>np[p.id])); g.forEach(p=>{ np[p.id] = mx; }); });
   const s = [...a].sort((x,y)=>+x.costo - +y.costo);
   for(let i=1;i<s.length;i++){ if(+s[i].costo > +s[i-1].costo*1.05 && np[s[i].id] < np[s[i-1].id]) np[s[i].id] = np[s[i-1].id]; }
   return {np, mMax};
