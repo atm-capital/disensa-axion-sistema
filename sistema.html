@@ -1818,6 +1818,7 @@ async function aplicarPreciosSug(){
   }
   cerrarModal();
   logEv('inventario','precios actualizados a mano: '+ok+' producto(s)');
+  setTimeout(()=>famRevisar(sel.map(x=>x.id)), 900); // v232
   toast('✅ '+ok+' precio(s) actualizados'+(err?' · '+err+' con error':'')+' · imprime las etiquetas nuevas en 🏷️ Etiquetas', !!err);
   if(typeof vInventario==='function') vInventario();
 }
@@ -3854,6 +3855,7 @@ async function vInventario(){
     <button class="btn sec" id="btn-eti-nuevas" onclick="elegirEtiquetas()">🏷️ Etiquetas</button>
     <button class="btn sec" id="btn-precios-sug" onclick="revisarPreciosSugeridos()">💲 Revisar precios</button>
     <button class="btn sec" onclick="invPrecioLote()" title="Cambia el precio de todos los productos que estás viendo con el filtro">✏️ Precio en lote</button>
+    ${esAdmin()?`<button class="btn sec" onclick="famRevisar(null)" title="Revisa líneas y colores: mismo producto en otro color = mismo precio; medidas con margen parejo">🧩 Familias</button>`:''}
     <button class="btn sec" onclick="compararStockSafdi()">⚖️ Stock SAFDI</button>
     <button class="btn sec" onclick="exportarInv()">Exportar CSV</button>`;
     sb.from('resurtido_solicitudes').select('id',{count:'exact',head:true}).eq('estado','pendiente')
@@ -4033,7 +4035,80 @@ async function plAplicar(){
     }
     logEv('precio', 'precio en lote: '+ok+' producto(s) · '+cambios.slice(0,6).map(x=>x.p.codigo+' '+x.p.precio+'→'+x.nv).join(', ')+(cambios.length>6?'…':''));
     cerrarModal(); toast(ok+' precio(s) cambiados ✓ — imprime las tarjetas en 🏷️ Etiquetas'); vInventario();
+    setTimeout(()=>famRevisar(cambios.map(x=>x.p.id)), 1200); // v232
   }catch(e){ if(b) b.disabled=false; toast(errMsg(e), true); }
+}
+/* ===== v232 (22-oct-2026): REGLA DE LÍNEA Y COLORES =====
+   Familia = mismo prefijo de código + misma descripción quitando medidas y colores.
+   · Colores: el mismo producto en distintos colores lleva el MISMO precio.
+   · Línea: todas las medidas de una familia llevan margen parejo (diferencia máxima 10 puntos) y
+     una medida que cuesta más no puede venderse más barata.
+   Al cambiar precios avisa si se descuadra la familia; Inventario → 🧩 Familias revisa todo.
+   "Emparejar" SIEMPRE sube al más caro: nunca baja precios. */
+const FAM_TOL = 0.10;
+const FAM_COL = /\b(negro|negra|blanco|blanca|rojo|roja|azul|verde|amarillo|amarilla|gris|naranja|cafe|café|marfil|beige|cromo|cromad[oa]|niquel(ado)?|satinado|brillante|mate|laton|latón|cobre|antiguo|izq(uierda)?|der(echa)?|metalico|metálico|aluminio|terracota|rosa|morado|plata|oro|dorado|transparente|natural|claro|polarizado|chica|chico|grande|mediano|mediana|calida|cálida|de dia|suave|ambar|ámbar)\b/gi;
+const FAM_MED = /(\d+(\.\d+)?\s*[-\/.]?\s*\d*\/?\d*\s*("|''|pulg|plg|mm|cm|mt|m|ml|lt|l|kg|gr|g|oz|lb|w|a|v|pzas?|piezas?|polos|entradas|dientes|escalones|peldaños|años|ft|awg|k)\b|\d+\s*\/\s*\d+|\d+(\.\d+)?)/gi;
+function famNorm(d){ return String(d||'').toLowerCase().replace(/\(.*?\)/g,' ').replace(FAM_COL,' ').replace(FAM_MED,' # ').replace(/[^a-záéíóúñ# ]/g,' ').replace(/\s+/g,' ').trim(); }
+function famColorKey(d){ return String(d||'').toLowerCase().replace(/\(.*?\)/g,' ').replace(FAM_COL,' ').replace(/\s+/g,' ').trim(); }
+function famKey(p){ return String(p.codigo||'').slice(0,2).toUpperCase()+'|'+famNorm(p.descripcion); }
+function famMargen(p){ const v = +p.precio/1.16; return v>0 ? (v - +p.costo)/v : 0; }
+function famProblemas(arr){
+  const a = arr.filter(p=>+p.precio>0 && +p.costo>0 && !p.granel);
+  if(a.length<2) return null;
+  const prob = [];
+  const C = {}; a.forEach(p=>{ const k = String(p.codigo).slice(0,2)+'|'+famColorKey(p.descripcion); (C[k]=C[k]||[]).push(p); });
+  Object.values(C).forEach(g=>{ if(g.length>1 && new Set(g.map(p=>+p.precio)).size>1) prob.push('Mismo producto en distinto color con precio distinto'); });
+  const ms = a.map(famMargen), dif = Math.max(...ms) - Math.min(...ms);
+  if(dif > FAM_TOL) prob.push('Margen disparejo en la línea: de '+Math.round(Math.min(...ms)*100)+'% a '+Math.round(Math.max(...ms)*100)+'%');
+  const s = [...a].sort((x,y)=>+x.costo - +y.costo);
+  for(let i=1;i<s.length;i++){ if(+s[i].costo > +s[i-1].costo*1.05 && +s[i].precio < +s[i-1].precio){ prob.push('Una medida más cara de costo se vende más barata ('+s[i].codigo+' '+fmt(s[i].precio)+' vs '+s[i-1].codigo+' '+fmt(s[i-1].precio)+')'); break; } }
+  return prob.length ? [...new Set(prob)] : null;
+}
+function famPropuesta(arr){ // siempre hacia arriba
+  const a = arr.filter(p=>+p.precio>0 && +p.costo>0 && !p.granel);
+  const mMax = Math.min(0.45, Math.max(...a.map(famMargen)));
+  const np = {}; a.forEach(p=>{ np[p.id] = Math.max(+p.precio, Math.ceil(+p.costo/(1-mMax)*1.16 - 0.001)); });
+  const C = {}; a.forEach(p=>{ const k = String(p.codigo).slice(0,2)+'|'+famColorKey(p.descripcion); (C[k]=C[k]||[]).push(p); });
+  Object.values(C).forEach(g=>{ const mx = Math.max(...g.map(p=>np[p.id])); g.forEach(p=>{ np[p.id] = mx; }); });
+  const s = [...a].sort((x,y)=>+x.costo - +y.costo);
+  for(let i=1;i<s.length;i++){ if(+s[i].costo > +s[i-1].costo*1.05 && np[s[i].id] < np[s[i-1].id]) np[s[i].id] = np[s[i-1].id]; }
+  return {np, mMax};
+}
+async function famCargar(){
+  const P = await traerTodo(()=>sb.from('productos').select('id,codigo,descripcion,costo,precio,stock,granel').eq('activo', true).order('id'));
+  const G = {}; P.forEach(p=>{ (G[famKey(p)] = G[famKey(p)]||[]).push(p); });
+  return G;
+}
+/* ids = productos que acaban de cambiar de precio; null = revisar todo el inventario */
+async function famRevisar(ids){
+  try{
+    const G = await famCargar();
+    let fams = Object.entries(G).filter(([k,a])=>a.length>1);
+    if(ids){ const S = new Set(ids.map(Number)); fams = fams.filter(([k,a])=>a.some(p=>S.has(+p.id))); }
+    const malas = fams.map(([k,a])=>({k, a, prob: famProblemas(a)})).filter(f=>f.prob);
+    window._famMalas = malas;
+    if(!malas.length){ if(!ids) toast('🧩 Todas las familias cuadran ✓'); return; }
+    abrirModal(`<h3>🧩 ${ids?'Ojo: este cambio descuadra su familia':'Familias que no cuadran'} (${malas.length})</h3>
+      <p class="small muted" style="margin:0 0 8px">Regla: el mismo producto en otro color lleva el <b>mismo precio</b>; en una línea de medidas el margen va parejo y una medida más cara de costo no se vende más barata. <b>Emparejar</b> sube al precio de la familia; nunca baja.</p>
+      <div style="max-height:62vh;overflow-y:auto">${malas.map((f,i)=>{ const {np} = famPropuesta(f.a); const s = [...f.a].sort((x,y)=>+x.costo - +y.costo);
+        const cambian = s.filter(p=>np[p.id] && np[p.id] > +p.precio).length;
+        return `<div class="card" style="padding:10px;margin:0 0 8px" id="fam-${i}"><div class="small" style="color:#b91c1c;font-weight:600">⚠️ ${f.prob.map(esc).join(' · ')}</div>
+          <table class="small" style="margin-top:6px"><tbody>${s.map(p=>`<tr><td>${esc(p.codigo)}</td><td>${esc(String(p.descripcion).slice(0,48))}</td><td class="num">${fmt(p.precio)}</td><td class="num muted">${Math.round(famMargen(p)*100)}%</td><td class="num">${np[p.id] && np[p.id] > +p.precio ? `<b style="color:#15803d">→ ${fmt(np[p.id])}</b>` : ''}</td></tr>`).join('')}</tbody></table>
+          ${puedeVender() && esAdmin() && cambian ? `<button class="btn sm" style="margin-top:6px" onclick="famEmparejar(${i})">⬆ Emparejar (${cambian})</button>` : ''}</div>`; }).join('')}</div>
+      <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
+  }catch(e){ console.warn('famRevisar', e); }
+}
+async function famEmparejar(i){
+  const f = (window._famMalas||[])[i]; if(!f) return;
+  const {np} = famPropuesta(f.a);
+  const cambios = f.a.filter(p=>np[p.id] && np[p.id] > +p.precio);
+  if(!cambios.length) return;
+  if(!confirm('Subir '+cambios.length+' precio(s) para emparejar la familia?\n\n'+cambios.map(p=>p.codigo+': '+fmt(p.precio)+' → '+fmt(np[p.id])).join('\n'))) return;
+  let ok = 0;
+  for(const p of cambios){ const r = await sb.from('productos').update({precio:np[p.id], etiqueta_at:null}).eq('id', p.id); if(!r.error){ ok++; p.precio = np[p.id]; } }
+  logEv('precio','emparejar familia: '+cambios.map(p=>p.codigo+' →'+np[p.id]).join(', '));
+  toast(ok+' precio(s) emparejados ✓ — salen en 🏷️ Tarjetas por cambiar');
+  const el = $('fam-'+i); if(el) el.innerHTML = '<span class="small" style="color:#15803d">✓ Familia emparejada ('+ok+')</span>';
 }
 async function fichaProducto(id){
   let p = invData.find(x=>x.id===id);
@@ -4274,6 +4349,7 @@ async function guardarProducto(id){
   if(error && /unidad|codigo_barras/i.test(error.message||'')){ const o2 = {...obj}; delete o2.unidad; delete o2.codigo_barras; error = await intenta(o2); }
   if(error){ toast(errMsg(error), true); return; }
   cerrarModal(); toast('Producto guardado'); vInventario();
+  if(id) setTimeout(()=>famRevisar([id]), 1200); // v232
 }
 /* ===== Selector de etiquetas: elegir exactamente cuáles imprimir (v74) ===== */
 let etiSel = new Set();
@@ -9381,6 +9457,7 @@ async function cotejoPrecio(pid, inputId, btn){
   if(btn){ btn.textContent='✓ '+fmt(v); btn.disabled=true; }
   logEv('inventario','precio ajustado tras cotejo de factura: producto '+pid+' → '+fmt(v));
   toast('Precio de venta actualizado a '+fmt(v));
+  setTimeout(()=>famRevisar([pid]), 600); // v232
 }
 const MX_STOP = new Set(['DE','LA','EL','CON','PARA','DEL','LOS','LAS','EN','POR','SIN','KG','MTS','MM','LTRS','CAL','QUE','UNA','SEGUNDA','BOLSAS','LARGO','COLOR']);
 function mxToks(s){ return normTxt(s).split(/\s+/).filter(t=>t.length>2 && !MX_STOP.has(t)); }
