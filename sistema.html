@@ -4041,8 +4041,8 @@ async function plAplicar(){
 /* ===== v232/v233 (22-oct-2026): REGLA DE LÍNEA Y COLORES =====
    Familia = mismo prefijo de código + misma descripción quitando medidas y colores.
    · Colores: el mismo producto en distintos colores lleva el MISMO precio.
-   · Línea: todas las medidas de una familia llevan margen parejo (diferencia máxima 10 puntos) y
-     una medida que cuesta más no puede venderse más barata.
+   · Línea: si en una familia unas medidas están en su regla (40/35/30) y otras abajo (más de 5 puntos),
+     se avisa y se propone subir solo las de abajo a SU regla (v234; antes copiaba el margen más alto y salía mal).
    Al cambiar precios avisa si se descuadra la familia; Inventario → 🧩 Familias revisa todo.
    "Emparejar" SIEMPRE sube al más caro: nunca baja precios. */
 const FAM_TOL = 0.10;
@@ -4062,25 +4062,26 @@ function famGruposColor(a){ // mismo producto en otro color: misma descripción 
 }
 function famKey(p){ return String(p.codigo||'').slice(0,2).toUpperCase()+'|'+famNorm(p.descripcion); }
 function famMargen(p){ const v = +p.precio/1.16; return v>0 ? (v - +p.costo)/v : 0; }
+function famRegla(costo){ // v234: precio y margen de la regla 40/35/30 para ese costo
+  const c = +costo; let p = Math.ceil(c/0.60*1.16 - 0.001); if(p<=200) return {p, m:0.40};
+  p = Math.ceil(c/0.65*1.16 - 0.001); if(p<=500) return {p, m:0.35};
+  return {p: Math.ceil(c/0.70*1.16 - 0.001), m:0.30};
+}
+function famBajo(p){ return +p.precio >= 10 && famMargen(p) < famRegla(p.costo).m - 0.05; } // abajo de su regla (lo de menos de $10 no cuenta: el redondeo al peso distorsiona el %)
 function famProblemas(arr){
   const a = arr.filter(p=>+p.precio>0 && +p.costo>0 && !p.granel);
   if(a.length<2) return null;
   const prob = [];
   famGruposColor(a).forEach(g=>{ if(new Set(g.map(p=>+p.precio)).size>1) prob.push('Mismo producto en distinto color con precio distinto'); });
-  const ms = a.map(famMargen), dif = Math.max(...ms) - Math.min(...ms);
-  if(dif > FAM_TOL) prob.push('Margen disparejo en la línea: de '+Math.round(Math.min(...ms)*100)+'% a '+Math.round(Math.max(...ms)*100)+'%');
-  const s = [...a].sort((x,y)=>+x.costo - +y.costo);
-  for(let i=1;i<s.length;i++){ if(+s[i].costo > +s[i-1].costo*1.05 && +s[i].precio < +s[i-1].precio){ prob.push('Una medida más cara de costo se vende más barata ('+s[i].codigo+' '+fmt(s[i].precio)+' vs '+s[i-1].codigo+' '+fmt(s[i-1].precio)+')'); break; } }
+  const bajos = a.filter(famBajo);
+  if(bajos.length && bajos.length < a.length) prob.push('Línea dispareja: '+bajos.length+' de '+a.length+' medida(s) abajo de su margen ('+bajos.map(p=>p.codigo+' '+Math.round(famMargen(p)*100)+'%').join(', ')+')');
   return prob.length ? [...new Set(prob)] : null;
 }
-function famPropuesta(arr){ // siempre hacia arriba
+function famPropuesta(arr){ // v234: sube a SU regla (40/35/30) solo lo que quedó abajo; colores al más caro; nunca baja
   const a = arr.filter(p=>+p.precio>0 && +p.costo>0 && !p.granel);
-  const mMax = Math.min(0.45, Math.max(...a.map(famMargen)));
-  const np = {}; a.forEach(p=>{ np[p.id] = Math.max(+p.precio, Math.ceil(+p.costo/(1-mMax)*1.16 - 0.001)); });
+  const np = {}; a.forEach(p=>{ np[p.id] = famBajo(p) ? Math.max(+p.precio, famRegla(p.costo).p) : +p.precio; });
   famGruposColor(a).forEach(g=>{ const mx = Math.max(...g.map(p=>np[p.id])); g.forEach(p=>{ np[p.id] = mx; }); });
-  const s = [...a].sort((x,y)=>+x.costo - +y.costo);
-  for(let i=1;i<s.length;i++){ if(+s[i].costo > +s[i-1].costo*1.05 && np[s[i].id] < np[s[i-1].id]) np[s[i].id] = np[s[i-1].id]; }
-  return {np, mMax};
+  return {np};
 }
 async function famCargar(){
   const P = await traerTodo(()=>sb.from('productos').select('id,codigo,descripcion,costo,precio,stock,granel').eq('activo', true).order('id'));
@@ -4097,7 +4098,7 @@ async function famRevisar(ids){
     window._famMalas = malas;
     if(!malas.length){ if(!ids) toast('🧩 Todas las familias cuadran ✓'); return; }
     abrirModal(`<h3>🧩 ${ids?'Ojo: este cambio descuadra su familia':'Familias que no cuadran'} (${malas.length})</h3>
-      <p class="small muted" style="margin:0 0 8px">Regla: el mismo producto en otro color lleva el <b>mismo precio</b>; en una línea de medidas el margen va parejo y una medida más cara de costo no se vende más barata. <b>Emparejar</b> sube al precio de la familia; nunca baja.</p>
+      <p class="small muted" style="margin:0 0 8px">Regla: el mismo producto en otro color lleva el <b>mismo precio</b>; en una línea de medidas, las que quedaron abajo de su margen (40/35/30) suben a su regla. <b>Emparejar</b> nunca baja precios.</p>
       <div style="max-height:62vh;overflow-y:auto">${malas.map((f,i)=>{ const {np} = famPropuesta(f.a); const s = [...f.a].sort((x,y)=>+x.costo - +y.costo);
         const cambian = s.filter(p=>np[p.id] && np[p.id] > +p.precio).length;
         return `<div class="card" style="padding:10px;margin:0 0 8px" id="fam-${i}"><div class="small" style="color:#b91c1c;font-weight:600">⚠️ ${f.prob.map(esc).join(' · ')}</div>
