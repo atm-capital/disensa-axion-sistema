@@ -880,6 +880,28 @@ async function pintarVentasRevisar(){
     ${filas.length>12?`<p class="small muted" style="margin:4px 0 0">… y ${filas.length-12} más en Ventas</p>`:''}
   </div>`;
 }
+/* v235: aviso de cobranza en el Resumen — lo vencido y lo que vence en los próximos 7 días */
+async function pintarCobranzaResumen(){
+  const el = $('res-cobranza'); if(!el) return;
+  try{
+    const vs = (await sb.from('ventas').select('id,folio,fecha,total,clientes(nombre,credito_plazo)').eq('metodo_pago','credito').eq('cancelada',false).order('fecha').limit(500)).data||[];
+    if(!vs.length){ el.innerHTML=''; return; }
+    const rc = await sb.from('cobros_credito').select('venta_id,monto').in('venta_id', vs.map(v=>v.id));
+    const C = {}; (rc.data||[]).forEach(c=>{ C[c.venta_id]=(C[c.venta_id]||0)+ +c.monto; });
+    const hoy = new Date(); hoy.setHours(0,0,0,0);
+    const rows = vs.map(v=>{ const saldo = Math.round((+v.total-(C[v.id]||0))*100)/100; const pl = +((v.clientes&&v.clientes.credito_plazo)||0);
+      const ven = new Date(v.fecha); ven.setHours(0,0,0,0); ven.setDate(ven.getDate()+pl); const dias = Math.round((ven-hoy)/864e5);
+      return {...v, saldo, ven, dias}; }).filter(v=>v.saldo>0.005);
+    const venc = rows.filter(v=>v.dias<0), prox = rows.filter(v=>v.dias>=0 && v.dias<=7);
+    const tot = rows.reduce((s,v)=>s+v.saldo,0), tv = venc.reduce((s,v)=>s+v.saldo,0), tp = prox.reduce((s,v)=>s+v.saldo,0);
+    if(!rows.length){ el.innerHTML=''; return; }
+    const fila = v => `<tr><td><b>${esc((v.clientes&&v.clientes.nombre)||'')}</b> <span class="small muted">#${v.folio}</span></td><td class="num">${fmt(v.saldo)}</td><td class="small" style="color:${v.dias<0?'#b91c1c':'#b45309'}">${v.dias<0?'venció hace '+(-v.dias)+' día(s)':(v.dias===0?'vence HOY':'vence en '+v.dias+' día(s)')} · ${v.ven.toLocaleDateString('es-MX',{day:'numeric',month:'short'})}</td></tr>`;
+    el.innerHTML = `<div class="card" style="border-left:4px solid ${venc.length?'#b91c1c':(prox.length?'var(--ambar)':'var(--verde,#15803d)')};margin-bottom:12px;cursor:pointer" onclick="window._finTab='cobrar'; try{localStorage.setItem('ax_fin_tab','cobrar')}catch(e){}; irA('finanzas')" title="Ir a Finanzas → Por cobrar">
+      <h3 style="margin-bottom:6px">💰 Cobranza · nos deben ${fmt(tot)}</h3>
+      <p class="small" style="margin:0 0 6px">${venc.length?`<b style="color:#b91c1c">🔴 Vencido: ${fmt(tv)} (${venc.length})</b> · `:''}${prox.length?`<b style="color:#b45309">🟡 Vence esta semana: ${fmt(tp)} (${prox.length})</b> · `:''}${!venc.length&&!prox.length?'🟢 Nada vencido ni por vencer esta semana · ':''}<span class="muted">clic para cobrar</span></p>
+      ${venc.length||prox.length?`<div class="tbl-scroll"><table class="small"><tbody>${[...venc,...prox].map(fila).join('')}</tbody></table></div>`:''}</div>`;
+  }catch(e){ el.innerHTML=''; }
+}
 async function vResumen(){
   const hoy = new Date(); hoy.setHours(0,0,0,0);
   // Mes elegido (por default el actual). window._resMes = 'YYYY-MM'
@@ -962,8 +984,9 @@ async function vResumen(){
   const promDia = ventasMes.data.length ? totMes/diasMes : 0;
 
   setTimeout(()=>{ if(esFinanzas()) pintarVentasRevisar(); }, 0); // v181
+  setTimeout(()=>{ if(esFinanzas()) pintarCobranzaResumen(); }, 0); // v235
   setTimeout(()=>{ pintarSemanaVsSemana(); }, 0); // v191
-  $('v-resumen').innerHTML = alertaCxp + '<div id="res-revisar"></div>' + `
+  $('v-resumen').innerHTML = alertaCxp + '<div id="res-cobranza"></div><div id="res-revisar"></div>' + `
     <div class="card" style="padding:10px;margin-bottom:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
       <b>📅 Mes:</b>
       <select onchange="window._resMes=this.value; vResumen()" style="padding:8px;border:1px solid var(--linea);border-radius:8px;font-size:15px">
