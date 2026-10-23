@@ -1414,7 +1414,7 @@ function mfTexto(){
   const M = window._mf; if(!M) return; const V = M.V, C = M.C, X = M.x;
   const fol = X ? (X.serie?X.serie+'-':'')+X.folio : '';
   const tot = X ? +X.total : +V.total;
-  const fv = new Date(String(V.fecha).slice(0,10)+'T12:00:00');
+  const fv = new Date(hoyMXde(new Date(V.fecha))+'T12:00:00'); // v238: fecha de la venta en hora de México (no UTC)
   const fl = d => d.toLocaleDateString('es-MX',{day:'numeric',month:'long',year:'numeric'});
   const pl = +(C.credito_plazo||0), ven = new Date(fv); ven.setDate(ven.getDate()+pl);
   const cred = V.metodo_pago==='credito' && pl>0;
