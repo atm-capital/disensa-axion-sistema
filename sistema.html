@@ -370,6 +370,7 @@ const VISTAS = [
 const esAdmin = () => perfil.rol === 'admin';
 const puedeVender = () => ['admin','vendedor'].includes(perfil.rol);
 const esFinanzas = () => ['admin','contador'].includes(perfil.rol); // ve costos/utilidad pero NO edita ni vende
+const cReal = p => +((p && p.costo_real != null) ? p.costo_real : (p ? p.costo : 0)) || 0; // v240: costo REAL (promedio ponderado de facturas); p.costo = reposición
 function montarNav(){
   $('nav').innerHTML = VISTAS.filter(v=>v.roles.includes(perfil.rol) && (!v.solo || v.solo===(perfil.correo||'')))
     .map(v=>`<a id="nav-${v.id}" onclick="irA('${v.id}')"><span>${v.icono}</span>${v.titulo}</a>`).join('');
@@ -915,7 +916,7 @@ async function vResumen(){
   const hace14 = new Date(esMesActual?hoy:new Date(finMes-864e5)); hace14.setDate(hace14.getDate()-13);
   const [ventasMes, prods, cxp, pedCurso, itemsMes, pagosMesR] = await Promise.all([
     traerTodo(()=>sb.from('ventas').select('fecha,total,descuento,cancelada').gte('fecha', mes.toISOString()).lt('fecha', finMes.toISOString()).eq('cancelada', false).order('id')).then(d=>({data:d})),
-    traerTodo(()=>sb.from('productos').select('costo,precio,stock,stock_min,activo').eq('activo', true).order('id')).then(d=>({data:d})),
+    traerTodo(()=>sb.from('productos').select('costo,costo_real,precio,stock,stock_min,activo').eq('activo', true).order('id')).then(d=>({data:d})),
     sb.from('cuentas_pagar').select('*, proveedores(nombre)').neq('estado','pagada').order('fecha_vencimiento'),
     sb.from('pedidos_compra').select('folio_externo,fecha,estado,total,proveedores(nombre)').in('estado',['borrador','enviado','parcial']).order('fecha',{ascending:false}),
     esFinanzas() ? traerTodo(()=>sb.from('venta_items').select('cantidad,precio_unit,costo_unit,ventas!inner(fecha,cancelada)').gte('ventas.fecha', mes.toISOString()).lt('ventas.fecha', finMes.toISOString()).eq('ventas.cancelada', false).order('id')).then(d=>({data:d, error:null})) : Promise.resolve({data:null, error:null}),
@@ -942,7 +943,7 @@ async function vResumen(){
   const vHoy = ventasMes.data.filter(v=>new Date(v.fecha)>=hoy);
   const totHoy = vHoy.reduce((s,v)=>s+ +v.total,0);
   const totMes = ventasMes.data.reduce((s,v)=>s+ +v.total,0);
-  const valInv = prods.data.reduce((s,p)=>s+ +p.costo * +p.stock,0);
+  const valInv = prods.data.reduce((s,p)=>s+ cReal(p) * +p.stock,0); // v240: a costo real
   const bajos = prods.data.filter(p=>+p.stock <= +p.stock_min).length;
   const porPagar = cxp.data.reduce((s,c)=>s+ +c.saldo,0);
   const prox = cxp.data[0];
@@ -3967,6 +3968,13 @@ function resurtirSeleccion(){
    VISTA: INVENTARIO
 ============================================================ */
 let invData = [];
+async function recalcCostoReal(){ // v240
+  if(!confirm('Recalcular el costo REAL de todo el inventario y el margen real de todas las ventas desde julio?\n\nUsa las facturas, notas de crédito y descuentos de pronto pago. El costo de reposición (listas) no cambia.')) return;
+  toast('Recalculando costo real…');
+  const {data, error} = await sb.rpc('recalcular_costo_real', {p_ids:null});
+  if(error){ toast(errMsg(error), true); return; }
+  toast('🧮 Costo real recalculado: '+(data&&data.productos)+' productos · '+(data&&data.ventas)+' ventas ✓'); logEv('costo_real','recalculo total'); vInventario();
+}
 async function vInventario(){
   if(esAdmin()){
     $('vtools').innerHTML = `<button class="btn" onclick="editarProducto(null)">+ Producto</button>
@@ -3976,6 +3984,7 @@ async function vInventario(){
     <button class="btn sec" id="btn-precios-sug" onclick="revisarPreciosSugeridos()">💲 Revisar precios</button>
     <button class="btn sec" onclick="invPrecioLote()" title="Cambia el precio de todos los productos que estás viendo con el filtro">✏️ Precio en lote</button>
     ${esAdmin()?`<button class="btn sec" onclick="famRevisar(null)" title="Revisa líneas y colores: mismo producto en otro color = mismo precio; medidas con margen parejo">🧩 Familias</button>`:''}
+    ${esAdmin()?`<button class="btn sec" onclick="recalcCostoReal()" title="Vuelve a calcular el costo real (promedio ponderado de facturas, notas de crédito y pronto pago) de todo el inventario y de todas las ventas">🧮 Costo real</button>`:''}
     <button class="btn sec" onclick="compararStockSafdi()">⚖️ Stock SAFDI</button>
     <button class="btn sec" onclick="exportarInv()">Exportar CSV</button>`;
     sb.from('resurtido_solicitudes').select('id',{count:'exact',head:true}).eq('estado','pendiente')
@@ -4062,7 +4071,7 @@ function pintarInv(){
   else if(orden==='stockmax') rows.sort((a,b)=>+b.stock - +a.stock);
   else if(orden==='stockmin') rows.sort((a,b)=>+a.stock - +b.stock);
   else if(orden==='margen') rows.sort((a,b)=>{ const m=p=>+p.precio>0?((+p.precio/1.16-+p.costo)/(+p.precio/1.16)):0; return m(b)-m(a); }); // v163: sobre venta
-  else if(orden==='valor') rows.sort((a,b)=>(+b.costo * +b.stock)-(+a.costo * +a.stock));
+  else if(orden==='valor') rows.sort((a,b)=>(cReal(b) * +b.stock)-(cReal(a) * +a.stock));
   const verVend = orden==='vendidos' || est==='vendidos';
   $('inv-body').innerHTML = rows.slice(0,400).map(p=>{
     const bajo = +p.stock <= +p.stock_min;
@@ -4080,12 +4089,13 @@ function pintarInv(){
         : `<span class="badge ${bajo?'b-rojo':'b-verde'}">${+p.stock}</span> <span class="small muted">${esc(p.unidad||'pza')}</span>`}</td>
       <td style="white-space:nowrap">${!(p.codigo_barras||'').trim()?`<button class="btn sec sm" title="Registrar código de barras con la pistola" onclick="event.stopPropagation();capturarCB(${p.id})">📎 Código</button> `:''}${esAdmin()?`<button class="btn sec sm" onclick="event.stopPropagation();editarProducto(${p.id})">Editar</button>`:''}</td></tr>`;
   }).join('') || '<tr><td colspan="8" class="muted">Sin resultados.</td></tr>';
-  const valorC = rows.reduce((s,p)=>s+ +p.costo * +p.stock,0);
+  const valorC = rows.reduce((s,p)=>s+ cReal(p) * +p.stock,0); // v240: costo real (facturas)
+  const valorRep = rows.reduce((s,p)=>s+ +p.costo * +p.stock,0);
   const valorV = rows.reduce((s,p)=>s+ +p.precio * +p.stock,0);
   const ganancia = valorV/1.16 - valorC;
   const k = $('inv-kpis');
   if(k) k.innerHTML = `
-    <div class="kpi"><div class="l">Valor a costo (sin IVA)</div><div class="v">${fmt(valorC)}</div><div class="s">con IVA: <b>${fmt(Math.round(valorC*116)/100)}</b></div></div>
+    <div class="kpi" title="Lo que realmente pagaste por lo que hay en inventario: promedio ponderado de las facturas, ya con notas de crédito y descuentos de pronto pago"><div class="l">Valor a costo real (sin IVA)</div><div class="v">${fmt(valorC)}</div><div class="s">con IVA: <b>${fmt(Math.round(valorC*116)/100)}</b> · a costo de reposición: ${fmt(valorRep)}</div></div>
     <div class="kpi"><div class="l">Valor a precio de venta</div><div class="v">${fmt(valorV)}</div><div class="s">ya con IVA incluido</div></div>
     <div class="kpi"><div class="l">Ganancia si se vende todo</div><div class="v">${fmt(Math.round(ganancia*100)/100)}</div><div class="s">venta sin IVA − costo</div></div>`;
   $('inv-pie').textContent = `Mostrando ${Math.min(rows.length,400)} de ${rows.length} filtrado(s) · ${invData.length} productos en total — las tarjetas de arriba se recalculan con los filtros`;
@@ -5413,7 +5423,7 @@ async function desplazamientoPed(id){
       const pct = recU>0 ? Math.min(999, v.pz / recU * 100) : 0;
       const stock = +(p.stock||0);
       return {pid, dsd:dP[pid], cod:p.codigo||'', desc:p.descripcion||'', gr, recU, vpz:v.pz, v$:v.$, vu:v.$-v.c, pct, stock,
-        stCosto: stock * (gr ? +(p.costo||0)/f : +(p.costo||0)), stVenta: stock * precioUnidad(p), costoCompra:r.costoCompra};
+        stCosto: stock * (gr ? cReal(p)/f : cReal(p)), stVenta: stock * precioUnidad(p), costoCompra:r.costoCompra};
     }).sort((a,b)=>b.v$-a.v$ || a.desc.localeCompare(b.desc));
     const T = filas.reduce((s,x)=>({rec:s.rec+x.recU, vpz:s.vpz+x.vpz, v$:s.v$+x.v$, vu:s.vu+x.vu, stC:s.stC+x.stCosto, stV:s.stV+x.stVenta, cc:s.cc+x.costoCompra}), {rec:0,vpz:0,v$:0,vu:0,stC:0,stV:0,cc:0});
     const cero = filas.filter(x=>x.vpz<=0);
@@ -10167,7 +10177,7 @@ async function vEstrella(){
     if(desde) q = q.gte('ventas.fecha', desde.toISOString()); return q.order('id'); }; // builder nuevo por página (traerTodo pagina)
   const [items, prods, recs] = await Promise.all([
     traerTodo(mk),
-    traerTodo(()=>sb.from('productos').select('id,codigo,descripcion,categoria,stock,precio,costo,granel,unidad_venta,activo').order('id')),
+    traerTodo(()=>sb.from('productos').select('id,codigo,descripcion,categoria,stock,precio,costo,costo_real,granel,unidad_venta,activo').order('id')),
     traerTodo(()=>sb.from('pedido_compra_items').select('producto_id,pedidos_compra(proveedores(nombre))').gt('cantidad_recibida', 0).order('id')), // v195
   ]);
   const provMap = {}; (recs||[]).forEach(x=>{ const n = x.pedidos_compra && x.pedidos_compra.proveedores && x.pedidos_compra.proveedores.nombre; if(n) provMap[x.producto_id] = n; });
@@ -10190,15 +10200,15 @@ async function vEstrella(){
   const filas = [...agg.values()].map(a=>{ const p = P.get(a.id)||{}; const neto = a.importe/1.16; const util = neto - a.costo;
     const ritmo = a.unidades/dias; const diasStock = ritmo>0 ? (+p.stock||0)/ritmo : null;
     totVenta += a.importe; totUtil += util;
-    return {id:a.id, prov:provDe(a.id), costoU:+p.costo||0, cod:p.codigo||'?', desc:p.descripcion||'(producto borrado)', cat:p.categoria||'', unidades:a.unidades, tickets:a.tickets.size, importe:a.importe,
+    return {id:a.id, prov:provDe(a.id), costoU:cReal(p), cod:p.codigo||'?', desc:p.descripcion||'(producto borrado)', cat:p.categoria||'', unidades:a.unidades, tickets:a.tickets.size, importe:a.importe,
       utilidad:util, margen: neto>0 ? util/neto : null, stock:+p.stock||0, granel:!!p.granel, u:p.unidad_venta||'pza', dias:diasStock, ultima:a.ultima, precio:+p.precio||0}; });
   // clase ABC por importe acumulado
   filas.sort((a,b)=>b.importe-a.importe);
   let acum = 0; filas.forEach(f=>{ acum += f.importe; f.pct = totVenta>0 ? f.importe/totVenta : 0; f.acum = totVenta>0 ? acum/totVenta : 0; f.clase = f.acum<=0.80 ? 'A' : (f.acum<=0.95 ? 'B' : 'C'); });
   const nA = filas.filter(f=>f.clase==='A').length;
   // v195: productos con existencia que no se vendieron (para "incluir lo que no se vendió" y el inventario por proveedor)
-  const sinVenta = (prods||[]).filter(p=>p.activo!==false && +p.stock>0 && !agg.has(p.id)).map(p=>({id:p.id, prov:provDe(p.id), costoU:+p.costo||0, cod:p.codigo||'?', desc:p.descripcion||'', cat:p.categoria||'', unidades:0, tickets:0, importe:0, utilidad:0, margen:null, stock:+p.stock||0, granel:!!p.granel, u:p.unidad_venta||'pza', dias:null, ultima:null, precio:+p.precio||0, pct:0, acum:1, clase:'—', sinVenta:true}));
-  const invProv = {}; (prods||[]).filter(p=>p.activo!==false && +p.stock>0).forEach(p=>{ const k = provDe(p.id); if(!invProv[k]) invProv[k]={n:0, valor:0}; invProv[k].n++; invProv[k].valor += (+p.stock)*(+p.costo||0); });
+  const sinVenta = (prods||[]).filter(p=>p.activo!==false && +p.stock>0 && !agg.has(p.id)).map(p=>({id:p.id, prov:provDe(p.id), costoU:cReal(p), cod:p.codigo||'?', desc:p.descripcion||'', cat:p.categoria||'', unidades:0, tickets:0, importe:0, utilidad:0, margen:null, stock:+p.stock||0, granel:!!p.granel, u:p.unidad_venta||'pza', dias:null, ultima:null, precio:+p.precio||0, pct:0, acum:1, clase:'—', sinVenta:true}));
+  const invProv = {}; (prods||[]).filter(p=>p.activo!==false && +p.stock>0).forEach(p=>{ const k = provDe(p.id); if(!invProv[k]) invProv[k]={n:0, valor:0}; invProv[k].n++; invProv[k].valor += (+p.stock)*cReal(p); });
   estData = {filas, sinVenta, invProv, totVenta, totUtil, dias, nProd: filas.length, nA, nVentas: new Set((items||[]).map(x=>x.venta_id)).size};
   const provs = [...new Set([...filas.map(f=>f.prov), ...Object.keys(invProv)])].sort();
   $('est-prov').innerHTML = '<option value="">Todos los proveedores</option>' + provs.map(c=>`<option value="${esc(c)}"${window._estProv===c?' selected':''}>${esc(c)}</option>`).join('');
@@ -10321,7 +10331,7 @@ async function vDormida(){
   </div>`;
   const [items, prods, recs] = await Promise.all([
     traerTodo(()=>sb.from('venta_items').select('producto_id,ventas!inner(fecha,cancelada,notas)').eq('ventas.cancelada', false).not('producto_id','is',null).order('id')),
-    traerTodo(()=>sb.from('productos').select('id,codigo,descripcion,categoria,stock,precio,costo,granel,unidad_venta,activo').gt('stock', 0).order('id')),
+    traerTodo(()=>sb.from('productos').select('id,codigo,descripcion,categoria,stock,precio,costo,costo_real,granel,unidad_venta,activo').gt('stock', 0).order('id')),
     traerTodo(()=>sb.from('pedido_compra_items').select('producto_id,pedidos_compra(fecha,fecha_recibido,proveedores(nombre))').gt('cantidad_recibida', 0).order('id')),
   ]);
   const ult = {}; let inicio = null;
@@ -10332,7 +10342,7 @@ async function vDormida(){
   const filas = (prods||[]).filter(p=>p.activo!==false && +p.stock>0).map(p=>{
     const u = ult[p.id] || null, e = ent[p.id] || null;
     const ref = [u, e].filter(Boolean).sort().pop() || inicio; // dormido desde la última venta o la última entrada (lo más reciente)
-    return {id:p.id, cod:p.codigo||'?', desc:p.descripcion||'', cat:p.categoria||'', stock:+p.stock, precio:+p.precio||0, costo:+p.costo||0, granel:!!p.granel, u:p.unidad_venta||'pza',
+    return {id:p.id, cod:p.codigo||'?', desc:p.descripcion||'', cat:p.categoria||'', stock:+p.stock, precio:+p.precio||0, costo:cReal(p), granel:!!p.granel, u:p.unidad_venta||'pza',
       prov: prov[p.id] || 'Indar (inventario inicial)', ultima:u, entrada:e, nunca:!u, dias: ref ? dd(ref) : null};
   });
   dormData = {filas, inicio};
