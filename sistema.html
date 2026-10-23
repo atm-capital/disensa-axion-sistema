@@ -1358,6 +1358,99 @@ async function exportarVentasExcel(){
   logEv('descarga','Excel de ventas: '+rows.length+' ventas ('+(window._vtPer||'mes')+')');
   toast('Excel descargado: '+rows.length+' venta(s) con sus partidas ✓');
 }
+/* ===== v237 (23-oct-2026): 📧 ENVIAR FACTURA AL CLIENTE desde ventas@axiontools.mx =====
+   Se adjuntan el XML y el PDF, sale por la función "enviar-correo" de Supabase (SMTP de Titan) y llega copia a ventas@.
+   Queda anotado en la venta ("FACTURA D-15 enviada a ... el ..."). */
+async function mfInvocar(body){
+  const r = await sb.functions.invoke('enviar-correo', {body});
+  if(r.error){ let m = r.error.message||'Error'; try{ const t = await r.error.context.json(); if(t && t.error) m = t.error; }catch(e){} throw new Error(m); }
+  if(r.data && r.data.error) throw new Error(r.data.error);
+  return r.data;
+}
+async function enviarFacturaVenta(ventaId){
+  const [v, it] = await Promise.all([
+    sb.from('ventas').select('id,folio,fecha,total,metodo_pago,notas,cliente_id,clientes(nombre,correo,rfc,credito_plazo)').eq('id', ventaId).single(),
+    sb.from('venta_items').select('cantidad,productos(descripcion)').eq('venta_id', ventaId)]);
+  if(v.error||!v.data){ toast('No encontré la venta', true); return; }
+  const V = v.data, C = V.clientes||{};
+  let pago = ''; try{ pago = localStorage.getItem('ax_mail_pago')||''; }catch(e){}
+  window._mf = {V, C, items:(it.data||[]), x:null, pdf:null, xml:null};
+  const ya = (String(V.notas||'').match(/FACTURA [^·]*enviada[^·]*/gi)||[]);
+  abrirModal(`<h3>📧 Enviar factura · venta #${V.folio}${C.nombre?' · '+esc(C.nombre):''}</h3>
+    <p class="small muted" style="margin:0 0 8px">Sale desde <b>ventas@axiontools.mx</b> con el XML y el PDF adjuntos; te llega una copia a ese mismo correo.${ya.length?`<br><b style="color:#b45309">Ya se envió antes: ${ya.map(esc).join(' · ')}</b>`:''}</p>
+    <div class="card" style="padding:10px;margin:0 0 10px;background:#eef6ff;border:1px solid #bfdbfe">
+      <input type="file" id="mf-files" accept=".xml,.pdf,application/xml,text/xml,application/pdf" multiple onchange="mfLeer()" style="display:block">
+      <div id="mf-info" class="small" style="margin-top:6px">Elige el XML y el PDF de la factura juntos (Ctrl + clic).</div></div>
+    <div class="frow"><div class="field"><label>Para</label><input id="mf-to" value="${esc(C.correo||'')}" placeholder="correo@cliente.com"></div>
+      <div class="field"><label>CC (opcional)</label><input id="mf-cc" placeholder="cuentasporpagar@cliente.com"></div></div>
+    <div class="field"><label>Asunto</label><input id="mf-subj"></div>
+    <div class="field"><label>Mensaje</label><textarea id="mf-body" rows="13" style="width:100%;font-family:inherit;font-size:13px"></textarea></div>
+    <div class="field"><label>Datos para el pago <span class="muted small">(van al final del correo y se guardan para la próxima)</span></label><textarea id="mf-pago" rows="3" style="width:100%;font-family:inherit;font-size:13px" placeholder="Banco · cuenta · CLABE a nombre de Administradora de Productividad S.A. de C.V.">${esc(pago)}</textarea></div>
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cancelar</button><button class="btn" id="mf-btn" onclick="mfEnviar()" disabled>📧 Enviar</button></div>`, true);
+  mfTexto();
+}
+async function mfLeer(){
+  const files = [...($('mf-files').files||[])], info = $('mf-info'), M = window._mf; if(!files.length||!M) return;
+  M.x = null; M.pdf = null; M.xml = null;
+  for(const f of files){
+    if(/\.pdf$/i.test(f.name)){ M.pdf = f; continue; }
+    try{ const txt = (await f.text()).replace(/^\uFEFF/, ''); const d = fxParseXML(txt, f.name); if(!d) continue;
+      const doc = new DOMParser().parseFromString(txt, 'text/xml'), root = doc.documentElement;
+      const rc = doc.getElementsByTagName('cfdi:Receptor')[0] || doc.getElementsByTagName('Receptor')[0];
+      M.x = {...d, serie:root.getAttribute('Serie')||'', metodo:root.getAttribute('MetodoPago')||'', rfcRec: rc?(rc.getAttribute('Rfc')||''):'', nomRec: rc?(rc.getAttribute('Nombre')||''):''};
+      M.xml = f; }catch(e){}
+  }
+  const avisos = [];
+  if(!M.xml){ info.innerHTML = '<span style="color:#b91c1c">No encontré un XML válido (o viene vacío). Vuelve a bajarlo.</span>'; $('mf-btn').disabled = true; return; }
+  const X = M.x;
+  if(X.tipo !== 'I') avisos.push('el XML es tipo '+esc(X.tipo)+', no factura de ingreso');
+  if(M.C.rfc && X.rfcRec && X.rfcRec.toUpperCase() !== String(M.C.rfc).toUpperCase()) avisos.push('el RFC de la factura ('+esc(X.rfcRec)+') no es el del cliente ('+esc(M.C.rfc)+')');
+  if(Math.abs(+X.total - +M.V.total) > 0.5) avisos.push('la factura es por '+fmt(X.total)+' y la venta por '+fmt(M.V.total));
+  if(!M.pdf) avisos.push('falta el PDF (se manda solo el XML)');
+  info.innerHTML = `✅ Factura <b>${esc((X.serie?X.serie+'-':'')+X.folio)}</b> a <b>${esc(X.nomRec)}</b> (${esc(X.rfcRec)}) · ${fmt(X.total)} · ${esc(X.metodo)}${avisos.length?`<br><b style="color:#b45309">⚠️ Ojo: ${avisos.join(' · ')}</b>`:''}`;
+  $('mf-btn').disabled = false; mfTexto();
+}
+function mfTexto(){
+  const M = window._mf; if(!M) return; const V = M.V, C = M.C, X = M.x;
+  const fol = X ? (X.serie?X.serie+'-':'')+X.folio : '';
+  const tot = X ? +X.total : +V.total;
+  const fv = new Date(String(V.fecha).slice(0,10)+'T12:00:00');
+  const fl = d => d.toLocaleDateString('es-MX',{day:'numeric',month:'long',year:'numeric'});
+  const pl = +(C.credito_plazo||0), ven = new Date(fv); ven.setDate(ven.getDate()+pl);
+  const cred = V.metodo_pago==='credito' && pl>0;
+  $('mf-subj').value = `Factura ${fol||'#'+V.folio} · Administradora de Productividad · ${fmt(tot)}`;
+  $('mf-body').value = `Buen día${C.nombre?', equipo de '+C.nombre:''}:
+
+Les compartimos la factura ${fol} por ${fmt(tot)} (IVA incluido), correspondiente a la entrega del ${fl(fv)}:
+${M.items.map(i=>'  • '+(+i.cantidad)+' × '+((i.productos&&i.productos.descripcion)||'')).join('\n')}
+${X&&X.uuid?'\nFolio fiscal (UUID): '+X.uuid:''}${cred?'\nCondiciones: crédito a '+pl+' días · vence el '+fl(ven)+'.':''}
+
+${cred?'Les pedimos de favor ingresarla a revisión y programarla para pago.':'Quedamos atentos a cualquier duda.'} Si necesitan algún dato o documento adicional para darla de alta, con gusto se los enviamos.
+
+Saludos,
+Axion Tools
+Administradora de Productividad S.A. de C.V.
+ventas@axiontools.mx`;
+}
+async function mfEnviar(){
+  const M = window._mf; if(!M||!M.xml){ toast('Primero elige el XML y el PDF', true); return; }
+  const to = ($('mf-to').value||'').trim(); if(!/@/.test(to)){ toast('Escribe el correo del cliente', true); return; }
+  const btn = $('mf-btn'); btn.disabled = true; btn.textContent = 'Enviando…';
+  try{
+    const X = M.x, fol = (X.serie?X.serie+'-':'')+X.folio, base = 'ventas/'+M.V.id+'/'+(X.uuid||Date.now());
+    const att = [];
+    let u = await sb.storage.from('facturas').upload(base+'.xml', M.xml, {upsert:true, contentType:'text/xml'}); if(u.error) throw u.error;
+    att.push({path:base+'.xml', filename:'Factura_'+fol+'.xml'});
+    if(M.pdf){ u = await sb.storage.from('facturas').upload(base+'.pdf', M.pdf, {upsert:true, contentType:'application/pdf'}); if(u.error) throw u.error; att.push({path:base+'.pdf', filename:'Factura_'+fol+'.pdf'}); }
+    const pago = ($('mf-pago').value||'').trim(); try{ localStorage.setItem('ax_mail_pago', pago); }catch(e){}
+    let text = $('mf-body').value; if(pago) text += '\n\nDatos para el pago:\n'+pago;
+    const r = await mfInvocar({to, cc:($('mf-cc').value||'').trim(), subject:$('mf-subj').value, text, attachments:att});
+    const nota = 'FACTURA '+fol+' enviada a '+(r.to||[to]).join(', ')+' el '+hoyMX();
+    await sb.from('ventas').update({notas: [String(M.V.notas||'').trim(), nota].filter(Boolean).join(' · ')}).eq('id', M.V.id);
+    logEv('factura_enviada', 'venta #'+M.V.folio+' · '+nota);
+    cerrarModal(); toast('📧 Factura '+fol+' enviada a '+(r.to||[to]).join(', ')+' ✓ (copia en ventas@)');
+  }catch(e){ toast('No se envió: '+errMsg(e), true); btn.disabled = false; btn.textContent = '📧 Enviar'; }
+}
 async function verVenta(id){
   const {data, error} = await sb.from('venta_items').select('*, productos(codigo,descripcion)').eq('venta_id', id);
   if(error){ toast(errMsg(error),true); return; }
@@ -1366,12 +1459,13 @@ async function verVenta(id){
   // v159: desglose del pago (mixto) + botón del admin para corregir la forma de pago
   let pagoHtml = '';
   try{
-    const vv = await sb.from('ventas').select('id,folio,total,metodo_pago,cancelada,efectivo').eq('id', id).single();
+    const vv = await sb.from('ventas').select('id,folio,total,metodo_pago,cancelada,efectivo,cliente_id,notas').eq('id', id).single();
     if(vv.data){ const V = vv.data; let pg = [];
       if(V.metodo_pago==='mixto'){ const r = await sb.from('venta_pagos').select('metodo,monto').eq('venta_id', id); pg = r.data||[]; }
       const ic = {efectivo:'💵',tarjeta:'💳',transferencia:'🏦',ak_pago:'📱',credito:'📄',apartado:'📦',mixto:'🔀'};
       pagoHtml = `<p class="small" style="margin:0 0 8px">${ic[V.metodo_pago]||''} <b>Pago:</b> ${V.metodo_pago==='mixto' ? pg.map(p=>`${ic[p.metodo]||''} ${esc(p.metodo)} ${fmt(p.monto)}`).join(' + ') : esc(V.metodo_pago)+' '+fmt(V.total)}
-        ${esAdmin() && !V.cancelada && !['credito','apartado'].includes(V.metodo_pago) ? ` <button class="btn sm sec" onclick='cambiarPagoVenta(${JSON.stringify({id:V.id,folio:V.folio,total:+V.total,metodo:V.metodo_pago,pagos:pg})})'>✏️ Cambiar forma de pago</button>` : ''}</p>`;
+        ${esAdmin() && !V.cancelada && !['credito','apartado'].includes(V.metodo_pago) ? ` <button class="btn sm sec" onclick='cambiarPagoVenta(${JSON.stringify({id:V.id,folio:V.folio,total:+V.total,metodo:V.metodo_pago,pagos:pg})})'>✏️ Cambiar forma de pago</button>` : ''}
+        ${esFinanzas() && !V.cancelada && V.cliente_id ? ` <button class="btn sm" onclick="cerrarModal();enviarFacturaVenta(${V.id})">📧 Enviar factura</button>${/FACTURA [^·]*enviada/i.test(V.notas||'')?' <span class="small" style="color:#15803d">✓ '+esc((String(V.notas).match(/FACTURA [^·]*enviada[^·]*/i)||[''])[0])+'</span>':''}` : ''}</p>`;
     }
   }catch(e){}
   // v157: si la venta viene de un apartado, mostrar cómo y cuándo se pagó
