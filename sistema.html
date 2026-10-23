@@ -1373,7 +1373,7 @@ async function enviarFacturaVenta(ventaId){
     sb.from('venta_items').select('cantidad,productos(descripcion)').eq('venta_id', ventaId)]);
   if(v.error||!v.data){ toast('No encontré la venta', true); return; }
   const V = v.data, C = V.clientes||{};
-  let pago = ''; try{ pago = localStorage.getItem('ax_mail_pago')||''; }catch(e){}
+  let pago = '', aten = ''; try{ pago = localStorage.getItem('ax_mail_pago')||''; aten = localStorage.getItem('ax_mail_aten_'+V.cliente_id)||''; }catch(e){}
   window._mf = {V, C, items:(it.data||[]), x:null, pdf:null, xml:null};
   const ya = (String(V.notas||'').match(/FACTURA [^·]*enviada[^·]*/gi)||[]);
   abrirModal(`<h3>📧 Enviar factura · venta #${V.folio}${C.nombre?' · '+esc(C.nombre):''}</h3>
@@ -1383,6 +1383,7 @@ async function enviarFacturaVenta(ventaId){
       <div id="mf-info" class="small" style="margin-top:6px">Elige el XML y el PDF de la factura juntos (Ctrl + clic).</div></div>
     <div class="frow"><div class="field"><label>Para</label><input id="mf-to" value="${esc(C.correo||'')}" placeholder="correo@cliente.com"></div>
       <div class="field"><label>CC (opcional)</label><input id="mf-cc" placeholder="cuentasporpagar@cliente.com"></div></div>
+    <div class="field"><label>Dirigido a <span class="muted small">(nombre de la persona; se recuerda para este cliente)</span></label><input id="mf-aten" value="${esc(aten)}" placeholder="Ej. Isela" oninput="mfSaludo()"></div>
     <div class="field"><label>Asunto</label><input id="mf-subj"></div>
     <div class="field"><label>Mensaje</label><textarea id="mf-body" rows="13" style="width:100%;font-family:inherit;font-size:13px"></textarea></div>
     <div class="field"><label>Datos para el pago <span class="muted small">(van al final del correo y se guardan para la próxima)</span></label><textarea id="mf-pago" rows="3" style="width:100%;font-family:inherit;font-size:13px" placeholder="Banco · cuenta · CLABE a nombre de Administradora de Productividad S.A. de C.V.">${esc(pago)}</textarea></div>
@@ -1410,6 +1411,8 @@ async function mfLeer(){
   info.innerHTML = `✅ Factura <b>${esc((X.serie?X.serie+'-':'')+X.folio)}</b> a <b>${esc(X.nomRec)}</b> (${esc(X.rfcRec)}) · ${fmt(X.total)} · ${esc(X.metodo)}${avisos.length?`<br><b style="color:#b45309">⚠️ Ojo: ${avisos.join(' · ')}</b>`:''}`;
   $('mf-btn').disabled = false; mfTexto();
 }
+function mfSaludoTxt(){ const M = window._mf, a = (($('mf-aten')&&$('mf-aten').value)||'').trim(); return 'Buen día'+(a?' '+a:(M&&M.C.nombre?', equipo de '+M.C.nombre:''))+':'; } // v239
+function mfSaludo(){ const b = $('mf-body'); if(!b) return; const l = b.value.split('\n'); if(/^Buen d[ií]a/i.test(l[0]||'')) l[0] = mfSaludoTxt(); else l.unshift(mfSaludoTxt(), ''); b.value = l.join('\n'); }
 function mfTexto(){
   const M = window._mf; if(!M) return; const V = M.V, C = M.C, X = M.x;
   const fol = X ? (X.serie?X.serie+'-':'')+X.folio : '';
@@ -1419,7 +1422,7 @@ function mfTexto(){
   const pl = +(C.credito_plazo||0), ven = new Date(fv); ven.setDate(ven.getDate()+pl);
   const cred = V.metodo_pago==='credito' && pl>0;
   $('mf-subj').value = `Factura ${fol||'#'+V.folio} · Administradora de Productividad · ${fmt(tot)}`;
-  $('mf-body').value = `Buen día${C.nombre?', equipo de '+C.nombre:''}:
+  $('mf-body').value = `${mfSaludoTxt()}
 
 Les compartimos la factura ${fol} por ${fmt(tot)} (IVA incluido), correspondiente a la entrega del ${fl(fv)}:
 ${M.items.map(i=>'  • '+(+i.cantidad)+' × '+((i.productos&&i.productos.descripcion)||'')).join('\n')}
@@ -1442,7 +1445,7 @@ async function mfEnviar(){
     let u = await sb.storage.from('facturas').upload(base+'.xml', M.xml, {upsert:true, contentType:'text/xml'}); if(u.error) throw u.error;
     att.push({path:base+'.xml', filename:'Factura_'+fol+'.xml'});
     if(M.pdf){ u = await sb.storage.from('facturas').upload(base+'.pdf', M.pdf, {upsert:true, contentType:'application/pdf'}); if(u.error) throw u.error; att.push({path:base+'.pdf', filename:'Factura_'+fol+'.pdf'}); }
-    const pago = ($('mf-pago').value||'').trim(); try{ localStorage.setItem('ax_mail_pago', pago); }catch(e){}
+    const pago = ($('mf-pago').value||'').trim(); try{ localStorage.setItem('ax_mail_pago', pago); localStorage.setItem('ax_mail_aten_'+M.V.cliente_id, ($('mf-aten').value||'').trim()); }catch(e){}
     let text = $('mf-body').value; if(pago) text += '\n\nDatos para el pago:\n'+pago;
     const r = await mfInvocar({to, cc:($('mf-cc').value||'').trim(), subject:$('mf-subj').value, text, attachments:att});
     const nota = 'FACTURA '+fol+' enviada a '+(r.to||[to]).join(', ')+' el '+hoyMX();
