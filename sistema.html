@@ -7488,7 +7488,7 @@ async function calcularDinero(hoy){
     // v122: se compara contra el MOMENTO exacto de la captura (lo de antes ya viene dentro del saldo capturado)
     const desdeISO = D.cap.creado || new Date(D.cap.fecha+'T00:00:00').toISOString();
     // ENTRÓ: ventas no-crédito DESPUÉS de la captura
-    const vts = await traerTodo(()=>sb.from('ventas').select('total,metodo_pago,cancelada,efectivo,notas').gt('fecha', desdeISO).eq('cancelada',false).order('id'));
+    const vts = await traerTodo(()=>sb.from('ventas').select('id,total,metodo_pago,cancelada,efectivo,notas').gt('fecha', desdeISO).eq('cancelada',false).order('id'));
     const vivasV = (vts||[]).filter(v=>v.metodo_pago!=='credito' && v.metodo_pago!=='apartado' && noCP(v)); // v157: apartado → el dinero entra por sus pagos
     D.entroVentas = vivasV.reduce((s,v)=>s+ +v.total,0);
     // v157: pagos de apartados después de la captura — efectivo al cajón (caja_movs origen 'apartado'), lo demás al banco
@@ -7525,6 +7525,18 @@ async function calcularDinero(hoy){
     // v124: banco y efectivo por separado; el total es la suma
     // v167: depósitos de efectivo a la cuenta después de la captura → entran al banco
     D.depositosDesde = (dpc.data||[]).filter(d=> d.creado ? String(d.creado) > String(desdeISO) : String(d.fecha) > String(D.cap.fecha)).reduce((s,d)=>s+ +d.monto,0);
+    // v241: lo que entró a BBVA desde la captura (tarjeta de la terminal + depósitos de efectivo) = lo que falta pasar a Azteca
+    try{
+      D.bbvaTarjeta = vivasV.filter(v=>v.metodo_pago==='tarjeta').reduce((s,v)=>s+ +v.total,0);
+      const mixIds = (vts||[]).filter(v=>v.metodo_pago==='mixto' && !v.cancelada).map(v=>v.id).filter(Boolean);
+      if(mixIds.length){ const vp = await sb.from('venta_pagos').select('metodo,monto').in('venta_id', mixIds); D.bbvaTarjeta += (vp.data||[]).filter(p=>p.metodo==='tarjeta').reduce((s,p)=>s+ +p.monto,0); }
+      const apT = await sb.from('apartado_pagos').select('monto,metodo').gt('creado', desdeISO).eq('metodo','tarjeta'); D.bbvaTarjeta += (apT.data||[]).reduce((s,p)=>s+ +p.monto,0);
+      const ccT = await sb.from('cobros_credito').select('monto,metodo').gt('creado', desdeISO).eq('metodo','tarjeta'); D.bbvaTarjeta += (ccT.data||[]).reduce((s,p)=>s+ +p.monto,0);
+      D.bbvaComision = Math.round(D.bbvaTarjeta*0.005*100)/100;
+      D.bbvaPendiente = Math.round((D.otros + D.bbvaTarjeta - D.bbvaComision + (D.depositosDesde||0))*100)/100;
+      const ud = await sb.from('depositos_cuenta').select('id,fecha,monto,referencia,comprobante_path,nombre,creado').order('fecha',{ascending:false}).order('id',{ascending:false}).limit(6);
+      D.ultDepositos = ud.data||[]; D.desdeISO = desdeISO;
+    }catch(e){}
     D.bancoHoy = Math.round((D.banco + D.otros + D.entroAportes + cobrosNoEf + (D.entroVentas - ventasEf) + (D.depositosDesde||0) - (D.salioPagos - pagosEf) - (D.salioGastos - gastosEf) - (D.fondeosDesde||0) + (D.apBanco||0))*100)/100;
     // v167: efectivo en cajas = cajón de HOY + caja chica anclada al conteo (ya NO se vuelven a sumar las ventas desde la captura: estaban doble)
     const hoyS = hoyMX();
@@ -7542,6 +7554,22 @@ async function calcularDinero(hoy){
     D.dias = Math.round((hoy - new Date(D.cap.fecha+'T00:00:00'))/864e5);
   }catch(e){ D.ok = false; }
   return D;
+}
+function panelBbva(D){ // v241: depósitos de efectivo + lo que falta pasar de BBVA a Azteca
+  if(D.bbvaPendiente===undefined) return '';
+  const dd = D.ultDepositos||[];
+  const nuevo = d => d.creado ? String(d.creado) > String(D.desdeISO) : String(d.fecha) > String(D.desde);
+  return `<div style="margin-top:12px;padding:10px 12px;border:1px solid #bfdbfe;background:#eef6ff;border-radius:10px">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:6px">
+      <b>🏦 Por pasar de BBVA a Azteca: <span style="font-size:19px;color:#1d4ed8">${fmt(D.bbvaPendiente)}</span></b>
+      <span class="small muted">desde la captura del ${fecha(D.desde)}</span></div>
+    <div class="small" style="margin:4px 0 8px">Depósitos de efectivo ${fmt(D.depositosDesde||0)} · tarjeta (terminal) ${fmt(D.bbvaTarjeta)} − comisión aprox. ${fmt(D.bbvaComision)}${D.otros?` · pendiente de la captura anterior ${fmt(D.otros)}`:''}.
+      <span class="muted">Si ya hiciste un traspaso, se pone en ceros al capturar el saldo de Azteca.</span></div>
+    ${dd.length?`<div class="tbl-scroll"><table><thead><tr><th>Depósito</th><th class="num">Monto</th><th>Referencia</th><th>Quién</th><th></th></tr></thead><tbody>
+      ${dd.map(d=>`<tr><td>${fecha(d.fecha)}${nuevo(d)?' <span class="badge b-azul">por pasar</span>':''}</td><td class="num">${fmt(d.monto)}</td><td class="small">${esc(d.referencia||'—')}</td><td class="small">${esc(d.nombre||'—')}</td>
+        <td>${d.comprobante_path?`<button class="btn sm sec" onclick="verPdfFactura('${esc(d.comprobante_path)}')">📎 Ticket</button>`:''}</td></tr>`).join('')}
+      </tbody></table></div><p class="small muted" style="margin:4px 0 0">Todos los depósitos están en Corte de caja → 🏦 Depósitos a la cuenta.</p>`:'<p class="small muted" style="margin:0">Todavía no hay depósitos registrados.</p>'}
+  </div>`;
 }
 function panelDinero(D){
   if(!D.ok) return `<div class="card" style="margin-bottom:14px;border-left:4px solid var(--ambar)">
@@ -7570,6 +7598,7 @@ function panelDinero(D){
         <div class="v" style="font-size:19px"><span style="color:#15803d">+${fmt(D.entroVentas + (D.entroAportes||0))}</span> · <span style="color:#b91c1c">−${fmt(D.salioPagos + D.salioGastos)}</span></div>
         <div class="s">entró: ventas${D.entroAportes?' y aportaciones':''} · salió: pagos y gastos</div></div>
     </div>
+    ${panelBbva(D)}
     <div class="acciones" style="margin-top:8px">
       <button class="btn" onclick="capturarSaldo()">💵 Capturar saldo real de hoy</button>
       <button class="btn sec" onclick="historialSaldos()">📜 Historial y diferencias</button></div>
