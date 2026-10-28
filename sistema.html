@@ -7555,6 +7555,31 @@ async function calcularDinero(hoy){
   }catch(e){ D.ok = false; }
   return D;
 }
+async function exportarCxpExcel(){ // v242: cuentas por pagar a Excel (pedido de Hans)
+  if(typeof XLSX==='undefined'){ toast('No cargó la librería de Excel, recarga la página', true); return; }
+  toast('Armando el Excel…');
+  const [c, p] = await Promise.all([
+    traerTodo(()=>sb.from('cuentas_pagar').select('id,concepto,referencia,fecha_emision,fecha_vencimiento,monto,saldo,estado,proveedores(nombre)').order('fecha_vencimiento')),
+    traerTodo(()=>sb.from('pagos_cxp').select('id,fecha,monto,metodo,referencia,descuento,cuenta_id').order('fecha'))]);
+  const R = x => Math.round((+x||0)*100)/100, hoy = new Date(hoyMX()+'T00:00:00');
+  const C = {}; (c||[]).forEach(x=>{ C[x.id]=x; });
+  const fila = x => { const dias = x.fecha_vencimiento ? Math.ceil((new Date(x.fecha_vencimiento+'T00:00:00')-hoy)/864e5) : null;
+    return { Proveedor:(x.proveedores&&x.proveedores.nombre)||'', Concepto:x.concepto||'', Referencia:x.referencia||'', 'Emisión':x.fecha_emision||'', Vence:x.fecha_vencimiento||'',
+      'Días para vencer': (+x.saldo>0 && dias!==null) ? dias : '', Estado: +x.saldo>0 ? (dias!==null && dias<0 ? 'VENCIDA' : 'por pagar') : (x.estado||'pagada'),
+      Monto:R(x.monto), Pagado:R(+x.monto - +x.saldo), Saldo:R(x.saldo) }; };
+  const pend = (c||[]).filter(x=>+x.saldo>0.005).map(fila);
+  const tot = pend.reduce((s,x)=>s+x.Saldo,0), venc = pend.filter(x=>x.Estado==='VENCIDA').reduce((s,x)=>s+x.Saldo,0);
+  pend.push({}); pend.push({Proveedor:'TOTAL POR PAGAR', Saldo:R(tot)}); pend.push({Proveedor:'de eso, VENCIDO', Saldo:R(venc)});
+  const todas = (c||[]).map(fila);
+  const pagos = (p||[]).map(x=>{ const k=C[x.cuenta_id]||{}; return { Fecha:x.fecha||'', Proveedor:(k.proveedores&&k.proveedores.nombre)||'', Concepto:k.concepto||'', Monto:R(x.monto), 'Descuento pronto pago':R(x.descuento), 'Método':x.metodo||'', Referencia:x.referencia||'' }; });
+  const wb = XLSX.utils.book_new(), cols=[{wch:28},{wch:42},{wch:18},{wch:11},{wch:11},{wch:9},{wch:10},{wch:12},{wch:12},{wch:12}];
+  const w1 = XLSX.utils.json_to_sheet(pend); w1['!cols']=cols;
+  const w2 = XLSX.utils.json_to_sheet(todas); w2['!cols']=cols;
+  const w3 = XLSX.utils.json_to_sheet(pagos); w3['!cols']=[{wch:11},{wch:28},{wch:42},{wch:12},{wch:12},{wch:13},{wch:34}];
+  XLSX.utils.book_append_sheet(wb, w1, 'Por pagar'); XLSX.utils.book_append_sheet(wb, w2, 'Todas las cuentas'); XLSX.utils.book_append_sheet(wb, w3, 'Pagos hechos');
+  XLSX.writeFile(wb, 'Cuentas_por_pagar_Axion_'+hoyMX()+'.xlsx');
+  logEv('descarga','Excel cuentas por pagar: '+(pend.length-3)+' pendientes, '+fmt(tot));
+}
 function panelBbva(D){ // v241: depósitos de efectivo + lo que falta pasar de BBVA a Azteca
   if(D.bbvaPendiente===undefined) return '';
   const dd = D.ultDepositos||[];
@@ -7755,7 +7780,7 @@ async function vFinanzas(){
       </div>
     </div>
     <div class="card" data-ftab="pagar" id="fin-cxp"><h3>💳 Cuentas por pagar</h3>
-      <div style="margin:6px 0 10px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn sm" id="cxpf-pend" onclick="finFiltroCxp('pend')">Por pagar</button><button class="btn sm sec" id="cxpf-venc" onclick="finFiltroCxp('venc')">Vencidas</button><button class="btn sm sec" id="cxpf-todas" onclick="finFiltroCxp('todas')">Todas</button>
+      <div style="margin:6px 0 10px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn sm" id="cxpf-pend" onclick="finFiltroCxp('pend')">Por pagar</button><button class="btn sm sec" id="cxpf-venc" onclick="finFiltroCxp('venc')">Vencidas</button><button class="btn sm sec" id="cxpf-todas" onclick="finFiltroCxp('todas')">Todas</button><button class="btn sm sec" onclick="exportarCxpExcel()" title="Descarga un Excel con lo que se debe, todas las cuentas y los pagos hechos">📥 Excel</button>
         ${esAdmin()?`<span style="flex:1"></span><button class="btn sm" onclick="asistentePago()">💸 Pagar lo que se vence</button>`:''}
       </div>
       <div class="card" id="cxp-barra" style="display:none;position:sticky;top:56px;z-index:9;background:#fffbeb;border:2px solid var(--ambar);padding:12px;margin-bottom:10px"></div>
