@@ -757,9 +757,9 @@ function finFiltroCxp(f){
   });
 }
 /* ===== v204: FINANZAS con pestañas arriba + facturas plegadas por mes ===== */
-const FIN_TABS = [['resumen','📊','Resumen'],['pagar','💳','Por pagar'],['facturas','🧾','Facturas'],['gastos','💸','Gastos'],['cobrar','📄','Por cobrar'],['socios','🤝','Socios'],['ak','📱','AK Pago'],['todo','🗂️','Todo']];
+const FIN_TABS = [['resumen','📊','Resumen'],['pagar','💳','Por pagar'],['facturas','🧾','Facturas'],['gastos','💸','Gastos'],['cobrar','📄','Por cobrar'],['socios','🤝','Socios'],['nomina','👥','Nómina'],['ak','📱','AK Pago'],['todo','🗂️','Todo']];
 function finTabsHtml(n){ // v208: barra blanca tipo tarjeta + pestañas de texto con subrayado y su dato abajo
-  const sub = {resumen:'dinero y pendientes', pagar: n.pagar>0 ? fmt(n.pagar) : 'al día', facturas: n.facturas+' archivadas', gastos: fmt(n.gastos)+' del mes', cobrar:'crédito a clientes', socios:'aportaciones', ak:'monedero', todo:'todo junto'};
+  const sub = {resumen:'dinero y pendientes', pagar: n.pagar>0 ? fmt(n.pagar) : 'al día', facturas: n.facturas+' archivadas', gastos: fmt(n.gastos)+' del mes', cobrar:'crédito a clientes', socios:'aportaciones', nomina:'quincenas', ak:'monedero', todo:'todo junto'};
   const alerta = {pagar: n.vencido>0};
   return `<style>
     #fin-tabs{position:sticky;top:0;z-index:15;background:var(--fondo);padding:2px 0 12px;margin-bottom:6px}
@@ -774,7 +774,7 @@ function finTabsHtml(n){ // v208: barra blanca tipo tarjeta + pestañas de texto
     .fintab .pt{width:6px;height:6px;border-radius:50%;background:#c0392b;display:inline-block}
   </style>
   <div id="fin-tabs"><div class="barra">
-    ${FIN_TABS.filter(t=>esFinanzas() || !['socios','ak'].includes(t[0])).map(t=>`<button class="fintab" id="fint-${t[0]}" onclick="finTab('${t[0]}')"><span class="tt">${t[2]}${alerta[t[0]]?'<span class="pt" title="Hay vencido"></span>':''}</span><span class="sb">${esc(sub[t[0]]||'')}</span></button>`).join('')}
+    ${FIN_TABS.filter(t=>esFinanzas() || !['socios','ak','nomina'].includes(t[0])).map(t=>`<button class="fintab" id="fint-${t[0]}" onclick="finTab('${t[0]}')"><span class="tt">${t[2]}${alerta[t[0]]?'<span class="pt" title="Hay vencido"></span>':''}</span><span class="sb">${esc(sub[t[0]]||'')}</span></button>`).join('')}
   </div></div>`;
 }
 function finTab(t, noGuardar){
@@ -7427,6 +7427,197 @@ async function guardarPagoFijo(id){
   logEv('finanzas','gasto fijo pagado: '+f.concepto+' '+mesN+' '+fmt(monto)+' ('+metodo+')');
   vFinanzas();
 }
+// v244: MÓDULO DE NÓMINA — el contador da el neto; aquí se suman bonos, se paga la quincena (gasto en Finanzas)
+// y se llevan las obligaciones del patrón que se pagan después (IMSS, INFONAVIT, ISR retenido, ISN Jalisco 3%).
+const NOM_OBLIG = [
+  {k:'IMSS', t:'🏥 IMSS (cuotas obrero-patronales)', d:'SUA mensual · lo calcula el contador'},
+  {k:'ISR', t:'🧾 ISR retenido a trabajadores', d:'declaración mensual SAT'},
+  {k:'ISN', t:'🏛️ ISN Jalisco 3%', d:'impuesto sobre nómina del estado'},
+  {k:'INFONAVIT', t:'🏠 INFONAVIT (aportación 5% + créditos)', d:'bimestral · se paga con el SUA de los meses pares', bim:true},
+];
+function nomMes(){ return window._nomMes || hoyMX().slice(0,7); }
+function nomMoverMes(n){ const [y,m] = nomMes().split('-').map(Number); const d = new Date(y, m-1+n, 1); window._nomMes = d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); pintarNomina(); }
+function nomMesNombre(ym){ const d = new Date(ym+'-15T12:00:00'); const s = d.toLocaleDateString('es-MX',{month:'long', year:'numeric'}); return s.charAt(0).toUpperCase()+s.slice(1); }
+function nomQNum(per){ const [y,m,q] = per.split('-').map(Number); return (m-1)*2+q; } // Q del año como lo pone el banco ("NOMINA Q 20")
+function nomPerNombre(per){ const q = +per.split('-')[2]; return (q===1?'1ª':'2ª')+' quincena · Q'+nomQNum(per); }
+function nomVence(ym){ const [y,m] = ym.split('-').map(Number); const d = new Date(y, m, 17); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-17'; } // día 17 del mes siguiente
+async function pintarNomina(){
+  const el = $('nomina-panel'); if(!el) return;
+  const ym = nomMes(), hoy = hoyMX();
+  const [re, rp, ro] = await Promise.all([
+    sb.from('nomina_empleados').select('*').order('id'),
+    sb.from('nomina_pagos').select('*').like('periodo', ym+'-%').order('id'),
+    sb.from('nomina_obligaciones').select('*').order('vence')]);
+  if(re.error){ el.innerHTML = '<p class="small muted">Para activar la nómina corre <b>65_nomina.sql</b> en Supabase (SQL Editor).</p>'; return; }
+  const emps = re.data||[]; window._nomEmps = emps; const E = {}; emps.forEach(e=>E[e.id]=e);
+  const pagos = rp.data||[], obl = ro.data||[]; window._nomObl = obl;
+  const activos = emps.filter(e=>e.activo);
+  const Q = [ym+'-1', ym+'-2'].map(per=>{ const ps = pagos.filter(p=>p.periodo===per);
+    const vence = per.endsWith('-1') ? ym+'-15' : ym+'-'+String(new Date(+ym.slice(0,4), +ym.slice(5,7), 0).getDate()).padStart(2,'0');
+    return {per, ps, vence, total: ps.reduce((s,p)=>s+ +p.total,0), bono: ps.reduce((s,p)=>s+ +p.bono,0), falta: activos.filter(e=>!ps.some(p=>p.empleado_id===e.id))}; });
+  const nomMesTot = Q.reduce((s,q)=>s+q.total,0), bonosMes = Q.reduce((s,q)=>s+q.bono,0);
+  // obligaciones de este mes (las de la nómina de este mes; INFONAVIT solo en mes par = cierre de bimestre)
+  const mesPar = +ym.slice(5,7) % 2 === 0;
+  const oMes = NOM_OBLIG.filter(o=>!o.bim || mesPar).map(o=>({o, r: obl.find(x=>x.tipo===o.k && x.periodo===ym)}));
+  const oPagadoMes = oMes.reduce((s,x)=>s+(x.r&&x.r.fecha_pago? +x.r.monto:0),0);
+  // pendientes de TODOS los meses: lo que ya tocaba y no se ha pagado (desde el primer mes con nómina en el sistema)
+  const rpAll = await sb.from('nomina_pagos').select('periodo');
+  const mesesNom = [...new Set((rpAll.data||[]).map(p=>p.periodo.slice(0,7)))].sort();
+  const pendTodos = [];
+  mesesNom.forEach(m=>{ const par = +m.slice(5,7)%2===0; NOM_OBLIG.filter(o=>!o.bim||par).forEach(o=>{ const r = obl.find(x=>x.tipo===o.k&&x.periodo===m); if(!(r&&r.fecha_pago)) pendTodos.push({o, m, r, vence:(r&&r.vence)||nomVence(m)}); }); });
+  pendTodos.sort((a,b)=>a.vence<b.vence?-1:1);
+  const vencidas = pendTodos.filter(p=>p.vence<hoy), prox = pendTodos.find(p=>p.vence>=hoy);
+  const B = {pagado:'<span class="badge b-verde">✓ pagado</span>', pend:'<span class="badge b-ambar">⏳ pendiente</span>', venc:'<span class="badge b-rojo">⚠️ vencido</span>', parcial:'<span class="badge b-ambar">½ falta gente</span>'};
+  const esHoyMes = ym === hoy.slice(0,7);
+  el.innerHTML = `
+    <div class="kpis" style="margin-bottom:10px">
+      <div class="kpi"><div class="l">Nómina pagada ${esc(nomMesNombre(ym))}</div><div class="v">${fmt(nomMesTot)}</div><div class="s">neto a trabajadores${bonosMes?' · de eso bonos '+fmt(bonosMes):''} · ${activos.length} empleado(s)</div></div>
+      <div class="kpi"><div class="l">Impuestos y cuotas del mes</div><div class="v">${fmt(oPagadoMes)}</div><div class="s">pagado de ${oMes.length} obligación(es) · se pagan el 17 del mes siguiente</div></div>
+      <div class="kpi" style="border-top-color:var(--azul)"><div class="l">Costo total de nómina</div><div class="v">${fmt(nomMesTot+oPagadoMes)}</div><div class="s">neto + impuestos/cuotas ya pagados del mes</div></div>
+      <div class="kpi" style="border-top-color:${vencidas.length?'var(--rojo)':(pendTodos.length?'var(--ambar)':'var(--verde)')}"><div class="l">Obligaciones por pagar</div><div class="v">${pendTodos.length}</div>
+        <div class="s">${vencidas.length?'<b style="color:#b91c1c">'+vencidas.length+' vencida(s)</b> · ':''}${prox?'próxima: '+esc(prox.o.k)+' '+esc(nomMesNombre(prox.m))+' vence '+fecha(prox.vence):(pendTodos.length?'':'todo al día')}</div></div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+      <button class="btn sm sec" onclick="nomMoverMes(-1)">◀</button><b>${esc(nomMesNombre(ym))}</b><button class="btn sm sec" onclick="nomMoverMes(1)">▶</button>
+      ${esHoyMes?'':`<button class="btn sm sec" onclick="window._nomMes=null;pintarNomina()">Hoy</button>`}
+      <span style="flex:1"></span>
+      ${esAdmin()?`<button class="btn sm sec" onclick="nomEmpleados()">👥 Empleados</button>`:''}
+    </div>
+    <div class="tbl-scroll"><table>
+      <thead><tr><th>Quincena</th><th>Empleado</th><th class="num">Neto</th><th class="num">Bono</th><th class="num">Otros</th><th class="num">Total pagado</th><th>Pago</th><th></th></tr></thead>
+      <tbody>${Q.map(q=>{ const est = q.ps.length && !q.falta.length ? 'pagado' : (q.ps.length ? 'parcial' : (q.vence<hoy?'venc':'pend'));
+        const filas = q.ps.map(p=>`<tr><td class="small muted">${esc(nomPerNombre(q.per))}</td><td>${esc((E[p.empleado_id]||{}).nombre||'?')}</td><td class="num">${fmt(p.neto)}</td><td class="num">${+p.bono?fmt(p.bono):'—'}</td><td class="num">${+p.otros?fmt(p.otros):'—'}</td><td class="num"><b>${fmt(p.total)}</b></td>
+          <td class="small">${fecha(p.fecha)} · ${esc(p.metodo||'')}${p.referencia?' · '+esc(p.referencia):''}${p.nota?'<div class="muted">'+esc(p.nota)+'</div>':''}</td>
+          <td style="white-space:nowrap">${p.comprobante_path?`<button class="btn sm sec" onclick="verPdfFactura('${esc(p.comprobante_path)}')">📎</button>`:(esAdmin()?`<button class="btn sm sec" title="Subir comprobante" onclick="nomSubirComp('pago',${p.id})">📎 Subir</button>`:'')}</td></tr>`).join('');
+        return `<tr style="background:#f8fafc"><td colspan="5"><b>${esc(nomPerNombre(q.per))}</b> <span class="small muted">· toca el ${fecha(q.vence)}</span> ${B[est]}${q.falta.length&&q.ps.length?' <span class="small muted">falta: '+q.falta.map(e=>esc(e.nombre)).join(', ')+'</span>':''}</td>
+          <td class="num"><b>${q.total?fmt(q.total):'—'}</b></td><td></td><td>${esAdmin()&&q.falta.length?`<button class="btn sm" onclick="nomPagar('${q.per}')">💸 Pagar quincena</button>`:''}</td></tr>`+filas; }).join('')}
+      </tbody></table></div>
+    <h4 style="margin:14px 0 6px">Impuestos y cuotas de la nómina de ${esc(nomMesNombre(ym))}</h4>
+    <div class="tbl-scroll"><table>
+      <thead><tr><th>Obligación</th><th>Vence</th><th class="num">Monto</th><th>Estado</th><th>Pago</th><th></th></tr></thead>
+      <tbody>${oMes.map(({o,r})=>{ const v = (r&&r.vence)||nomVence(ym); const est = r&&r.fecha_pago ? 'pagado' : (v<hoy?'venc':'pend');
+        return `<tr><td><b>${o.t}</b><div class="small muted">${o.d}</div></td><td class="small">${fecha(v)}</td><td class="num">${r&&+r.monto?fmt(r.monto):'<span class="muted">lo da el contador</span>'}</td><td>${B[est]}</td>
+          <td class="small">${r&&r.fecha_pago?fecha(r.fecha_pago)+' · '+esc(r.metodo||'')+(r.referencia?' · '+esc(r.referencia):''):'—'}</td>
+          <td style="white-space:nowrap">${r&&r.comprobante_path?`<button class="btn sm sec" onclick="verPdfFactura('${esc(r.comprobante_path)}')">📎</button> `:''}${esAdmin()&&!(r&&r.fecha_pago)?`<button class="btn sm" onclick="nomPagarOblig('${o.k}','${ym}')">💸 Pagar</button>`:''}${esAdmin()&&r&&r.fecha_pago&&!r.comprobante_path?`<button class="btn sm sec" onclick="nomSubirComp('oblig',${r.id})">📎 Subir</button>`:''}</td></tr>`; }).join('')}
+      </tbody></table></div>
+    ${pendTodos.filter(p=>p.m!==ym).length?`<p class="small" style="margin:6px 0 0">Pendientes de otros meses: ${pendTodos.filter(p=>p.m!==ym).map(p=>`<a href="#" onclick="window._nomMes='${p.m}';pintarNomina();return false">${esc(p.o.k)} ${esc(nomMesNombre(p.m))}</a>${p.vence<hoy?' <b style="color:#b91c1c">vencido</b>':''}`).join(' · ')}</p>`:''}
+    <p class="small muted" style="margin:6px 0 0">El neto ya trae descontado lo del trabajador (IMSS, INFONAVIT, ISR). Cada pago crea su gasto en Finanzas: la quincena en <b>Nómina</b> y las cuotas en <b>Impuestos y cuotas de nómina</b>, y se resta del dinero del banco. Bonos: por ahora se capturan a mano en cada quincena.</p>`;
+}
+function nomPagar(per){
+  const emps = (window._nomEmps||[]).filter(e=>e.activo);
+  if(!emps.length){ toast('Primero da de alta a los empleados (👥 Empleados)', true); return; }
+  abrirModal(`<h3>💸 Pagar ${esc(nomPerNombre(per))} · ${esc(nomMesNombre(per.slice(0,7)))}</h3>
+    <p class="small muted" style="margin:0 0 8px">Pon el neto que te pasó el contador (ya con IMSS/INFONAVIT/ISR descontado) y el bono de cada quien. Deja en 0 a quien no se le paga en esta.</p>
+    <div class="tbl-scroll"><table><thead><tr><th>Empleado</th><th class="num">Neto</th><th class="num">Bono</th><th class="num">Otros (+/−)</th><th class="num">Total</th></tr></thead><tbody>
+      ${emps.map(e=>`<tr><td><b>${esc(e.nombre)}</b><div class="small muted">${esc(e.puesto||'')}</div></td>
+        <td><input id="np-n-${e.id}" type="number" step="0.01" style="width:110px" value="${+e.neto_quincenal||0}" oninput="nomTot()"></td>
+        <td><input id="np-b-${e.id}" type="number" step="0.01" style="width:90px" value="0" oninput="nomTot()"></td>
+        <td><input id="np-o-${e.id}" type="number" step="0.01" style="width:90px" value="0" oninput="nomTot()"></td>
+        <td class="num"><b id="np-t-${e.id}"></b></td></tr>`).join('')}
+      <tr style="border-top:2px solid var(--linea)"><td colspan="4"><b>TOTAL que sale</b></td><td class="num"><b id="np-tot" style="font-size:17px"></b></td></tr>
+    </tbody></table></div>
+    <div class="frow">
+      <div class="field"><label>Fecha del pago</label><input id="np-fecha" type="date" value="${hoyMX()}"></div>
+      <div class="field"><label>¿De dónde salió?</label><select id="np-metodo" onchange="$('np-socio-f').style.display=this.value==='aportación directa'?'':'none'">
+        ${[['transferencia','🏦 Transferencia (Azteca)'],['efectivo','💵 Efectivo de caja'],['aportación directa','🤝 Lo pagó un socio de su bolsa']].map(([k,t])=>`<option value="${k}">${t}</option>`).join('')}</select></div>
+    </div>
+    <div class="field" id="np-socio-f" style="display:none"><label>¿Qué socio lo pagó?</label><select id="np-socio"><option>Hans S.</option><option>Ignacio G.</option><option>Andrés T.</option></select></div>
+    <div class="field"><label>Referencia (opcional)</label><input id="np-ref" placeholder="Ej. op. 199 y 202"></div>
+    <div class="field"><label>Comprobantes (opcional, puedes subir varios)</label><input id="np-comp" type="file" multiple accept="application/pdf,image/*"></div>
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cancelar</button><button class="btn" id="np-btn" onclick="nomGuardarPago('${per}')">Registrar pago</button></div>`, true);
+  window._nomPagEmps = emps; nomTot();
+}
+function nomTot(){ let tot = 0; (window._nomPagEmps||[]).forEach(e=>{ const t = (+$('np-n-'+e.id).value||0)+(+$('np-b-'+e.id).value||0)+(+$('np-o-'+e.id).value||0); tot += t; $('np-t-'+e.id).textContent = fmt(t); }); $('np-tot').textContent = fmt(tot); }
+async function nomGuardarPago(per){
+  const emps = window._nomPagEmps||[], fechaP = $('np-fecha').value||hoyMX(), metodo = $('np-metodo').value, ref = ($('np-ref').value||'').trim();
+  const filas = emps.map(e=>{ const n = +$('np-n-'+e.id).value||0, b = +$('np-b-'+e.id).value||0, o = +$('np-o-'+e.id).value||0; return {e, neto:n, bono:b, otros:o, total:Math.round((n+b+o)*100)/100}; }).filter(x=>x.total>0);
+  if(!filas.length){ toast('No hay montos', true); return; }
+  const btn = $('np-btn'); btn.disabled = true; btn.textContent = 'Guardando…';
+  const tot = Math.round(filas.reduce((s,x)=>s+x.total,0)*100)/100, bonos = filas.reduce((s,x)=>s+x.bono,0);
+  const nombre = (typeof perfil!=='undefined'&&perfil?perfil.nombre:'');
+  let concepto = 'Nómina '+nomPerNombre(per)+' de '+nomMesNombre(per.slice(0,7)).toLowerCase()+' — '+filas.map(x=>x.e.nombre+' '+fmt(x.total)).join(', ')+(bonos?' (incluye bonos '+fmt(bonos)+')':'')+(ref?' · '+ref:'');
+  if(metodo==='aportación directa'){
+    const socio = $('np-socio').value;
+    const a = await sb.from('socios_aportaciones').insert({socio, monto:tot, fecha:fechaP, via:'pago directo de nómina (de su bolsa)', nota:concepto, nombre, usuario_id: sesion.user.id});
+    if(a.error){ toast('No se pudo registrar la aportación: '+errMsg(a.error), true); btn.disabled=false; btn.textContent='Registrar pago'; return; }
+    concepto += ' (aportación directa de '+socio+')';
+  }
+  const g = await sb.from('gastos').insert({concepto, categoria:'Nómina', monto:tot, metodo, tipo:'gasto', fecha:fechaP, usuario_id: sesion.user.id}).select('id').single();
+  if(g.error){ toast('No se pudo registrar el gasto: '+errMsg(g.error), true); btn.disabled=false; btn.textContent='Registrar pago'; return; }
+  if(metodo==='efectivo'){ try{ await sb.from('caja_movs').insert({tipo:'gasto', monto:tot, concepto:concepto+' (desde Finanzas)', fecha:fechaP, usuario_id:sesion.user.id, nombre}); }catch(e){} }
+  // comprobantes: si hay uno por empleado se reparten en orden; si hay uno solo, va para todos
+  const files = [...($('np-comp').files||[])], paths = [];
+  for(const f of files){ const path = 'nomina/'+per+'/'+Date.now()+'_'+f.name.replace(/[^\w.\-]/g,'_'); const up = await sb.storage.from('facturas').upload(path, f, {upsert:true}); if(!up.error) paths.push(path); }
+  const r = await sb.from('nomina_pagos').insert(filas.map((x,i)=>({empleado_id:x.e.id, periodo:per, fecha:fechaP, neto:x.neto, bono:x.bono, otros:x.otros, total:x.total, metodo, referencia:ref, gasto_id:g.data.id,
+    comprobante_path: paths.length===filas.length ? paths[i] : (paths[0]||null), usuario_id: sesion.user.id})));
+  if(r.error){ toast('El gasto quedó pero el detalle no: '+errMsg(r.error), true); }
+  else toast('✓ '+nomPerNombre(per)+' pagada: '+fmt(tot)+' (gasto en Finanzas)');
+  logEv('nomina', 'pago '+per+' '+fmt(tot)+' ('+metodo+')');
+  cerrarModal(); vFinanzas();
+}
+function nomPagarOblig(tipo, ym){
+  const o = NOM_OBLIG.find(x=>x.k===tipo), r = (window._nomObl||[]).find(x=>x.tipo===tipo&&x.periodo===ym);
+  abrirModal(`<h3>💸 Pagar ${o.t}</h3>
+    <p class="small muted" style="margin:0 0 8px">Nómina de ${esc(nomMesNombre(ym))}${o.bim?' (bimestre que cierra este mes)':''} · vence ${fecha((r&&r.vence)||nomVence(ym))}. El monto viene de la línea de captura que te da el contador.</p>
+    <div class="frow">
+      <div class="field"><label>Monto pagado</label><input id="no-monto" type="number" step="0.01" style="font-size:19px" value="${r&&+r.monto?+r.monto:''}" placeholder="0.00"></div>
+      <div class="field"><label>Fecha del pago</label><input id="no-fecha" type="date" value="${hoyMX()}"></div>
+    </div>
+    <div class="frow">
+      <div class="field"><label>¿De dónde salió?</label><select id="no-metodo">${[['transferencia','🏦 Transferencia (Azteca)'],['efectivo','💵 Efectivo de caja'],['aportación directa','🤝 Lo pagó un socio de su bolsa']].map(([k,t])=>`<option value="${k}">${t}</option>`).join('')}</select></div>
+      <div class="field"><label>Referencia / línea de captura</label><input id="no-ref" placeholder="opcional"></div>
+    </div>
+    <div class="field"><label>Comprobante (opcional)</label><input id="no-comp" type="file" accept="application/pdf,image/*"></div>
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cancelar</button><button class="btn" id="no-btn" onclick="nomGuardarOblig('${tipo}','${ym}')">Registrar pago</button></div>`);
+  setTimeout(()=>$('no-monto')?.focus(),100);
+}
+async function nomGuardarOblig(tipo, ym){
+  const o = NOM_OBLIG.find(x=>x.k===tipo), monto = +($('no-monto').value||0), fechaP = $('no-fecha').value||hoyMX(), metodo = $('no-metodo').value, ref = ($('no-ref').value||'').trim();
+  if(monto<=0){ toast('Pon el monto', true); return; }
+  const btn = $('no-btn'); btn.disabled = true;
+  const nombre = (typeof perfil!=='undefined'&&perfil?perfil.nombre:'');
+  let concepto = o.t.replace(/^\S+\s/,'')+' — nómina de '+nomMesNombre(ym).toLowerCase()+(ref?' · '+ref:'');
+  if(metodo==='aportación directa'){ const a = await sb.from('socios_aportaciones').insert({socio:'Andrés T.', monto, fecha:fechaP, via:'pago directo '+tipo+' (de su bolsa)', nota:concepto, nombre, usuario_id: sesion.user.id}); if(a.error){ toast(errMsg(a.error), true); btn.disabled=false; return; } concepto += ' (aportación directa)'; }
+  const g = await sb.from('gastos').insert({concepto, categoria:'Impuestos y cuotas de nómina', monto, metodo, tipo:'gasto', fecha:fechaP, usuario_id: sesion.user.id}).select('id').single();
+  if(g.error){ toast('No se pudo registrar el gasto: '+errMsg(g.error), true); btn.disabled=false; return; }
+  if(metodo==='efectivo'){ try{ await sb.from('caja_movs').insert({tipo:'gasto', monto, concepto:concepto+' (desde Finanzas)', fecha:fechaP, usuario_id:sesion.user.id, nombre}); }catch(e){} }
+  let path = null; const f = $('no-comp').files[0];
+  if(f){ path = 'nomina/oblig/'+tipo+'_'+ym+'_'+Date.now()+'_'+f.name.replace(/[^\w.\-]/g,'_'); const up = await sb.storage.from('facturas').upload(path, f, {upsert:true}); if(up.error) path = null; }
+  const r = await sb.from('nomina_obligaciones').upsert({tipo, periodo:ym, vence:nomVence(ym), monto, fecha_pago:fechaP, metodo, referencia:ref, comprobante_path:path, gasto_id:g.data.id, usuario_id: sesion.user.id}, {onConflict:'tipo,periodo'});
+  if(r.error) toast('El gasto quedó pero no se marcó la obligación: '+errMsg(r.error), true); else toast('✓ '+tipo+' '+nomMesNombre(ym)+' pagado '+fmt(monto));
+  logEv('nomina', tipo+' '+ym+' pagado '+fmt(monto)+' ('+metodo+')');
+  cerrarModal(); vFinanzas();
+}
+function nomSubirComp(cual, id){
+  const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'application/pdf,image/*';
+  inp.onchange = async ()=>{ const f = inp.files[0]; if(!f) return;
+    const path = 'nomina/'+cual+'_'+id+'_'+Date.now()+'_'+f.name.replace(/[^\w.\-]/g,'_');
+    const up = await sb.storage.from('facturas').upload(path, f, {upsert:true}); if(up.error){ toast(errMsg(up.error), true); return; }
+    const r = await sb.from(cual==='pago'?'nomina_pagos':'nomina_obligaciones').update({comprobante_path:path}).eq('id', id);
+    if(r.error){ toast(errMsg(r.error), true); return; } toast('Comprobante guardado ✓'); pintarNomina(); };
+  inp.click();
+}
+function nomEmpleados(){
+  const emps = window._nomEmps||[];
+  abrirModal(`<h3>👥 Empleados en nómina</h3>
+    <div class="tbl-scroll"><table><thead><tr><th>Nombre</th><th>Puesto</th><th class="num">Neto quincenal</th><th>Alta IMSS</th><th>Activo</th></tr></thead><tbody>
+      ${emps.map(e=>`<tr><td><input id="ne-n-${e.id}" value="${esc(e.nombre)}"></td><td><input id="ne-p-${e.id}" value="${esc(e.puesto||'')}" style="width:110px"></td>
+        <td><input id="ne-q-${e.id}" type="number" step="0.01" style="width:110px" value="${+e.neto_quincenal||0}"></td><td><input id="ne-a-${e.id}" type="date" value="${e.alta_imss||''}"></td>
+        <td><input id="ne-x-${e.id}" type="checkbox"${e.activo?' checked':''}></td></tr>`).join('')}
+      <tr style="background:#f8fafc"><td><input id="ne-n-0" placeholder="➕ Nuevo empleado"></td><td><input id="ne-p-0" placeholder="Puesto" style="width:110px"></td><td><input id="ne-q-0" type="number" step="0.01" style="width:110px" placeholder="0.00"></td><td><input id="ne-a-0" type="date"></td><td></td></tr>
+    </tbody></table></div>
+    <p class="small muted">El neto quincenal es el que te pasa el contador (ya con descuentos); es el que sale de inicio al pagar la quincena y lo puedes cambiar ahí. Quien ya no trabaja: quítale "Activo" (su historial se queda).</p>
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cancelar</button><button class="btn" onclick="nomGuardarEmps()">Guardar</button></div>`, true);
+}
+async function nomGuardarEmps(){
+  for(const e of (window._nomEmps||[])){
+    const fila = {nombre:($('ne-n-'+e.id).value||'').trim()||e.nombre, puesto:($('ne-p-'+e.id).value||'').trim(), neto_quincenal:+$('ne-q-'+e.id).value||0, alta_imss:$('ne-a-'+e.id).value||null, activo:$('ne-x-'+e.id).checked};
+    const r = await sb.from('nomina_empleados').update(fila).eq('id', e.id); if(r.error){ toast(errMsg(r.error), true); return; }
+  }
+  const nn = ($('ne-n-0').value||'').trim();
+  if(nn){ const r = await sb.from('nomina_empleados').insert({nombre:nn, puesto:($('ne-p-0').value||'').trim(), neto_quincenal:+$('ne-q-0').value||0, alta_imss:$('ne-a-0').value||null, activo:true}); if(r.error){ toast(errMsg(r.error), true); return; } }
+  cerrarModal(); toast('Empleados guardados ✓'); logEv('nomina','empleados actualizados'); pintarNomina();
+}
 // v135: cobranza de ventas a crédito
 async function pintarCobranza(){
   const el = $('cobrar-panel'); if(!el) return;
@@ -7770,6 +7961,10 @@ async function vFinanzas(){
     ${esFinanzas()?`<div class="card" style="margin-bottom:14px" data-ftab="gastos" id="fin-fijos"><h3>📆 Gastos fijos <span class="small muted" style="font-weight:normal">renta, internet, luz, nómina… lo que se paga cada mes</span></h3>
       <div id="fijos-panel"><span class="small muted">Cargando…</span></div>
       <span style="display:none">${setTimeout(()=>{ if(typeof pintarGastosFijos==='function') pintarGastosFijos(); },280)&&''}</span>
+    </div>`:''}
+    ${esFinanzas()?`<div class="card" style="margin-bottom:14px" data-ftab="nomina" id="fin-nomina"><h3>👥 Nómina <span class="small muted" style="font-weight:normal">quincenas, bonos, IMSS, INFONAVIT e impuestos</span></h3>
+      <div id="nomina-panel"><span class="small muted">Cargando…</span></div>
+      <span style="display:none">${setTimeout(()=>{ if(typeof pintarNomina==='function') pintarNomina(); },290)&&''}</span>
     </div>`:''}
     <div class="card" style="margin-bottom:14px" data-ftab="cobrar" id="fin-cobrar"><h3>📄 Por cobrar (ventas a crédito)</h3>
       <div id="cobrar-panel"><span class="small muted">Cargando…</span></div>
