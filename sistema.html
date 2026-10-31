@@ -915,7 +915,7 @@ async function vResumen(){
   const nombreMes = esTodo ? 'todo el histórico' : mes.toLocaleDateString('es-MX',{month:'long', year:'numeric'});
   const hace14 = new Date(esMesActual?hoy:new Date(finMes-864e5)); hace14.setDate(hace14.getDate()-13);
   const [ventasMes, prods, cxp, pedCurso, itemsMes, pagosMesR] = await Promise.all([
-    traerTodo(()=>sb.from('ventas').select('fecha,total,descuento,cancelada').gte('fecha', mes.toISOString()).lt('fecha', finMes.toISOString()).eq('cancelada', false).order('id')).then(d=>({data:d})),
+    traerTodo(()=>sb.from('ventas').select('fecha,total,descuento,cancelada,externa').gte('fecha', mes.toISOString()).lt('fecha', finMes.toISOString()).eq('cancelada', false).order('id')).then(d=>({data:d})),
     traerTodo(()=>sb.from('productos').select('costo,costo_real,precio,stock,stock_min,activo').eq('activo', true).order('id')).then(d=>({data:d})),
     sb.from('cuentas_pagar').select('*, proveedores(nombre)').neq('estado','pagada').order('fecha_vencimiento'),
     sb.from('pedidos_compra').select('folio_externo,fecha,estado,total,proveedores(nombre)').in('estado',['borrador','enviado','parcial']).order('fecha',{ascending:false}),
@@ -940,6 +940,9 @@ async function vResumen(){
       return s + (m ? +m[1].replace(/,/g,'') : 0);
     }, 0)*100)/100;
   }
+  // v243: ventas EXTERNAS (clientes de los socios: CREXA, cuadrillas…) no cuentan para venta/meta de la tienda
+  const vExt = ventasMes.data.filter(v=>v.externa); const totExt = vExt.reduce((s,v)=>s+ +v.total,0);
+  ventasMes.data = ventasMes.data.filter(v=>!v.externa);
   const vHoy = ventasMes.data.filter(v=>new Date(v.fecha)>=hoy);
   const totHoy = vHoy.reduce((s,v)=>s+ +v.total,0);
   const totMes = ventasMes.data.reduce((s,v)=>s+ +v.total,0);
@@ -1001,7 +1004,8 @@ async function vResumen(){
     </div>
     <div class="kpis">
       ${(esMesActual||esTodo)?`<div class="kpi" style="cursor:pointer" title="Ir a Ventas" onclick="irA('ventas')"><div class="l">Ventas de hoy</div><div class="v">${fmt(totHoy)}</div><div class="s">${vHoy.length} venta(s)</div></div>`:''}
-      <div class="kpi" style="cursor:pointer" title="Ir a Ventas" onclick="irA('ventas')"><div class="l">Ventas de ${esc(nombreMes)}</div><div class="v">${fmt(totMes)}</div><div class="s">${ventasMes.data.length} venta(s) · ${fmt(promDia)} por día</div></div>
+      <div class="kpi" style="cursor:pointer" title="Ir a Ventas" onclick="irA('ventas')"><div class="l">Ventas de ${esc(nombreMes)}</div><div class="v">${fmt(totMes)}</div><div class="s">${ventasMes.data.length} venta(s) · ${fmt(promDia)} por día${totExt?' · <b>solo tienda</b>':''}</div></div>
+      ${totExt?`<div class="kpi" style="border-top-color:#7c3aed" title="Ventas a clientes de los socios (no cuentan para la meta ni el bono de la tienda)"><div class="l">🏷️ Ventas externas (socios)</div><div class="v">${fmt(totExt)}</div><div class="s">${vExt.length} venta(s) · no cuentan para la meta · total con ellas ${fmt(totMes+totExt)}</div></div>`:''}
       ${utilMes!==null ? `<div class="kpi" style="cursor:pointer" title="Ir a Ventas" onclick="irA('ventas')"><div class="l">Utilidad de ${esc(nombreMes)}</div><div class="v" style="color:${utilMes>=0?'#15803d':'#b91c1c'}">${fmt(utilMes)}</div><div class="s">margen <b>${margenPct.toFixed(0)}%</b> sobre venta · sin IVA</div></div>` : ''}
       ${utilMes!==null && ahorroMesR>0 ? `<div class="kpi" style="border-top-color:var(--verde)"><div class="l">💰 Utilidad REAL de ${esc(nombreMes)}</div><div class="v" style="color:#15803d">${fmt(Math.round((utilMes+ahorroMesR)*100)/100)}</div><div class="s">ventas ${fmt(utilMes)} + pronto pago ${fmt(ahorroMesR)}</div></div>` : ''}
       <div class="kpi" style="cursor:pointer" title="Ir a Inventario" onclick="irA('inventario')"><div class="l">Valor de inventario (sin IVA)</div><div class="v">${fmt(valInv)}</div><div class="s">con IVA: <b>${fmt(Math.round(valInv*116)/100)}</b> · a costo · ${prods.data.length} productos</div></div>
@@ -1463,12 +1467,14 @@ async function verVenta(id){
   // v159: desglose del pago (mixto) + botón del admin para corregir la forma de pago
   let pagoHtml = '';
   try{
-    const vv = await sb.from('ventas').select('id,folio,total,metodo_pago,cancelada,efectivo,cliente_id,notas').eq('id', id).single();
+    const vv = await sb.from('ventas').select('id,folio,total,metodo_pago,cancelada,efectivo,cliente_id,notas,externa').eq('id', id).single();
     if(vv.data){ const V = vv.data; let pg = [];
       if(V.metodo_pago==='mixto'){ const r = await sb.from('venta_pagos').select('metodo,monto').eq('venta_id', id); pg = r.data||[]; }
       const ic = {efectivo:'💵',tarjeta:'💳',transferencia:'🏦',ak_pago:'📱',credito:'📄',apartado:'📦',mixto:'🔀'};
       pagoHtml = `<p class="small" style="margin:0 0 8px">${ic[V.metodo_pago]||''} <b>Pago:</b> ${V.metodo_pago==='mixto' ? pg.map(p=>`${ic[p.metodo]||''} ${esc(p.metodo)} ${fmt(p.monto)}`).join(' + ') : esc(V.metodo_pago)+' '+fmt(V.total)}
         ${esAdmin() && !V.cancelada && !['credito','apartado'].includes(V.metodo_pago) ? ` <button class="btn sm sec" onclick='cambiarPagoVenta(${JSON.stringify({id:V.id,folio:V.folio,total:+V.total,metodo:V.metodo_pago,pagos:pg})})'>✏️ Cambiar forma de pago</button>` : ''}
+        ${V.externa?' <span class="badge" style="background:#ede9fe;color:#6d28d9">🏷️ venta externa · no cuenta para la meta</span>':''}
+        ${esAdmin() && !V.cancelada ? ` <button class="btn sm sec" title="Las ventas externas (clientes de los socios) no cuentan para la venta ni la meta de la tienda" onclick="toggleExterna(${V.id},${V.externa?'false':'true'})">🏷️ ${V.externa?'Quitar externa':'Marcar externa'}</button>` : ''}
         ${esFinanzas() && !V.cancelada && V.cliente_id ? ` <button class="btn sm" onclick="cerrarModal();enviarFacturaVenta(${V.id})">📧 Enviar factura</button>${/FACTURA [^·]*enviada/i.test(V.notas||'')?' <span class="small" style="color:#15803d">✓ '+esc((String(V.notas).match(/FACTURA [^·]*enviada[^·]*/i)||[''])[0])+'</span>':''}` : ''}</p>`;
     }
   }catch(e){}
@@ -5098,8 +5104,8 @@ async function asegurarXLSX(){
 function pedFechaYmd(p){ const f = String(p.fecha||''); return f.includes('T') ? ymdLocal(new Date(f)) : f.slice(0,10); }
 // ventas de [ini, fin) sin canceladas ni CONSUMO PROPIO; con utilidad y costo por venta si es finanzas
 async function svDatos(ini, fin){
-  const vs = await traerTodo(()=>sb.from('ventas').select('id,fecha,total,descuento,cancelada,notas').gte('fecha', ini.toISOString()).lt('fecha', fin.toISOString()).eq('cancelada', false).order('id'));
-  const ventas = (vs||[]).filter(v=>!/CONSUMO PROPIO/i.test(v.notas||''));
+  const vs = await traerTodo(()=>sb.from('ventas').select('id,fecha,total,descuento,cancelada,notas,externa').gte('fecha', ini.toISOString()).lt('fecha', fin.toISOString()).eq('cancelada', false).order('id'));
+  const ventas = (vs||[]).filter(v=>!/CONSUMO PROPIO/i.test(v.notas||'') && !v.externa); // v243: sin externas
   const util = {}, costo = {};
   if(esFinanzas() && ventas.length){
     const ids = ventas.map(v=>v.id); let its = [];
@@ -7579,6 +7585,14 @@ async function exportarCxpExcel(){ // v242: cuentas por pagar a Excel (pedido de
   XLSX.utils.book_append_sheet(wb, w1, 'Por pagar'); XLSX.utils.book_append_sheet(wb, w2, 'Todas las cuentas'); XLSX.utils.book_append_sheet(wb, w3, 'Pagos hechos');
   XLSX.writeFile(wb, 'Cuentas_por_pagar_Axion_'+hoyMX()+'.xlsx');
   logEv('descarga','Excel cuentas por pagar: '+(pend.length-3)+' pendientes, '+fmt(tot));
+}
+async function toggleExterna(id, val){ // v243
+  if(!esAdmin()) return;
+  const {error} = await sb.from('ventas').update({externa: !!val}).eq('id', id);
+  if(error){ toast(errMsg(error), true); return; }
+  logEv('venta', 'venta id '+id+(val?' marcada EXTERNA':' ya no es externa'));
+  toast(val ? '🏷️ Marcada como venta externa: ya no cuenta para la meta de la tienda' : 'La venta vuelve a contar para la tienda');
+  cerrarModal(); if(typeof verVenta==='function') verVenta(id);
 }
 function panelBbva(D){ // v241: depósitos de efectivo + lo que falta pasar de BBVA a Azteca
   if(D.bbvaPendiente===undefined) return '';
