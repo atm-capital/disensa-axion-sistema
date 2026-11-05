@@ -5341,7 +5341,7 @@ async function vPedidos(){
   if(fCla==='condev') dataF = dataF.filter(p=>window._pdev && window._pdev[p.id]);
   else if(fCla) dataF = dataF.filter(p=>clase(p)===fCla);
   window._pedDataF = dataF; // v191: lo que se ve es lo que se exporta
-  $('v-pedidos').innerHTML = `
+  $('v-pedidos').innerHTML = `<div id="ped-sinfact"></div><span style="display:none">${setTimeout(()=>{ if(typeof pintarSinFactura==='function') pintarSinFactura(); },200)&&''}</span>
     <div class="kpis">
       ${['enviado','parcial','recibido','borrador','cancelado'].filter(e=>porEstado[e]).map(e=>`
         <div class="kpi" style="cursor:pointer;${window._pedFiltro===e?'outline:2px solid var(--naranja,#e8862d)':''}" title="Clic para filtrar" onclick="window._pedFiltro = window._pedFiltro==='${e}'?null:'${e}'; vPedidos()"><div class="l">${e} (${porEstado[e].n})</div><div class="v">${esFinanzas()?fmt(porEstado[e].t):porEstado[e].n+' 📦'}</div></div>`).join('')}
@@ -5736,6 +5736,19 @@ function llenarPendiente(){
 async function registrarRecepcion(pedidoId){
   const items = pedItems.map(i=>({item_id:i.id, cantidad:+($('rec-'+i.id)?.value||0)})).filter(x=>x.cantidad>0);
   if(!items.length){ toast('Escribe al menos una cantidad en "Recibir ahora"', true); return; }
+  // v245 Defensa 0: lo que NO viene en la factura del proveedor (caso grasa pedido 1488553)
+  if(!window._sfOk && pedItems.some(i=>+(i.cantidad_facturada||0)>0)){
+    const sinF = items.map(x=>{ const it = pedItems.find(i=>i.id===x.item_id)||{}; const cabe = Math.max(0, +(it.cantidad_facturada||0) - +(it.cantidad_recibida||0)); return {x, it, cabe}; }).filter(o=>o.x.cantidad>o.cabe);
+    if(sinF.length){
+      const lista = sinF.map(o=>'• '+((o.it.productos&&o.it.productos.codigo)||'')+' '+((o.it.productos&&o.it.productos.descripcion)||'').slice(0,40)+': recibir '+o.x.cantidad+', en factura '+o.cabe).join('\n');
+      const ok = confirm('⚠️ Estos productos NO vienen (o vienen menos) en la factura del proveedor:\n\n'+lista+'\n\n¿De verdad LLEGARON físicamente?\n\nAceptar = sí llegaron, recibirlos.\nCancelar = recibir solo lo que dice la factura.');
+      if(!ok){ sinF.forEach(o=>{ o.x.cantidad = o.cabe; const inp = $('rec-'+o.x.item_id); if(inp) inp.value = o.cabe; }); for(let k=items.length-1;k>=0;k--) if(!(items[k].cantidad>0)) items.splice(k,1);
+        logEv('recepcion','pedido '+pedidoId+': se recibió solo lo facturado ('+sinF.length+' partida(s) recortadas)');
+        if(!items.length){ toast('Según la factura no queda nada por recibir', true); return; } }
+      else logEv('recepcion','pedido '+pedidoId+': confirmaron que llegaron '+sinF.length+' partida(s) que no vienen en factura');
+      window._sfOk = true;
+    }
+  }
   // Defensa 1: ¿el papel es de ESTE pedido? (evita registrar mercancía que no llegó)
   const partesTocadas = [...new Set(pedItems.filter(i=>+($('rec-'+i.id)?.value||0)>0).map(i=>String(i.parte||'')))].filter(Boolean);
   if(!window._recOk){
@@ -5755,7 +5768,7 @@ async function registrarRecepcion(pedidoId){
   const sinSurtir = partesTocadas.filter(p=>{ const z=(window._pindPed||{})[p]; return z && +z.cant_empacada===0 && +z.cant_facturada===0; });
   if(sinSurtir.length && !confirm('⚠️ OJO: según el estatus de Indar, la(s) parte(s) '+sinSurtir.join(', ')+' NO están surtidas ni facturadas.\n\n¿De verdad ya llegó la mercancía físicamente?')){ window._recOk=false; return; }
   if(!esAdmin() && !window._evOk){ pedirEvidenciaRec(pedidoId); return; } // vendedores: evidencia obligatoria
-  window._evOk = false; window._recOk = false;
+  window._evOk = false; window._recOk = false; window._sfOk = false;
   const {error} = await sb.rpc('recibir_partidas', {p_pedido_id:pedidoId, p_items:items});
   if(error){ toast(errMsg(error),true); return; }
   cerrarModal(); toast('Recepción registrada: inventario actualizado ✓'); vPedidos();
@@ -5763,6 +5776,23 @@ async function registrarRecepcion(pedidoId){
 }
 async function recibirPedido(id){
   if(!confirm('¿Recibir TODO lo pendiente del pedido? Las cantidades faltantes se sumarán al inventario.')) return;
+  // v245: si ya hay factura, avisar lo que no viene en ella antes de sumarlo al inventario
+  try{ const {data:its0} = await sb.from('pedido_compra_items').select('id,cantidad,cantidad_recibida,cantidad_facturada,cancelada,productos(codigo,descripcion)').eq('pedido_id', id);
+    const v0 = (its0||[]).filter(i=>!i.cancelada);
+    if(v0.some(i=>+(i.cantidad_facturada||0)>0)){
+      const pend = i => Math.max(0, +i.cantidad - +(i.cantidad_recibida||0)), cabe = i => Math.max(0, Math.min(+i.cantidad, +(i.cantidad_facturada||0)) - +(i.cantidad_recibida||0));
+      const sinF = v0.filter(i=>pend(i) > cabe(i));
+      if(sinF.length){
+        const lista = sinF.map(i=>'• '+((i.productos&&i.productos.codigo)||'')+' '+((i.productos&&i.productos.descripcion)||'').slice(0,40)+': pendiente '+pend(i)+', en factura '+cabe(i)).join('\n');
+        if(!confirm('⚠️ Estos productos NO vienen (o vienen menos) en la factura del proveedor:\n\n'+lista+'\n\n¿De verdad LLEGARON físicamente?\n\nAceptar = sí llegaron, recibir todo.\nCancelar = recibir solo lo que dice la factura.')){
+          const items0 = v0.map(i=>({item_id:i.id, cantidad:cabe(i)})).filter(x=>x.cantidad>0);
+          if(items0.length){ const r0 = await sb.rpc('recibir_partidas', {p_pedido_id:id, p_items:items0}); if(r0.error){ toast(errMsg(r0.error),true); return; } }
+          logEv('recepcion','pedido '+id+': recibido solo lo facturado ('+sinF.length+' partida(s) sin factura quedaron pendientes)');
+          toast('Se recibió solo lo facturado ✓ — lo que no vino quedó pendiente en el pedido'); vPedidos(); return;
+        }
+        logEv('recepcion','pedido '+id+': confirmaron que llegaron '+sinF.length+' partida(s) que no vienen en factura');
+      }
+    } }catch(e){}
   const {error} = await sb.rpc('recibir_pedido', {p_pedido_id:id});
   if(error){ toast(errMsg(error),true); return; }
   toast('Pedido recibido completo: inventario actualizado ✓'); vPedidos();
@@ -5774,6 +5804,45 @@ async function recibirPedido(id){
    Llegó dañado/equivocado: se recibe (para cuadrar con la factura), sale del stock
    y queda pendiente de nota de crédito o reposición.
 ============================================================ */
+async function pintarSinFactura(){ // v245: recibido de más contra lo facturado
+  const el = $('ped-sinfact'); if(!el || !esAdmin()) return;
+  try{
+    const its = await traerTodo(()=>sb.from('pedido_compra_items').select('id,pedido_id,producto_id,cantidad,cantidad_recibida,cantidad_facturada,cancelada,costo_unit,productos(codigo,descripcion,stock),pedidos_compra(folio_externo,fecha)').gt('cantidad_recibida',0).order('id'));
+    const conF = new Set((its||[]).filter(i=>+i.cantidad_facturada>0).map(i=>i.pedido_id));
+    const cfg = await sb.from('config_sistema').select('valor').eq('clave','sinfact_ok').maybeSingle();
+    const okIds = new Set(((cfg.data&&cfg.data.valor)||[]).map(Number));
+    const L = (its||[]).filter(i=>!i.cancelada && conF.has(i.pedido_id) && +i.cantidad_recibida > +(i.cantidad_facturada||0) && !okIds.has(i.id));
+    window._sinF = L;
+    if(!L.length){ el.innerHTML = ''; return; }
+    el.innerHTML = `<div class="card" style="margin-bottom:12px;border:2px solid var(--ambar);background:#fffbeb"><h3 style="margin:0 0 4px">⚠️ Recibido pero NO viene en la factura (${L.length})</h3>
+      <p class="small muted" style="margin:0 0 8px">Se sumó al inventario pero el proveedor no lo facturó. Revisen en el anaquel: si no está, <b>✖ No llegó</b> lo quita del inventario y del pedido; si sí está (regalo o viene en otra factura), <b>✓ Sí llegó</b>.</p>
+      <div class="tbl-scroll"><table><thead><tr><th>Pedido</th><th>Producto</th><th class="num">Recibido</th><th class="num">Facturado</th><th class="num">Stock hoy</th><th></th></tr></thead><tbody>
+      ${L.map(i=>`<tr><td class="small">${esc(String((i.pedidos_compra&&i.pedidos_compra.folio_externo)||i.pedido_id))}<div class="muted">${i.pedidos_compra?fecha(i.pedidos_compra.fecha):''}</div></td><td><b>${esc((i.productos&&i.productos.codigo)||'')}</b> ${esc(((i.productos&&i.productos.descripcion)||'').slice(0,50))}</td><td class="num">${+i.cantidad_recibida}</td><td class="num">${+(i.cantidad_facturada||0)}</td><td class="num">${i.productos?+i.productos.stock:'—'}</td>
+        <td style="white-space:nowrap"><button class="btn sm" onclick="sinFactNoLlego(${i.id})">✖ No llegó</button> <button class="btn sm sec" title="Sí está en la tienda (regalo o viene en otra factura)" onclick="sinFactSiLlego(${i.id})">✓ Sí llegó</button></td></tr>`).join('')}
+      </tbody></table></div></div>`;
+  }catch(e){ el.innerHTML = ''; }
+}
+async function sinFactNoLlego(id){
+  const i = (window._sinF||[]).find(x=>x.id===id); if(!i) return;
+  const fac = +(i.cantidad_facturada||0), dif = +i.cantidad_recibida - fac;
+  if(!confirm('¿Quitar '+dif+' pza(s) de '+((i.productos&&i.productos.codigo)||'')+' del inventario y del pedido?\n\nÚsalo solo si NO están en la tienda.')) return;
+  const up = await sb.from('pedido_compra_items').update(fac>0 ? {cantidad_recibida:fac, cantidad:fac, importe:Math.round(fac * +i.costo_unit * 100)/100} : {cantidad_recibida:0, cancelada:true}).eq('id', id);
+  if(up.error){ toast(errMsg(up.error), true); return; }
+  const p = await sb.from('productos').select('stock').eq('id', i.producto_id).single();
+  if(!p.error) await sb.from('productos').update({stock: Math.max(0, +p.data.stock - dif)}).eq('id', i.producto_id);
+  const {data:its} = await sb.from('pedido_compra_items').select('importe,cancelada').eq('pedido_id', i.pedido_id);
+  const sub = Math.round((its||[]).filter(x=>!x.cancelada).reduce((s,x)=>s+ +x.importe,0)*100)/100, iva = Math.round(sub*16)/100;
+  await sb.from('pedidos_compra').update({subtotal:sub, iva, total:Math.round((sub+iva)*100)/100}).eq('id', i.pedido_id);
+  logEv('inventario','No llegó (no venía en factura): '+((i.productos&&i.productos.codigo)||'')+' x'+dif+' · pedido '+((i.pedidos_compra&&i.pedidos_compra.folio_externo)||i.pedido_id));
+  toast('Quitado del inventario ✓'); pintarSinFactura();
+}
+async function sinFactSiLlego(id){
+  const cfg = await sb.from('config_sistema').select('valor').eq('clave','sinfact_ok').maybeSingle();
+  const arr = (((cfg.data&&cfg.data.valor)||[])).concat([id]);
+  const r = cfg.data ? await sb.from('config_sistema').update({valor:arr}).eq('clave','sinfact_ok') : await sb.from('config_sistema').insert({clave:'sinfact_ok', valor:arr});
+  if(r.error){ toast(errMsg(r.error), true); return; }
+  logEv('inventario','Sí llegó aunque no viene en factura: partida '+id); toast('Marcado ✓'); pintarSinFactura();
+}
 function reportarDevolucion(p){
   abrirModal(`<h3>⚠️ Reportar producto dañado o equivocado</h3>
     <p class="small muted" style="margin:0 0 8px">Se recibe normal (para que cuadre con la factura) pero <b>sale del stock vendible</b> y queda pendiente con Indar.</p>
