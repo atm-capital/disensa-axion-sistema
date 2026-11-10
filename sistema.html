@@ -1206,7 +1206,7 @@ async function vVentas(){
       <input type="search" id="vt-q" placeholder="Buscar por folio o cliente..." oninput="pintarVentas()">
       <select id="vt-pago" onchange="pintarVentas()"><option value="">Todos los pagos</option>
         <option value="efectivo">💵 Efectivo</option><option value="tarjeta">💳 Tarjeta</option>
-        <option value="transferencia">🏦 Transferencia</option><option value="ak_pago">📱 AK Pago</option><option value="credito">📄 Crédito</option><option value="apartado">📦 Apartado</option><option value="mixto">🔀 Mixto</option></select>
+        <option value="transferencia">🏦 Transferencia</option><option value="ak_pago">📱 AK Pago</option><option value="credito">📄 Crédito</option><option value="apartado">📦 Apartado</option><option value="mixto">🔀 Mixto</option><option value="mercadolibre">🛒 Mercado Libre (en línea)</option><option value="amazon">🅰️ Amazon (en línea)</option></select>
       ${vends.length>1?`<select id="vt-vend" onchange="pintarVentas()"><option value="">Todos los vendedores</option>${vends.map(n=>`<option>${esc(n)}</option>`).join('')}</select>`:'<span id="vt-vend" style="display:none"></span>'}
       <label class="small"><input type="checkbox" id="vt-canc" onchange="pintarVentas()"> Ver canceladas</label>
       <button class="btn sec sm" onclick="exportarVentasExcel()" title="Descarga en Excel las ventas del periodo con los filtros puestos">📥 Excel</button>
@@ -1242,16 +1242,16 @@ function pintarVentas(){
     if(v.metodo_pago==='mixto' && v._pagos && v._pagos.length){ v._pagos.forEach(p=>{ porPago[p.metodo]=(porPago[p.metodo]||0)+ +p.monto; }); }
     else porPago[v.metodo_pago]=(porPago[v.metodo_pago]||0)+ +v.total; });
   const nomPer = {hoy:'hoy', semana:'esta semana', mes:'este mes', mespasado:'el mes pasado', todo:'histórico', rango:'el periodo'}[window._vtPer||'mes'];
-  const ICO0 = {efectivo:'💵', tarjeta:'💳', transferencia:'🏦', ak_pago:'📱', credito:'📄', apartado:'📦', mixto:'🔀'};
+  const ICO0 = {efectivo:'💵', tarjeta:'💳', transferencia:'🏦', ak_pago:'📱', credito:'📄', apartado:'📦', mixto:'🔀', mercadolibre:'🛒', amazon:'🅰️'}; // v246
   const perAct = window._vtPer || 'mes';
-  const NPAGO = {efectivo:'💵 efectivo', tarjeta:'💳 tarjeta', transferencia:'🏦 transferencia', ak_pago:'📱 AK Pago', credito:'📄 crédito', apartado:'📦 apartado (pagado antes)', mixto:'🔀 mixto'};
+  const NPAGO = {efectivo:'💵 efectivo', tarjeta:'💳 tarjeta', transferencia:'🏦 transferencia', ak_pago:'📱 AK Pago', credito:'📄 crédito', apartado:'📦 apartado (pagado antes)', mixto:'🔀 mixto', mercadolibre:'🛒 Mercado Libre (en línea)', amazon:'🅰️ Amazon (en línea)'}; // v246
   const filtros = [pago?('solo '+NPAGO[pago]):'', vend?('solo '+vend):'', q?('búsqueda "'+q+'"'):''].filter(Boolean).join(' · ');
   $('vt-kpis').innerHTML = `
     <div class="kpi" style="border-top-width:5px${filtros?';background:#fffbeb':''}"><div class="l">Vendido ${nomPer}${filtros?' — '+esc(filtros):''}</div><div class="v">${fmt(tPer)}</div><div class="s">${vivas.length} venta(s) · ticket promedio ${fmt(ticket)}${filtros?' · <b>total del filtro</b>':''}</div></div>
     ${esFinanzas()?`<div class="kpi"><div class="l">Utilidad ${nomPer}</div><div class="v" style="color:${uPer>=0?'var(--verde)':'#b91c1c'}">${fmt(Math.round(uPer*100)/100)}</div><div class="s">${tPer>0?('margen '+Math.round(uPer/(tPer/1.16)*100)+'% · sin IVA'):'sin IVA'}</div></div>`:''}
     ${perAct!=='hoy'?`<div class="kpi"><div class="l">Vendido hoy</div><div class="v">${fmt(tHoy)}</div><div class="s">${nHoy} venta(s)${perAct==='mespasado'?' · fuera del periodo':''}</div></div>`:''}
     ${esFinanzas()?`<div class="kpi"><div class="l">Cómo pagaron</div><div class="v" style="font-size:15px;line-height:1.5">${Object.keys(porPago).length?Object.entries(porPago).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${ICO0[k]||''} ${fmt(v)}`).join('<br>'):'—'}</div><div class="s">en el periodo</div></div>`:''}`; // v162: el vendedor no ve el total en efectivo (conteo a ciegas)
-  const ICO = {efectivo:'💵', tarjeta:'💳', transferencia:'🏦', ak_pago:'📱', credito:'📄', apartado:'📦', mixto:'🔀'};
+  const ICO = {efectivo:'💵', tarjeta:'💳', transferencia:'🏦', ak_pago:'📱', credito:'📄', apartado:'📦', mixto:'🔀', mercadolibre:'🛒', amazon:'🅰️'}; // v246
   const dias = {};
   rows.forEach(v=>{ const f=new Date(v.fecha); const k=f.getFullYear()+'-'+f.getMonth()+'-'+f.getDate(); (dias[k]=dias[k]||[]).push(v); });
   const nomDia = (fecha)=>{ const d=new Date(fecha); d.setHours(0,0,0,0);
@@ -1470,7 +1470,7 @@ async function verVenta(id){
     const vv = await sb.from('ventas').select('id,folio,total,metodo_pago,cancelada,efectivo,cliente_id,notas,externa').eq('id', id).single();
     if(vv.data){ const V = vv.data; let pg = [];
       if(V.metodo_pago==='mixto'){ const r = await sb.from('venta_pagos').select('metodo,monto').eq('venta_id', id); pg = r.data||[]; }
-      const ic = {efectivo:'💵',tarjeta:'💳',transferencia:'🏦',ak_pago:'📱',credito:'📄',apartado:'📦',mixto:'🔀'};
+      const ic = {efectivo:'💵',tarjeta:'💳',transferencia:'🏦',ak_pago:'📱',credito:'📄',apartado:'📦',mixto:'🔀',mercadolibre:'🛒',amazon:'🅰️'};
       pagoHtml = `<p class="small" style="margin:0 0 8px">${ic[V.metodo_pago]||''} <b>Pago:</b> ${V.metodo_pago==='mixto' ? pg.map(p=>`${ic[p.metodo]||''} ${esc(p.metodo)} ${fmt(p.monto)}`).join(' + ') : esc(V.metodo_pago)+' '+fmt(V.total)}
         ${esAdmin() && !V.cancelada && !['credito','apartado'].includes(V.metodo_pago) ? ` <button class="btn sm sec" onclick='cambiarPagoVenta(${JSON.stringify({id:V.id,folio:V.folio,total:+V.total,metodo:V.metodo_pago,pagos:pg})})'>✏️ Cambiar forma de pago</button>` : ''}
         ${V.externa?' <span class="badge" style="background:#ede9fe;color:#6d28d9">🏷️ venta externa · no cuenta para la meta</span>':''}
@@ -6519,6 +6519,7 @@ async function guardarConteoChica(){
   vCaja();
 }
 const noCP = v => !/CONSUMO PROPIO/i.test((v && v.notas) || ''); // v231: el consumo propio no es dinero que entra a caja
+const PAGO_EN_LINEA = ['mercadolibre','amazon']; // v246: ventas de Mercado Libre / Amazon registradas por el agente (externas: no cuentan para la meta ni para caja/banco del día)
 async function vCaja(){
   const f = window._cajaFecha || hoyMX();
   const [cfgR, vtR, mvR, ctR, hisR] = await Promise.all([
@@ -6542,7 +6543,7 @@ async function vCaja(){
   const ciego = !esFinanzas() && !corte; // v162: vendedor sin corte del día → no ve cuánto efectivo "debería" haber
   window._cajaCalc = {fecha:f, fondo:fondoUsar, efectivo, otros:totOtros, retiros:retiros-entradas, esperado, primero: !prev && !corte, ciego};
   const LOCK = '<span title="Se muestra después de hacer el corte">🔒</span>';
-  const ico = {efectivo:'💵',tarjeta:'💳',transferencia:'🏦',ak_pago:'📱',credito:'📄',apartado:'📦',mixto:'🔀','mixto (no efectivo)':'🔀'};
+  const ico = {efectivo:'💵',tarjeta:'💳',transferencia:'🏦',ak_pago:'📱',credito:'📄',apartado:'📦',mixto:'🔀','mixto (no efectivo)':'🔀',mercadolibre:'🛒',amazon:'🅰️'};
   $('vtools').innerHTML = `<input type="date" value="${f}" onchange="window._cajaFecha=this.value; vCaja()" style="padding:8px;border:1px solid var(--linea);border-radius:8px">
     ${puedeVender()?`<button class="btn sec" onclick="movCaja()">💸 Retiro / gasto</button> <button class="btn sec" onclick="compraLocal()">🧾 Compra a proveedor local</button>`:''}
     ${esAdmin()?`<button class="btn sec" onclick="configFondo(${fondoFijo})">⚙️ Fondo fijo</button>`:''}`;
@@ -7755,7 +7756,7 @@ async function calcularDinero(hoy){
     const desdeISO = D.cap.creado || new Date(D.cap.fecha+'T00:00:00').toISOString();
     // ENTRÓ: ventas no-crédito DESPUÉS de la captura
     const vts = await traerTodo(()=>sb.from('ventas').select('id,total,metodo_pago,cancelada,efectivo,notas').gt('fecha', desdeISO).eq('cancelada',false).order('id'));
-    const vivasV = (vts||[]).filter(v=>v.metodo_pago!=='credito' && v.metodo_pago!=='apartado' && noCP(v)); // v157: apartado → el dinero entra por sus pagos
+    const vivasV = (vts||[]).filter(v=>v.metodo_pago!=='credito' && v.metodo_pago!=='apartado' && !PAGO_EN_LINEA.includes(v.metodo_pago) && noCP(v)); // v157: apartado → el dinero entra por sus pagos · v246: ML/Amazon depositan después
     D.entroVentas = vivasV.reduce((s,v)=>s+ +v.total,0);
     // v157: pagos de apartados después de la captura — efectivo al cajón (caja_movs origen 'apartado'), lo demás al banco
     D.apBanco = 0; D.apEf = 0;
