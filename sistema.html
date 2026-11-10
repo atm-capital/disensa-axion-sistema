@@ -5807,13 +5807,13 @@ async function recibirPedido(id){
    y queda pendiente de nota de crédito o reposición.
 ============================================================ */
 async function pintarSinFactura(){ // v245: recibido de más contra lo facturado
-  const el = $('ped-sinfact'); if(!el || !esAdmin()) return;
+  const el = $('ped-sinfact'); if(!el || !puedeVender()) return; // v247: la tienda también lo resuelve
   try{
-    const its = await traerTodo(()=>sb.from('pedido_compra_items').select('id,pedido_id,producto_id,cantidad,cantidad_recibida,cantidad_facturada,cancelada,costo_unit,productos(codigo,descripcion,stock),pedidos_compra(folio_externo,fecha)').gt('cantidad_recibida',0).order('id'));
+    const its = await traerTodo(()=>sb.from('pedido_compra_items').select('id,pedido_id,producto_id,cantidad,cantidad_recibida,cantidad_facturada,cancelada,sinfact_ok,costo_unit,productos(codigo,descripcion,stock),pedidos_compra(folio_externo,fecha)').gt('cantidad_recibida',0).order('id'));
     const conF = new Set((its||[]).filter(i=>+i.cantidad_facturada>0).map(i=>i.pedido_id));
     const cfg = await sb.from('config_sistema').select('valor').eq('clave','sinfact_ok').maybeSingle();
     const okIds = new Set(((cfg.data&&cfg.data.valor)||[]).map(Number));
-    const L = (its||[]).filter(i=>!i.cancelada && conF.has(i.pedido_id) && +i.cantidad_recibida > +(i.cantidad_facturada||0) && !okIds.has(i.id));
+    const L = (its||[]).filter(i=>!i.cancelada && conF.has(i.pedido_id) && +i.cantidad_recibida > +(i.cantidad_facturada||0) && !okIds.has(i.id) && !i.sinfact_ok);
     window._sinF = L;
     if(!L.length){ el.innerHTML = ''; return; }
     el.innerHTML = `<div class="card" style="margin-bottom:12px;border:2px solid var(--ambar);background:#fffbeb"><h3 style="margin:0 0 4px">⚠️ Recibido pero NO viene en la factura (${L.length})</h3>
@@ -5824,26 +5824,21 @@ async function pintarSinFactura(){ // v245: recibido de más contra lo facturado
       </tbody></table></div></div>`;
   }catch(e){ el.innerHTML = ''; }
 }
-async function sinFactNoLlego(id){
+async function sinFactNoLlego(id){ // v247: vía RPC (tienda o admin)
   const i = (window._sinF||[]).find(x=>x.id===id); if(!i) return;
-  const fac = +(i.cantidad_facturada||0), dif = +i.cantidad_recibida - fac;
-  if(!confirm('¿Quitar '+dif+' pza(s) de '+((i.productos&&i.productos.codigo)||'')+' del inventario y del pedido?\n\nÚsalo solo si NO están en la tienda.')) return;
-  const up = await sb.from('pedido_compra_items').update(fac>0 ? {cantidad_recibida:fac, cantidad:fac, importe:Math.round(fac * +i.costo_unit * 100)/100} : {cantidad_recibida:0, cancelada:true}).eq('id', id);
-  if(up.error){ toast(errMsg(up.error), true); return; }
-  const p = await sb.from('productos').select('stock').eq('id', i.producto_id).single();
-  if(!p.error) await sb.from('productos').update({stock: Math.max(0, +p.data.stock - dif)}).eq('id', i.producto_id);
-  const {data:its} = await sb.from('pedido_compra_items').select('importe,cancelada').eq('pedido_id', i.pedido_id);
-  const sub = Math.round((its||[]).filter(x=>!x.cancelada).reduce((s,x)=>s+ +x.importe,0)*100)/100, iva = Math.round(sub*16)/100;
-  await sb.from('pedidos_compra').update({subtotal:sub, iva, total:Math.round((sub+iva)*100)/100}).eq('id', i.pedido_id);
-  logEv('inventario','No llegó (no venía en factura): '+((i.productos&&i.productos.codigo)||'')+' x'+dif+' · pedido '+((i.pedidos_compra&&i.pedidos_compra.folio_externo)||i.pedido_id));
-  toast('Quitado del inventario ✓'); pintarSinFactura();
+  const dif = +i.cantidad_recibida - +(i.cantidad_facturada||0), cod = (i.productos&&i.productos.codigo)||'';
+  if(!confirm('¿Quitar '+dif+' pza(s) de '+cod+' del inventario y del pedido?\n\nÚsalo solo si NO están en la tienda.')) return;
+  const r = await sb.rpc('sinfact_resolver', {p_item_id:id, p_llego:false});
+  if(r.error){ toast(errMsg(r.error), true); return; }
+  logEv('inventario','No llegó (no venía en factura): '+cod+' x'+dif+' · pedido '+((i.pedidos_compra&&i.pedidos_compra.folio_externo)||i.pedido_id));
+  toast('Quitado del inventario y del pedido ✓'); pintarSinFactura();
 }
 async function sinFactSiLlego(id){
-  const cfg = await sb.from('config_sistema').select('valor').eq('clave','sinfact_ok').maybeSingle();
-  const arr = (((cfg.data&&cfg.data.valor)||[])).concat([id]);
-  const r = cfg.data ? await sb.from('config_sistema').update({valor:arr}).eq('clave','sinfact_ok') : await sb.from('config_sistema').insert({clave:'sinfact_ok', valor:arr});
+  const i = (window._sinF||[]).find(x=>x.id===id), cod = (i&&i.productos&&i.productos.codigo)||'';
+  if(!confirm('¿Confirmas que '+cod+' SÍ está físicamente en la tienda (regalo o viene en otra factura)?')) return;
+  const r = await sb.rpc('sinfact_resolver', {p_item_id:id, p_llego:true});
   if(r.error){ toast(errMsg(r.error), true); return; }
-  logEv('inventario','Sí llegó aunque no viene en factura: partida '+id); toast('Marcado ✓'); pintarSinFactura();
+  logEv('inventario','Sí llegó aunque no viene en factura: '+cod+' (partida '+id+')'); toast('Marcado ✓'); pintarSinFactura();
 }
 function reportarDevolucion(p){
   abrirModal(`<h3>⚠️ Reportar producto dañado o equivocado</h3>
