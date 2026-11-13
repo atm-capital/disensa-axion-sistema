@@ -9016,6 +9016,21 @@ async function axBM(){
         location.href=A+'\x23axft';
         return;
       }
+      var dE=document;try{var frE=document.getElementById('cpo');if(frE&&frE.contentDocument&&frE.contentDocument.querySelector('a[href*="Downloader"][href*="tipoDoc=xml"]')){dE=frE.contentDocument;}}catch(eE){}
+      var lxE=dE.querySelectorAll('a[href*="Downloader"][href*="tipoDoc=xml"]');
+      if(lxE.length){ /* v252: facturas desde Estado de Cuenta de Truper en linea */
+        var outE=[];var visE={};
+        for(var xi=0;xi<lxE.length;xi++){var trE=lxE[xi].closest('tr');if(!trE){continue;}var facE=(trE.cells[0].innerText||'').trim();if(!facE||visE[facE]){continue;}visE[facE]=1;
+          var mpE=(trE.innerText||'').match(/\b0(\d{9})\b/);
+          var txE=await (await fetch(lxE[xi].href,{credentials:'include'})).text();
+          var paE=[].slice.call(trE.querySelectorAll('a[href*="tipoDoc=pdf"]')).filter(function(z){return z.href.indexOf('anexoFiscal')<0;})[0];var pbE='';
+          if(paE){var abE=new Uint8Array(await (await fetch(paE.href,{credentials:'include'})).arrayBuffer());var sE='';for(var qE=0;qE<abE.length;qE+=32768){sE+=String.fromCharCode.apply(null,abE.subarray(qE,qE+32768));}pbE=btoa(sE);}
+          outE.push({pedido:mpE?mpE[1]:'',factura:facE,xml:txE,pdf:pbE,pdfN:facE+'.pdf'});}
+        if(!outE.length){alert('Axion: no encontre facturas con XML en el Estado de Cuenta.');return;}
+        window.name='AXFT:'+JSON.stringify(outE);
+        location.href=A+'\x23axft';
+        return;
+      }
       var rt=await fetch('/reng/servlet/renglonaje.csv',{credentials:'include'});
       var tt=new TextDecoder('windows-1252').decode(await rt.arrayBuffer());
       if(!/^\s*No\. Pedido/i.test(tt)){alert('Axion: abre primero el DETALLE del pedido en Truper (Pedidos, Status de Pedidos, clic en el pedido) y vuelve a darle a este boton.');return;}
@@ -9322,6 +9337,9 @@ async function vImportar(){
         <div class="field"><label><input type="checkbox" id="lp-mios" checked> También actualizar el COSTO de MIS productos que aparezcan en la lista (el precio de venta NO se toca)</label></div>
         <button class="btn" id="lp-btn" onclick="subirListaPrecios()">Actualizar lista de precios</button>
         <p class="small muted" id="lp-status" style="margin-top:8px"></p>
+      </div>
+      <div class="card" style="border-left:4px solid #E8790F"><h3>🧾 Facturas de Truper — directo de Truper en línea</h3>
+        <p class="small muted" style="margin-bottom:8px">1) Entra a <a href="https://www.truperenlinea.com" target="_blank" class="link">Truper en línea</a> → <b>Generales → Estado de Cuenta</b>. 2) Dale clic al marcador <b>🔧 Enviar a Axion</b>. Trae el XML y PDF de las facturas que aparecen, las archiva en Finanzas → Facturas y las liga a su pedido (no duplica). <b>Si el marcador es anterior a v252, vuelve a arrastrar el botón 🔧 Enviar a Axion de arriba a tu barra.</b></p>
       </div>
       <div class="card"><h3>🔧 Truper: lista de precios (catalogo.csv)</h3>
         <p class="small muted" style="margin-bottom:10px">1) En <b>Truper en línea</b> → Actualización de precios y productos → <b>Archivo de Precios</b> → baja el <b>.csv</b>. 2) Súbelo aquí.
