@@ -5792,11 +5792,15 @@ async function registrarRecepcion(pedidoId){
   // Defensa 1: ¿el papel es de ESTE pedido? (evita registrar mercancía que no llegó)
   const partesTocadas = [...new Set(pedItems.filter(i=>+($('rec-'+i.id)?.value||0)>0).map(i=>String(i.parte||'')))].filter(Boolean);
   if(!window._recOk){
-    const esperado = partesTocadas.join(' o ') || String(pedidoId);
+    const esperado = partesTocadas.join(' o ') || (window._pedFolioAct ? window._pedFolioAct+' (número de pedido del proveedor)' : String(pedidoId)); // v251
     const cap = prompt('Escribe el número de PEDIDO o de PARTE que viene impreso en la lista de empaque:\n\n(en esta pantalla: '+esperado+')');
     if(cap===null) return;
     const limpio = String(cap).replace(/\D/g,'');
-    const valido = limpio && (partesTocadas.some(p=>p.replace(/\D/g,'')===limpio) || (window._pedFolioAct||'').replace(/\D/g,'')===limpio);
+    let valido = limpio && (String(pedidoId)===limpio || partesTocadas.some(p=>p.replace(/\D/g,'')===limpio) || (window._pedFolioAct||'').replace(/\D/g,'')===limpio);
+    if(!valido && limpio && !partesTocadas.length){ // v251: proveedores sin "parte" (Truper, etc.): el papel trae factura o remisión, no el pedido
+      valido = confirm('El número '+limpio+' no es el pedido '+(window._pedFolioAct||pedidoId)+'.\n\nSi es la FACTURA o remisión del proveedor de ESTE pedido (mismo proveedor y mismos productos), dale Aceptar para recibir.\n\nSi no estás seguro, Cancelar y avísale a Andrés.');
+      if(valido) logEv('recepcion','pedido '+pedidoId+': recibido con documento del proveedor '+limpio);
+    }
     if(!valido){
       alert('⚠️ Ese número NO corresponde a este pedido.\n\nEl papel dice ' + (limpio||'—') + ' y aquí las partes son: ' + esperado + '.\n\nBusca el pedido correcto en la lista antes de recibir. Si crees que sí es, avísale a Andrés.');
       logEv('recepcion_bloqueada', 'pedido '+pedidoId+' papel '+limpio);
