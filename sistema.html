@@ -3990,6 +3990,7 @@ async function vInventario(){
     <button class="btn sec" id="btn-sol-res" onclick="verSolicitudesRes()">📥 Solicitudes</button>
     <button class="btn sec" id="btn-eti-nuevas" onclick="elegirEtiquetas()">🏷️ Etiquetas</button>
     <button class="btn sec" id="btn-precios-sug" onclick="revisarPreciosSugeridos()">💲 Revisar precios</button>
+    <button class="btn sec" onclick="famDisparejas()" title="Familias (mismo producto en otras medidas) con precios fuera de la regla">👪 Familias disparejas</button>
     <button class="btn sec" onclick="invPrecioLote()" title="Cambia el precio de todos los productos que estás viendo con el filtro">✏️ Precio en lote</button>
     ${esAdmin()?`<button class="btn sec" onclick="famRevisar(null)" title="Revisa líneas y colores: mismo producto en otro color = mismo precio; medidas con margen parejo">🧩 Familias</button>`:''}
     ${esAdmin()?`<button class="btn sec" onclick="recalcCostoReal()" title="Vuelve a calcular el costo real (promedio ponderado de facturas, notas de crédito y pronto pago) de todo el inventario y de todas las ventas">🧮 Costo real</button>`:''}
@@ -5644,6 +5645,7 @@ async function verPedido(id, estado){
     <thead><tr><th>Producto</th><th class="num">Pedida</th><th class="num">Recibida</th>${recibiendo?'<th class="num">Recibir ahora</th>':''}${verCostos?'<th class="num">Costo</th><th class="num">Importe</th>':''}${editando?'<th>Quitar</th>':''}${puedeVender()?'<th title="Reportar dañado o equivocado">Devolución</th>':''}</tr></thead>
     <tbody>${cuerpo}</tbody>
     ${verCostos?`<tfoot><tr><th colspan="${nCols-1}" class="num">Suma</th><th class="num">${fmt(tot)}</th></tr></tfoot>`:''}</table></div>
+    ${esAdmin()?(setTimeout(()=>{ if(typeof pedReglaPintar==='function') pedReglaPintar(id); },250),'<div id="ped-regla" style="margin-top:10px"></div>'):''}
     <div class="acciones">
       ${recibiendo?`<button class="btn sec" onclick="llenarPendiente()">Llenar TODO lo pendiente</button>
       <button class="btn" onclick="registrarRecepcion(${id})">Registrar recepción</button>`:''}
@@ -9759,7 +9761,7 @@ async function famCargar(){
     const M = new Map(); (rows||[]).forEach(p=>{ if(p.granel) return; const k = famKey(p.descripcion, p.codigo); if(!k) return; if(!M.has(k)) M.set(k, []); M.get(k).push(p); });
     window._famCat = M;
   }catch(e){ window._famCat = new Map(); }
-  window._famCargando = false; impPintar();
+  window._famCargando = false; try{ if(typeof impData!=='undefined' && impData && impData.items) impPintar(); }catch(e){} // v250
 }
 function famFuera(p){ const r = precioAxionRegla(+p.costo); return r>0 && Math.abs(r - +p.precio) >= 1; }
 function famInfo(i){
@@ -9789,8 +9791,69 @@ async function famAplicar(){
   for(const p of sel){ const r = precioAxionRegla(+p.costo); if(!(r>0)) continue;
     const u = await sb.from('productos').update({precio:r}).eq('id', p.id); if(!u.error){ ok++; p.precio = r; } }
   logEv('precios', 'Familia a la regla desde importar pedido: '+sel.map(p=>p.codigo).join(', '));
-  toast('✓ '+ok+' precio(s) actualizados a la regla'); cerrarModal(); impPintar();
+  toast('✓ '+ok+' precio(s) actualizados a la regla'); cerrarModal(); if(window._famDespues){ const f=window._famDespues; window._famDespues=null; f(); } else impPintar(); // v250
 }
+// v250: revisar precios contra la regla y por FAMILIA desde el pedido (cualquier forma de importar) y desde Catálogo
+async function famAsegurar(){ if(!window._famCat) famCargar(); for(let k=0;k<60 && !window._famCat;k++) await new Promise(r=>setTimeout(r,200)); }
+function famListaModal(lista, titulo, nota, despues){
+  window._famSel = lista; window._famDespues = despues || null;
+  abrirModal(`<h3>${titulo}</h3>
+    <p class="small muted" style="margin:0 0 8px">${nota||''} Precio regla = ${impRegla().join('/')}% sobre venta con el costo de reposición, redondeado hacia arriba al peso.</p>
+    <div class="tbl-scroll" style="max-height:420px;overflow-y:auto"><table><thead><tr><th><input type="checkbox" onchange="window._famSel.forEach((p,k)=>{ const c=$('fam-'+k); if(c && !c.disabled) c.checked=this.checked; })"${esAdmin()?'':' disabled'}></th><th>Código</th><th>Descripción</th><th class="num">Costo</th><th class="num">Precio hoy</th><th class="num">Margen hoy</th><th class="num">Precio regla</th></tr></thead><tbody>
+    ${lista.map((p,k)=>{ const r = precioAxionRegla(+p.costo), m = margenSV(+p.precio, +p.costo), fu = famFuera(p);
+      return `<tr${fu?' style="background:#fffbeb"':''}><td><input type="checkbox" id="fam-${k}"${fu?' checked':''}${esAdmin()?'':' disabled'}></td><td>${esc(p.codigo)}</td><td>${esc((p.descripcion||'').slice(0,50))}</td><td class="num">${fmt(p.costo)}</td><td class="num">${fmt(p.precio)}</td><td class="num">${m===null?'—':Math.round(m*100)+'%'}</td><td class="num"><b>${fmt(r)}</b>${fu?(r>+p.precio?' ▲':' ▼'):' ✓'}</td></tr>`; }).join('')}
+    </tbody></table></div>
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button>${esAdmin()?`<button class="btn" onclick="famAplicar()">Aplicar regla a los marcados</button>`:''}</div>`, true);
+}
+async function pedReglaPintar(pedidoId){ // panel dentro del pedido
+  const el = $('ped-regla'); if(!el) return;
+  el.innerHTML = '<p class="small muted">Revisando precios contra la regla…</p>';
+  const r = await sb.from('pedido_compra_items').select('producto_id,cancelada,productos(id,codigo,descripcion,costo,precio,granel)').eq('pedido_id', pedidoId);
+  await famAsegurar();
+  const vistos = new Set(), filas = [];
+  (r.data||[]).forEach(x=>{ const p = x.productos; if(x.cancelada || !p || p.granel || vistos.has(p.id)) return; vistos.add(p.id);
+    const reg = precioAxionRegla(+p.costo), fu = famFuera(p), f = famInfo({d:p.descripcion, c:p.codigo});
+    if(fu || (f && f.fuera)) filas.push({p, reg, fu, f}); });
+  window._pedRegla = filas; window._pedReglaId = pedidoId;
+  if(!$('ped-regla')) return;
+  if(!filas.length){ $('ped-regla').innerHTML = `<p class="small" style="margin:0"><span class="badge b-verde">✓</span> Precios de este pedido y sus familias en regla (${impRegla().join('/')}%).</p>`; return; }
+  $('ped-regla').innerHTML = `<div style="border:2px solid var(--ambar);background:#fffbeb;border-radius:10px;padding:10px 12px">
+    <b>💲 Precios a revisar con la regla (${filas.length})</b> <span class="small muted">· productos de este pedido o de su familia fuera de regla</span>
+    <div class="tbl-scroll" style="margin-top:6px"><table><thead><tr><th>Producto</th><th class="num">Costo</th><th class="num">Precio hoy</th><th class="num">Regla</th><th>Familia</th></tr></thead><tbody>
+    ${filas.map((x,k)=>`<tr><td><b>${esc(x.p.codigo)}</b> ${esc((x.p.descripcion||'').slice(0,45))}</td><td class="num">${fmt(x.p.costo)}</td><td class="num">${fmt(x.p.precio)}</td>
+      <td class="num">${x.fu?`<b>${fmt(x.reg)}</b> ${x.reg>+x.p.precio?'▲':'▼'} <button class="btn sm sec" onclick="pedReglaUsar(${k})">Usar</button>`:'✓'}</td>
+      <td>${x.f && x.f.n>1 ? `<a class="link" style="cursor:pointer" onclick="pedReglaFamilia(${k})">${x.f.fuera?'⚠️ '+x.f.fuera+' de '+(x.f.n-1)+' fuera':'✓ pareja'} (${x.f.n})</a>` : '<span class="muted">—</span>'}</td></tr>`).join('')}
+    </tbody></table></div>
+    <button class="btn sm" style="margin-top:8px" onclick="pedReglaTodo()">👪 Ver y aplicar todo (productos + familias)</button></div>`;
+}
+async function pedReglaUsar(k){
+  const x = (window._pedRegla||[])[k]; if(!x || !esAdmin()) return;
+  if(!confirm('¿Cambiar el precio de '+x.p.codigo+' de '+fmt(x.p.precio)+' a '+fmt(x.reg)+' (regla)?')) return;
+  const u = await sb.from('productos').update({precio:x.reg}).eq('id', x.p.id);
+  if(u.error){ toast(errMsg(u.error), true); return; }
+  x.p.precio = x.reg; logEv('precios', 'Regla desde pedido: '+x.p.codigo+' → '+x.reg); toast('✓ Precio actualizado'); pedReglaPintar(window._pedReglaId);
+}
+function pedReglaFamilia(k){ const x = (window._pedRegla||[])[k]; if(!x || !x.f) return;
+  famListaModal(x.f.lista, '👪 Familia de '+esc(x.p.codigo), 'Mismo producto en otras medidas o colores.', ()=>{ if(window._pedReglaId) verPedido(window._pedReglaId); }); }
+function pedReglaTodo(){
+  const M = new Map(); (window._pedRegla||[]).forEach(x=>{ M.set(x.p.id, x.p); ((x.f&&x.f.lista)||[]).forEach(p=>M.set(p.id, p)); });
+  famListaModal([...M.values()].sort((a,b)=>String(a.descripcion).localeCompare(String(b.descripcion))), '💲 Productos del pedido y sus familias', 'Marcados en amarillo los que están fuera de regla.', ()=>{ if(window._pedReglaId) verPedido(window._pedReglaId); });
+}
+async function famDisparejas(){ // Catálogo: todas las familias con precios fuera de regla
+  abrirModal('<h3>👪 Familias disparejas</h3><p class="small muted">Revisando el catálogo…</p>', true);
+  await famAsegurar();
+  const L = []; window._famCat.forEach((lista, key)=>{ if(lista.length<2) return; const fu = lista.filter(famFuera).length; if(fu) L.push({key, lista, fu}); });
+  L.sort((a,b)=>b.fu-a.fu || b.lista.length-a.lista.length); window._famDisp = L;
+  const tot = L.reduce((s,x)=>s+x.fu,0);
+  abrirModal(`<h3>👪 Familias disparejas</h3>
+    <p class="small muted" style="margin:0 0 8px">${L.length} familia(s) con ${tot} producto(s) fuera de la regla ${impRegla().join('/')}%. Familia = mismo producto en otras medidas o colores (misma línea del proveedor).</p>
+    ${L.length?`<div class="tbl-scroll" style="max-height:440px;overflow-y:auto"><table><thead><tr><th>Familia</th><th class="num">Productos</th><th class="num">Fuera de regla</th><th></th></tr></thead><tbody>
+    ${L.map((x,k)=>`<tr><td>${esc(x.lista[0].descripcion.slice(0,55))}<div class="small muted">${esc(x.key.split('|')[0])} · ${esc(x.key.split('|')[1]||'')}</div></td><td class="num">${x.lista.length}</td><td class="num"><b>${x.fu}</b></td><td><button class="btn sm" onclick="famDispVer(${k})">Ver</button></td></tr>`).join('')}
+    </tbody></table></div>`:'<p>✓ Todas las familias están parejas.</p>'}
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>`, true);
+}
+function famDispVer(k){ const x = (window._famDisp||[])[k]; if(!x) return;
+  famListaModal(x.lista.slice().sort((a,b)=>+a.costo - +b.costo), '👪 '+esc(x.lista[0].descripcion.slice(0,50)), 'Ordenados de menor a mayor costo.', ()=>famDisparejas()); }
 function impPintar(){
   if(!window._famCat) famCargar(); // v249
   if(!impData || !$('imp-tbody')) return;
