@@ -5033,16 +5033,50 @@ async function vClientes(){
   const {data, error} = await sb.from('clientes').select('*').order('nombre');
   if(error) throw error;
   cliData = data;
+  try{ const st = await sb.rpc('clientes_stats'); window._cliSt = {}; (st.data||[]).forEach(x=>{ window._cliSt[x.cliente_id] = x; }); }catch(e){ window._cliSt = {}; } // v248
   $('v-clientes').innerHTML = `
     <div class="toolbar">
       <input type="search" id="cl-q" placeholder="Buscar por nombre, teléfono u oficio..." oninput="pintarClientes()">
       <label class="small"><input type="checkbox" id="cl-solo-maestros" onchange="pintarClientes()"> Solo maestros 🔧</label>
     </div>
     <div class="card"><div class="tbl-scroll"><table>
-      <thead><tr><th>Nombre</th><th>Oficio</th><th>💳 Crédito</th><th>Teléfono</th><th>Correo</th><th>RFC</th><th>Notas</th><th></th></tr></thead>
+      <thead><tr><th>Nombre</th><th>Oficio</th><th>💳 Crédito</th><th>Teléfono</th><th>Correo</th><th>RFC</th><th>Notas</th><th class="num" style="cursor:pointer" title="Ordenar" onclick="cliOrden('total')">🛒 Comprado ⇅</th><th class="num" style="cursor:pointer" title="Ordenar" onclick="cliOrden('compras')">Compras ⇅</th><th class="num">Ticket prom.</th><th style="cursor:pointer" title="Ordenar" onclick="cliOrden('ultima')">Última ⇅</th><th class="num" style="cursor:pointer" title="Ordenar" onclick="cliOrden('descuento')">Descuento dado ⇅</th><th></th></tr></thead>
       <tbody id="cl-body"></tbody></table></div>
       <p class="small muted" id="cl-pie" style="margin-top:10px"></p></div>`;
   pintarClientes();
+}
+function cliOrden(k){ window._cliOrd = window._cliOrd===k ? null : k; pintarClientes(); } // v248
+async function verStatsCliente(id){ // v248: estadísticas de compra del cliente (RPC cliente_detalle)
+  const c = (cliData||[]).find(x=>x.id===id) || {}, S = (window._cliSt||{})[id] || {};
+  abrirModal(`<h3>📊 ${esc(c.nombre||'Cliente')}</h3><p class="small muted">Cargando…</p>`, true);
+  const r = await sb.rpc('cliente_detalle', {p_cliente_id:id});
+  if(r.error){ toast(errMsg(r.error), true); cerrarModal(); return; }
+  const d = r.data || {}, tot = +S.total||0, dv = +d.desc_venta||0, dp = +d.desc_precio||0, dt = dv+dp;
+  const pctD = (tot+dt)>0 ? dt/(tot+dt) : 0;
+  const meses = d.meses||[], mx = Math.max(1, ...meses.map(m=>+m.total));
+  const cats = d.categorias||[], totCat = cats.reduce((s,x)=>s+ +x.importe,0) || 1;
+  const fec = x => x ? fecha(String(x).slice(0,10)) : '—';
+  const dias = S.ultima ? Math.floor((Date.now()-new Date(S.ultima))/864e5) : null;
+  abrirModal(`<h3>📊 ${esc(c.nombre||'Cliente')}${c.oficio?` <span class="badge b-azul">🔧 ${esc(c.oficio)}</span>`:''}</h3>
+    <div class="kpis" style="margin-bottom:10px">
+      <div class="kpi"><div class="l">Ha comprado</div><div class="v">${fmt(tot)}</div><div class="s">${+S.compras||0} compra(s) · ticket prom. ${fmt(+S.ticket||0)}</div></div>
+      <div class="kpi"><div class="l">Primera / última compra</div><div class="v" style="font-size:16px">${fec(S.primera)} → ${fec(S.ultima)}</div><div class="s">${dias===null?'sin compras':(dias===0?'compró hoy':'hace '+dias+' día(s)')}</div></div>
+      <div class="kpi" style="border-top-color:var(--ambar)"><div class="l">Descuento que le hemos dado</div><div class="v">${fmt(dt)}</div>
+        <div class="s">${Math.round(pctD*1000)/10}% de lo que habría pagado a precio de lista · ${fmt(dv)} en descuento de venta + ${fmt(dp)} abajo del precio de lista</div></div>
+    </div>
+    <h4 style="margin:10px 0 6px">Qué tipo de cosas compra</h4>
+    ${cats.length?`<div class="tbl-scroll"><table><thead><tr><th>Familia</th><th class="num">Importe</th><th class="num">%</th><th style="width:40%"></th></tr></thead><tbody>
+      ${cats.map(x=>{ const p = +x.importe/totCat; return `<tr><td>${esc(x.cat)}</td><td class="num">${fmt(x.importe)}</td><td class="num">${Math.round(p*100)}%</td><td><div style="height:8px;border-radius:4px;background:#c98a3c;width:${Math.max(2,Math.round(p*100))}%"></div></td></tr>`; }).join('')}
+      </tbody></table></div>`:'<p class="small muted">Sin compras.</p>'}
+    <h4 style="margin:14px 0 6px">Lo que más se lleva</h4>
+    ${(d.top||[]).length?`<div class="tbl-scroll"><table><thead><tr><th>Producto</th><th class="num">Cantidad</th><th class="num">Importe</th></tr></thead><tbody>
+      ${(d.top||[]).map(x=>`<tr><td><span class="small muted">${esc(x.codigo||'')}</span> ${esc(x.descripcion||'')}</td><td class="num">${+x.cant}</td><td class="num">${fmt(x.importe)}</td></tr>`).join('')}
+      </tbody></table></div>`:''}
+    <h4 style="margin:14px 0 6px">Compras por mes (últimos 12 meses)</h4>
+    ${meses.length?`<div class="tbl-scroll"><table><tbody>${meses.map(m=>`<tr><td class="small" style="white-space:nowrap">${esc(m.mes)}</td><td style="width:60%"><div style="height:10px;border-radius:4px;background:#1d4ed8;width:${Math.max(2,Math.round(+m.total/mx*100))}%"></div></td><td class="num">${fmt(m.total)}</td><td class="small muted">${+m.compras} compra(s)</td></tr>`).join('')}</tbody></table></div>`:'<p class="small muted">Sin compras en los últimos 12 meses.</p>'}
+    ${(d.metodos||[]).length?`<p class="small" style="margin-top:10px"><b>Cómo paga:</b> ${(d.metodos||[]).map(x=>esc(x.metodo_pago||'—')+' '+fmt(x.total)+' ('+x.n+')').join(' · ')}</p>`:''}
+    <p class="small muted">Sin ventas canceladas. "Abajo del precio de lista" compara cada partida contra el precio que tenía el producto ese día.</p>
+    <div class="acciones"><button class="btn" onclick="cerrarModal()">Cerrar</button></div>`, true);
 }
 function pintarClientes(){
   const q = ($('cl-q').value||'').toLowerCase().trim();
@@ -5050,13 +5084,15 @@ function pintarClientes(){
   const rows = cliData.filter(c=>
     (!q || (c.nombre||'').toLowerCase().includes(q) || (c.telefono||'').includes(q) || (c.oficio||'').toLowerCase().includes(q)) &&
     (!solo || (c.oficio||'')));
+  const S = window._cliSt||{}, o = window._cliOrd; // v248: ordenar por compras
+  if(o) rows.sort((a,b)=> o==='ultima' ? String((S[b.id]||{}).ultima||'').localeCompare(String((S[a.id]||{}).ultima||'')) : (+((S[b.id]||{})[o])||0) - (+((S[a.id]||{})[o])||0));
   $('cl-body').innerHTML = rows.map(c=>`<tr>
     <td><b>${esc(c.nombre)}</b></td>
     <td>${c.oficio?`<span class="badge b-azul">🔧 ${esc(c.oficio)}</span>${+c.desc_pct>0?` <span class="badge b-verde">−${+c.desc_pct}%</span>`:''}`:''}</td>
     <td>${crBadgeCliente(c)||'<span class="small muted">—</span>'}</td>
     <td>${esc(c.telefono)}</td><td>${esc(c.correo)}</td>
-    <td>${esc(c.rfc)}</td><td class="small muted">${esc(c.notas)}</td>
-    <td style="white-space:nowrap">${puedeVender()?`<button class="btn sec sm" onclick="editarCliente(${c.id})">Editar</button> <button class="btn sec sm" title="Expediente de crédito" onclick="expedienteCredito(${c.id})">💳</button> <button class="btn sec sm" title="Qué precios le hemos cotizado y vendido" onclick="preciosCliente(${c.id})">💲 Precios</button>`:''}</td></tr>`).join('')
+    <td>${esc(c.rfc)}</td><td class="small muted">${esc(c.notas)}</td>${(()=>{ const S=(window._cliSt||{})[c.id]; if(!S) return '<td class="num muted">—</td><td class="num muted">0</td><td></td><td></td><td></td>'; const d=+S.descuento||0, p=(+S.total+d)>0?d/(+S.total+d):0; return `<td class="num"><b>${fmt(S.total)}</b></td><td class="num">${+S.compras}</td><td class="num">${fmt(S.ticket)}</td><td class="small">${fecha(String(S.ultima).slice(0,10))}</td><td class="num">${d>0?fmt(d)+' <span class="small muted">'+Math.round(p*100)+'%</span>':'—'}</td>`; })()}
+    <td style="white-space:nowrap">${puedeVender()?`<button class="btn sec sm" title="Qué compra, cuánto y descuentos" onclick="verStatsCliente(${c.id})">📊</button> <button class="btn sec sm" onclick="editarCliente(${c.id})">Editar</button> <button class="btn sec sm" title="Expediente de crédito" onclick="expedienteCredito(${c.id})">💳</button> <button class="btn sec sm" title="Qué precios le hemos cotizado y vendido" onclick="preciosCliente(${c.id})">💲 Precios</button>`:''}</td></tr>`).join('')
     || '<tr><td colspan="8" class="muted">Aún no hay clientes. Los clientes son opcionales: puedes vender a "Mostrador".</td></tr>';
   const nM = cliData.filter(c=>c.oficio).length, nC = cliData.filter(c=>c.credito_estado==='autorizado').length, nT = cliData.filter(c=>c.credito_estado==='tramite').length;
   $('cl-pie').textContent = `${rows.length} cliente(s) · ${nM} maestro(s) registrados 🔧 · ${nC} con crédito autorizado 💳${nT?` · ${nT} en trámite`:''}`;
