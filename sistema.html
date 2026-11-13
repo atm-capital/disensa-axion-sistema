@@ -641,6 +641,11 @@ async function traerFacturasIndar(){
   window.open('https://indar.mx/MiCuenta#axfx='+h, '_blank');
   abrirModal('<h3>🧾 Traer facturas de Indar</h3><p>Se abrió Indar en otra pestaña.</p><ol style="margin:10px 0 10px 18px;line-height:1.9"><li>Si te pide sesión, iníciala.</li><li>Dale clic a tu botón <b>🔧 Enviar a Axion</b>.</li><li>El botón busca facturas nuevas, trae sus XML y PDF, y regresa aquí solito — nomás confirmas con <b>Aplicar y archivar</b>.</li></ol><div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>');
 }
+function traerFacturasTruper(){ // v253: abre el Estado de Cuenta de Truper en línea; el marcador trae XML+PDF y regresa
+  logEv('vista','traer facturas Truper');
+  window.open('https://www.truperenlinea.com/reng/servlet/renglonaje.EstadoCuenta?cte=425174', '_blank');
+  abrirModal('<h3>🧾 Traer facturas de Truper</h3><p>Se abrió el <b>Estado de Cuenta</b> de Truper en línea en otra pestaña.</p><ol style="margin:10px 0 10px 18px;line-height:1.9"><li>Si te pide sesión, iníciala y vuelve a darle a este botón.</li><li>Dale clic a tu marcador <b>🔧 Enviar a Axion</b>.</li><li>Trae el XML y PDF de las facturas, regresa aquí solito, las archiva y las liga a su pedido (no duplica).</li></ol><p class="small muted">Si no pasa nada al picar el marcador, reinstálalo una vez desde Importar (el de antes de v252 no conoce el Estado de Cuenta).</p><div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>');
+}
 async function procesarFacturasIndar(){
   try{
     const h = location.hash || '';
@@ -5404,7 +5409,7 @@ async function vPedidos(){
       <select onchange="window._pedProv=this.value; vPedidos()" title="Filtrar por proveedor" style="max-width:220px"><option value="">Todos los proveedores</option>${[...new Set(data.map(p=>p.proveedores?.nombre).filter(Boolean))].sort().map(n=>`<option ${n===fProv?'selected':''} value="${esc(n)}">${esc(n)}</option>`).join('')}</select>
     </div>
     ${puedeVender()?`<button class="btn sm" style="float:right;margin-left:10px" onclick="buscarFolio()">🔍 ¿Qué me están entregando?</button>`:''}
-    <button class="btn sm" style="float:right;margin-left:10px" onclick="syncIndar()">🔄 Actualizar estatus Indar</button><button class="btn sm sec" style="float:right" onclick="traerFacturasIndar()">🧾 Traer facturas de Indar</button><p class="small muted" style="margin-bottom:10px">Los pedidos se capturan en el portal del proveedor (Indar / Holcim) y aquí se registran para dar seguimiento. Al marcar <b>Recibido</b>, las cantidades se suman al inventario automáticamente.</p>
+    <button class="btn sm" style="float:right;margin-left:10px" onclick="syncIndar()">🔄 Actualizar estatus Indar</button><button class="btn sm sec" style="float:right" onclick="traerFacturasIndar()">🧾 Traer facturas de Indar</button><button class="btn sm sec" style="float:right;margin-right:10px" onclick="traerFacturasTruper()">🧾 Traer facturas de Truper</button><p class="small muted" style="margin-bottom:10px">Los pedidos se capturan en el portal del proveedor (Indar / Holcim) y aquí se registran para dar seguimiento. Al marcar <b>Recibido</b>, las cantidades se suman al inventario automáticamente.</p>
     <div class="tbl-scroll"><table>
       <thead><tr><th>Folio</th><th>Proveedor</th><th>Fecha pedido</th><th>Recibido</th><th>Estado</th><th>Partes / avance</th><th>Plazo</th>${esFinanzas()?'<th class="num">Total</th>':''}<th></th></tr></thead>
       <tbody>${dataF.map(p=>{
