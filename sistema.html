@@ -9417,7 +9417,7 @@ async function vImportar(){
         <span id="imp-aviso-precios"></span>
       </div>
       <div class="tbl-scroll" style="max-height:480px;overflow-y:auto"><table>
-        <thead><tr><th>Código</th><th>Descripción</th><th class="num">Cant</th><th class="num">Costo lista</th><th class="num">Sug. Indar</th><th class="num">Precio venta</th><th class="num">Margen s/venta</th><th></th></tr></thead>
+        <thead><tr><th>Código</th><th>Descripción</th><th class="num">Cant</th><th class="num">Costo lista</th><th class="num">Sug. Indar</th><th class="num">Precio venta</th><th class="num">Margen s/venta</th><th class="num">Precio regla</th><th></th></tr></thead>
         <tbody id="imp-tbody"></tbody></table></div>
       <p class="small muted" style="margin-top:8px">Margen = (precio sin IVA − costo) ÷ precio sin IVA. 🟢 cumple la regla · 🟡 entre 25% y la regla · 🔴 abajo de 25%. Todo precio se redondea hacia arriba al peso. Los nuevos y los existentes que cambien de precio salen en 🏷️ Etiquetas.</p>
     </div>`;
@@ -9741,7 +9741,58 @@ function impBadgeM(m, i){
   const b = m >= meta-0.005 ? 'b-verde' : (m >= 0.25 ? 'b-ambar' : 'b-rojo');
   return `<span class="badge ${b}">${(m*100).toFixed(1)}%</span>`;
 }
+// v249: al importar un pedido, columna "Precio regla" con botón Usar + aviso de la FAMILIA (mismo producto en otras medidas/colores)
+function famKey(desc, codigo){
+  let d = String(desc||'').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+  d = d.replace(/\(.*?\)/g,' ')
+       .replace(/\d+(\s*[.\/-]\s*\d+)*\s*("|''|MM|CM|MTS?|M|KG|KGS|GR|GRS|G|ML|LTS?|L|PZAS?|PZ|W|V|AWG|PULG|PULGADAS|OZ|LB|HP)?(?=\W|$)/g,' ')
+       .replace(/\b(X|DE|PARA|CON|Y|EL|LA|LOS|LAS|EN|BLANCO|NEGRO|ROJO|AZUL|VERDE|AMARILLO|GRIS|NARANJA|CAFE|TRANSPARENTE|MARFIL|BEIGE|CROMO|NIQUEL|LATON)\b/g,' ')
+       .replace(/[^A-Z ]/g,' ').replace(/\s+/g,' ').trim();
+  const pal = d.split(' ').filter(w=>w.length>1).slice(0,4);
+  if(pal.length<2) return '';
+  return String(codigo||'').split(' ')[0]+'|'+pal.join(' ');
+}
+async function famCargar(){
+  if(window._famCat || window._famCargando) return; window._famCargando = true;
+  try{
+    const rows = await traerTodo(()=>sb.from('productos').select('id,codigo,descripcion,costo,precio,granel').eq('activo',true));
+    const M = new Map(); (rows||[]).forEach(p=>{ if(p.granel) return; const k = famKey(p.descripcion, p.codigo); if(!k) return; if(!M.has(k)) M.set(k, []); M.get(k).push(p); });
+    window._famCat = M;
+  }catch(e){ window._famCat = new Map(); }
+  window._famCargando = false; impPintar();
+}
+function famFuera(p){ const r = precioAxionRegla(+p.costo); return r>0 && Math.abs(r - +p.precio) >= 1; }
+function famInfo(i){
+  if(!window._famCat) return null;
+  const L = window._famCat.get(famKey(i.d, i.c)) || [];
+  const otros = L.filter(p=>p.codigo!==i.c);
+  return {n: L.length + (L.some(p=>p.codigo===i.c)?0:1), lista: L, fuera: otros.filter(famFuera).length};
+}
+function impUsarRegla(idx){ const i = impData.items[idx]; if(!i) return; impEditar(idx, 'precio', impPrecioRegla(i)); }
+function impVerFamilia(idx){
+  const i = impData.items[idx]; const f = famInfo(i); if(!f) return;
+  window._famSel = f.lista.filter(p=>p.codigo!==i.c);
+  abrirModal(`<h3>👪 Familia de ${esc(i.c)}</h3>
+    <p class="small muted" style="margin:0 0 8px">Mismo producto en otras medidas o colores que ya tenemos. Precio regla = ${impRegla().join('/')}% sobre venta con el costo de reposición, redondeado hacia arriba al peso. El de este pedido se ajusta con su botón <b>Usar</b>.</p>
+    <div class="tbl-scroll"><table><thead><tr><th></th><th>Código</th><th>Descripción</th><th class="num">Costo</th><th class="num">Precio hoy</th><th class="num">Margen hoy</th><th class="num">Precio regla</th></tr></thead><tbody>
+    ${window._famSel.map((p,k)=>{ const r = precioAxionRegla(+p.costo), m = margenSV(+p.precio, +p.costo), fu = famFuera(p);
+      return `<tr${fu?' style="background:#fffbeb"':''}><td><input type="checkbox" id="fam-${k}"${fu?' checked':''}${esAdmin()?'':' disabled'}></td><td>${esc(p.codigo)}</td><td>${esc((p.descripcion||'').slice(0,50))}</td><td class="num">${fmt(p.costo)}</td><td class="num">${fmt(p.precio)}</td><td class="num">${m===null?'—':Math.round(m*100)+'%'}</td><td class="num"><b>${fmt(r)}</b>${fu?(r>+p.precio?' ▲':' ▼'):' ✓'}</td></tr>`; }).join('')}
+    </tbody></table></div>
+    <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button>${esAdmin()?`<button class="btn" onclick="famAplicar()">Aplicar regla a los marcados</button>`:''}</div>`, true);
+}
+async function famAplicar(){
+  if(!esAdmin()) return;
+  const sel = (window._famSel||[]).filter((p,k)=>$('fam-'+k) && $('fam-'+k).checked);
+  if(!sel.length){ toast('No hay productos marcados', true); return; }
+  if(!confirm('¿Cambiar el precio de venta de '+sel.length+' producto(s) a la regla?\n\nSe registran en el historial de precios y salen en 🏷️ Etiquetas.')) return;
+  let ok = 0;
+  for(const p of sel){ const r = precioAxionRegla(+p.costo); if(!(r>0)) continue;
+    const u = await sb.from('productos').update({precio:r}).eq('id', p.id); if(!u.error){ ok++; p.precio = r; } }
+  logEv('precios', 'Familia a la regla desde importar pedido: '+sel.map(p=>p.codigo).join(', '));
+  toast('✓ '+ok+' precio(s) actualizados a la regla'); cerrarModal(); impPintar();
+}
 function impPintar(){
+  if(!window._famCat) famCargar(); // v249
   if(!impData || !$('imp-tbody')) return;
   const inp = 'padding:4px 6px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;text-align:right';
   const vistos = new Set(); let nN=0, sumM=0, nCambios=0;
@@ -9755,6 +9806,7 @@ function impPintar(){
       <td class="num">${i.q}</td><td class="num">${fmt(i.l)}</td><td class="num muted">${fmt(i.s)}</td>
       <td class="num"><input type="number" step="1" min="0" value="${precio||''}" style="width:80px;${inp}${cambia?';font-weight:bold':''}" onchange="impEditar(${idx},'precio',this.value)" title="${i.nuevo?'Precio de venta con el que se dará de alta':'Precio actual: '+fmt(i.pa)+' — cámbialo solo si quieres moverlo'}"></td>
       <td class="num"><input type="number" step="1" min="0" max="89" value="${m===null?'':Math.round(m*100)}" style="width:54px;${inp}" onchange="impEditar(${idx},'margen',this.value)">% ${impBadgeM(m,i)}${precio>0&&i.l>0?`<div class="small muted">${fmt(precio/1.16)} s/IVA − ${fmt(i.l)} = <b style="color:${precio/1.16-i.l<0?'#b91c1c':'inherit'}">${fmt(precio/1.16-i.l)}</b></div>`:''}</td>
+      <td class="num" style="white-space:nowrap">${(()=>{ const pr = impPrecioRegla(i), f = famInfo(i); return fmt(pr) + (precio!==pr ? ` <button class="btn sm sec" title="Usar el precio de nuestra regla" onclick="impUsarRegla(${idx})">Usar</button>` : ' ✓') + (f && f.n>1 ? `<div class="small">${f.fuera ? `<a class="link" style="cursor:pointer" onclick="impVerFamilia(${idx})">⚠️ familia: ${f.fuera} de ${f.n-1} fuera de regla</a>` : `<a class="link muted" style="cursor:pointer" onclick="impVerFamilia(${idx})">familia (${f.n}) ✓</a>`}</div>` : ''); })()}</td>
       <td style="white-space:nowrap">${i.nuevo ? '<span class="badge b-azul">nuevo</span>' : '<span class="badge b-gris">existente</span>'}${cambia?' <span class="badge b-ambar">cambia precio</span>':''}${i.manual?' <span title="Editado a mano">✏️</span>':''}</td>
     </tr>`; }).join('');
   const k = $('imp-kpi-nuevos'); if(k) k.textContent = nN ? `${nN} producto(s) nuevo(s) · margen prom. ${(sumM/nN*100).toFixed(1)}% s/venta` : 'sin productos nuevos';
