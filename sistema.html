@@ -860,7 +860,7 @@ function cerrarModal(){ $('modal-root').innerHTML=''; }
 async function pintarVentasRevisar(){
   const el = $('res-revisar'); if(!el) return;
   const desde = new Date(); desde.setDate(desde.getDate()-7); desde.setHours(0,0,0,0);
-  const r = await sb.from('venta_items').select('venta_id,cantidad,precio_unit,costo_unit,descripcion,ventas!inner(id,folio,fecha,total,descuento,cancelada,notas)').gte('ventas.fecha', desde.toISOString()).eq('ventas.cancelada', false);
+  const r = await sb.from('venta_items').select('venta_id,cantidad,precio_unit,costo_unit,descripcion,ventas!inner(id,folio,fecha,total,descuento,cancelada,notas,cliente_id,clientes(nombre,desc_pct))').gte('ventas.fecha', desde.toISOString()).eq('ventas.cancelada', false);
   if(r.error || !r.data){ el.innerHTML=''; return; }
   const porV = {};
   r.data.forEach(i=>{
@@ -874,14 +874,18 @@ async function pintarVentasRevisar(){
     const motivos = [];
     if(g.bajo.length) motivos.push('🚫 abajo del costo: '+g.bajo.map(d=>esc(String(d).slice(0,30))).join(', '));
     if(m < 10) motivos.push('margen '+m.toFixed(0)+'%');
-    if(+g.v.descuento>0) motivos.push('descuento '+fmt(g.v.descuento));
+    if(+g.v.descuento>0){ // v254: el descuento solo es grave si no hay cliente o pasa su % autorizado
+      const dp = +g.v.descuento/((+g.v.total||0) + +g.v.descuento)*100, cl = g.v.clientes, aut = cl ? +(cl.desc_pct||0) : 0;
+      if(!g.v.cliente_id) motivos.push('⚠️ descuento '+fmt(g.v.descuento)+' SIN cliente');
+      else if(dp > aut + 0.5) motivos.push('⚠️ descuento '+dp.toFixed(1)+'% a '+esc(cl&&cl.nombre||'cliente')+' (autorizado '+aut+'%)');
+    }
     return {g, m, util, motivos};
   }).filter(x=>x.motivos.length).sort((a,b)=>a.m-b.m);
   if(!filas.length){ el.innerHTML = ''; return; }
   const hayBajo = filas.some(x=>x.g.bajo.length);
   el.innerHTML = `<div class="card" style="border-left:5px solid ${hayBajo?'#b91c1c':'#d97706'};background:${hayBajo?'#fef2f2':'#fffbeb'};margin-bottom:14px">
     <h3 style="margin:0 0 6px">🔎 ${filas.length} venta(s) a revisar en los últimos 7 días</h3>
-    <p class="small muted" style="margin:0 0 6px">Abajo del costo, margen menor a 10% o con descuento. Clic en el folio para ver el ticket.</p>
+    <p class="small muted" style="margin:0 0 6px">Solo lo grave: abajo del costo, margen menor a 10%, o descuento sin cliente o arriba de su % autorizado. Clic en el folio para ver cliente, descuento y margen real.</p>
     ${filas.slice(0,12).map(x=>`<div class="small" style="padding:3px 0;border-top:1px solid rgba(0,0,0,.06)"><a href="#" onclick="verVenta(${x.g.v.id});return false" style="font-weight:700">#${x.g.v.folio}</a> · ${fecha(x.g.v.fecha)} · ${fmt(x.g.v.total)} · <b style="color:${x.util<0?'#b91c1c':'inherit'}">utilidad ${fmt(Math.round(x.util*100)/100)} (${x.m.toFixed(0)}%)</b> — ${x.motivos.join(' · ')}</div>`).join('')}
     ${filas.length>12?`<p class="small muted" style="margin:4px 0 0">… y ${filas.length-12} más en Ventas</p>`:''}
   </div>`;
@@ -1490,7 +1494,27 @@ async function verVenta(id){
     if(ap.data){ const pg = (ap.data.apartado_pagos||[]).sort((x,y)=>String(x.fecha).localeCompare(String(y.fecha)));
       apHtml = `<p class="small" style="margin:0 0 8px;padding:8px;background:#f8fafc;border-radius:8px">📦 <b>Apartado #${ap.data.folio}</b> · ${esc(ap.data.cliente_nombre||'')} — pagos: ${pg.length?pg.map(p=>`${p.tipo} <b>${fmt(p.monto)}</b> (${esc(p.metodo)}, ${fecha(p.fecha)})`).join(' · '):'sin detalle de pagos'}. <span class="muted">El dinero entró a caja en esas fechas, no como efectivo de esta venta.</span></p>`; }
   }catch(e){}
-  abrirModal(`<h3>Detalle de venta</h3>${pagoHtml}${apHtml}
+  let resHtml = ''; // v254: cliente, descuento y margen real de la venta (desde cualquier lugar donde se abra)
+  try{
+    const V2 = (await sb.from('ventas').select('folio,fecha,subtotal,descuento,total,cliente_id,clientes(nombre,desc_pct)').eq('id', id).single()).data;
+    if(V2){
+      const desc = +(V2.descuento||0), bruto = +V2.total + desc, dp = bruto>0 ? desc/bruto*100 : 0;
+      const cl = V2.clientes, aut = cl ? +(cl.desc_pct||0) : 0;
+      const pr = (await sb.from('productos').select('id,costo_real').in('id', [...new Set(data.map(i=>i.producto_id).filter(Boolean))])).data || [];
+      const cr = {}; pr.forEach(p=>{ cr[p.id] = +p.costo_real||0; });
+      const neto = +V2.total/1.16, costo = data.reduce((s,i)=>s+ +(i.costo_unit||0) * +i.cantidad, 0), costoR = data.reduce((s,i)=>s+ (cr[i.producto_id] || +(i.costo_unit||0)) * +i.cantidad, 0);
+      const u = neto - costo, uR = neto - costoR, m = neto>0 ? u/neto*100 : 0, mR = neto>0 ? uR/neto*100 : 0;
+      const malDesc = desc>0 && (!V2.cliente_id || dp > aut + 0.5);
+      const col = x => x<0 ? '#b91c1c' : (x<10 ? '#d97706' : '#15803d');
+      resHtml = `<div class="kpis" style="margin-bottom:8px">
+        <div class="kpi"><div class="l">Venta #${V2.folio}</div><div class="v" style="font-size:18px">${fmt(V2.total)}</div><div class="s">${fecha(String(V2.fecha).slice(0,10))}</div></div>
+        <div class="kpi"><div class="l">Cliente</div><div class="v" style="font-size:16px">${V2.cliente_id ? esc(cl&&cl.nombre||'—') : '<span class="muted">Público general</span>'}</div><div class="s">${V2.cliente_id ? 'descuento autorizado '+aut+'%' : 'sin cliente: no lleva descuento'}</div></div>
+        <div class="kpi" style="${malDesc?'border-top-color:#b91c1c;background:#fef2f2':''}"><div class="l">Descuento</div><div class="v" style="font-size:18px">${desc>0 ? fmt(desc) : '—'}</div><div class="s">${desc>0 ? dp.toFixed(1)+'% sobre '+fmt(bruto)+(malDesc?' · ⚠️ '+(V2.cliente_id?'arriba del autorizado':'SIN cliente'):'') : 'sin descuento'}</div></div>
+        ${esFinanzas()?`<div class="kpi"><div class="l">Margen real</div><div class="v" style="font-size:18px;color:${col(mR)}">${fmt(Math.round(uR*100)/100)} · ${mR.toFixed(0)}%</div><div class="s">con lo que pagamos, ya con descuento y sin IVA · con costo de reposición ${fmt(Math.round(u*100)/100)} (${m.toFixed(0)}%)</div></div>`:''}
+      </div>`;
+    }
+  }catch(e){}
+  abrirModal(`<h3>Detalle de venta</h3>${resHtml}${pagoHtml}${apHtml}
     <div class="tbl-scroll"><table><thead><tr><th>Producto</th><th class="num">Cant</th><th class="num">Precio</th><th class="num">Importe</th>${esFinanzas()?'<th class="num">Costo</th><th class="num">Utilidad</th>':''}</tr></thead>
     <tbody>${data.map(i=>`<tr style="cursor:pointer" title="Ver ficha del producto: historial, stock y foto" onclick="cerrarModal();fichaProducto(${i.producto_id})"><td style="color:var(--naranja,#E8790F)">${esc(i.productos?.codigo)} · ${esc(i.productos?.descripcion)}</td>
       <td class="num">${+i.cantidad}</td><td class="num">${fmt(i.precio_unit)}</td><td class="num">${fmt(i.importe)}</td>
