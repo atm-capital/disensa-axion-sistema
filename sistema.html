@@ -2480,6 +2480,7 @@ async function guardarVenta(){
     if(pagosMx.length<2){ toast('Pago mixto: pon al menos dos formas de pago (si fue una sola, elígela arriba)', true); return; }
     if(Math.abs(sumaMx-(window._nvTotal||0))>0.01){ toast('Los pagos suman '+fmt(sumaMx)+' y la venta es '+fmt(window._nvTotal||0), true); return; }
   }
+  if(+($('nv-desc').value||0)>0 && !$('nv-cliente').value){ toast('Para dar descuento hay que elegir un cliente registrado. Sin cliente no hay descuento.', true); $('nv-cliente').focus(); return; } // v256
   $('nv-guardar').disabled = true;
   const items = carrito.map(c=>({producto_id:c.producto_id||null, cantidad:c.cantidad,
     precio_unit:c.precio_unit, descripcion: c.producto_id ? null : c.desc}));
