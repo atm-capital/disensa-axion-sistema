@@ -875,7 +875,7 @@ async function pintarVentasRevisar(){
     if(g.bajo.length) motivos.push('🚫 abajo del costo: '+g.bajo.map(d=>esc(String(d).slice(0,30))).join(', '));
     if(m < 10) motivos.push('margen '+m.toFixed(0)+'%');
     if(+g.v.descuento>0){ // v254: el descuento solo es grave si no hay cliente o pasa su % autorizado
-      const dp = +g.v.descuento/((+g.v.total||0) + +g.v.descuento)*100, cl = g.v.clientes, aut = cl ? +(cl.desc_pct||0) : 0;
+      const dp = +g.v.descuento/((+g.v.total||0) + +g.v.descuento)*100, cl = g.v.clientes, aut = Math.max(5, cl ? +(cl.desc_pct||0) : 0); /* v255: 5% base a todo cliente registrado */
       if(!g.v.cliente_id) motivos.push('⚠️ descuento '+fmt(g.v.descuento)+' SIN cliente');
       else if(dp > aut + 0.5) motivos.push('⚠️ descuento '+dp.toFixed(1)+'% a '+esc(cl&&cl.nombre||'cliente')+' (autorizado '+aut+'%)');
     }
@@ -1499,7 +1499,7 @@ async function verVenta(id){
     const V2 = (await sb.from('ventas').select('folio,fecha,subtotal,descuento,total,cliente_id,clientes(nombre,desc_pct)').eq('id', id).single()).data;
     if(V2){
       const desc = +(V2.descuento||0), bruto = +V2.total + desc, dp = bruto>0 ? desc/bruto*100 : 0;
-      const cl = V2.clientes, aut = cl ? +(cl.desc_pct||0) : 0;
+      const cl = V2.clientes, aut = Math.max(5, cl ? +(cl.desc_pct||0) : 0); /* v255: 5% base a todo cliente registrado */
       const pr = (await sb.from('productos').select('id,costo_real').in('id', [...new Set(data.map(i=>i.producto_id).filter(Boolean))])).data || [];
       const cr = {}; pr.forEach(p=>{ cr[p.id] = +p.costo_real||0; });
       const neto = +V2.total/1.16, costo = data.reduce((s,i)=>s+ +(i.costo_unit||0) * +i.cantidad, 0), costoR = data.reduce((s,i)=>s+ (cr[i.producto_id] || +(i.costo_unit||0)) * +i.cantidad, 0);
