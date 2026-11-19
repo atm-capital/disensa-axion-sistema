@@ -2387,9 +2387,10 @@ function pintarCarrito(){
   const sub = carrito.reduce((s,c)=>s+c.cantidad*c.precio_unit,0);
   // v150: si hay % capturado, el $ de descuento se recalcula con el carrito actual
   const pctEl = $('nv-descpct');
-  if(pctEl && +pctEl.value>0 && $('nv-desc')) $('nv-desc').value = Math.round(sub*(+pctEl.value)/100*100)/100;
+  if(pctEl && +pctEl.value>0 && $('nv-desc')) $('nv-desc').value = descRedondo(sub, sub*(+pctEl.value)/100);
   let desc = +($('nv-desc')?.value||0);
   if(!esAdmin() && sub>0 && desc > sub*0.2+0.005){ desc = Math.round(sub*0.2*100)/100; if($('nv-desc')) $('nv-desc').value = desc; if(pctEl) pctEl.value = '20'; toast('Máximo 20% de descuento; más solo lo autoriza Andrés', true); } // v180
+  if(desc>0){ const dr = descRedondo(sub, desc); if(dr!==desc){ desc = dr; if($('nv-desc') && document.activeElement!==$('nv-desc')) $('nv-desc').value = dr; } } // v257
   const cIvaT = costoTicket(), bajoCosto = cIvaT>0 && (sub-desc) < cIvaT-0.005; // v180
   const info = $('nv-desc-info'); if(info) info.innerHTML = ((desc>0 && sub>0) ? '(−'+(desc/sub*100).toFixed(1).replace(/\.0$/,'')+'%)' : '') + (bajoCosto?' <b style="color:#b91c1c">⚠️ así la venta queda abajo del costo</b>':'');
   window._nvTotal = Math.round((sub - desc)*100)/100;
@@ -2399,12 +2400,17 @@ function pintarCarrito(){
   if($('nv-mixto') && $('nv-metodo') && $('nv-metodo').value==='mixto') mxCalc(); // v159: el total cambió → recalcular el desglose
 }
 // v150: descuento por porcentaje de volada (botones 5/10/15 o escribir el %)
+function descRedondo(sub, d){ // v257: el total con descuento se cierra hacia ARRIBA al peso (el descuento baja unos centavos)
+  sub=+sub||0; d=+d||0; if(d<=0 || sub<=0) return 0;
+  const tot=Math.ceil(Math.round((sub-d)*100)/100 - 1e-9); const r=Math.round((sub-tot)*100)/100;
+  return r>0 ? r : 0;
+}
 function descPct(v){
   let pct = Math.max(0, Math.min(100, +String(v).replace(',','.')||0));
   if(!esAdmin() && pct > 20){ pct = 20; toast('Máximo 20% de descuento; más solo lo autoriza Andrés', true); } // v180
   const el = $('nv-descpct'); if(el && document.activeElement!==el) el.value = pct||'';
   const sub = carrito.reduce((s,c)=>s+c.cantidad*c.precio_unit,0);
-  if($('nv-desc')) $('nv-desc').value = pct ? Math.round(sub*pct/100*100)/100 : 0;
+  if($('nv-desc')) $('nv-desc').value = pct ? descRedondo(sub, sub*pct/100) : 0;
   pintarCarrito();
 }
 function toggleCambio(){
@@ -2464,6 +2470,7 @@ function numALetras(n){
 }
 async function guardarVenta(){
   if(!carrito.length){ toast('Agrega al menos un producto', true); return; }
+  { const _s = carrito.reduce((s,c)=>s+c.cantidad*c.precio_unit,0), _d = +($('nv-desc')?.value||0); if(_d>0 && $('nv-desc')){ $('nv-desc').value = descRedondo(_s,_d); pintarCarrito(); } } // v257: total cerrado al peso
   if(!$('nv-metodo').value){ toast('Elige CÓMO PAGA el cliente: efectivo, tarjeta, transferencia…', true); $('nv-metodo').focus(); return; } // v201: ya no hay método por default
   if($('nv-metodo').value==='credito' && !$('nv-cliente').value){ toast('Para vender a CRÉDITO elige al cliente (no puede ser Mostrador) — así sabemos quién nos debe', true); return; }
   if($('nv-metodo').value==='credito'){ const msgCr = await crValidarVentaCredito(+$('nv-cliente').value, window._nvTotal||0); if(msgCr){ alert('🚫 CRÉDITO NO DISPONIBLE\n\n'+msgCr); return; } } // v187
