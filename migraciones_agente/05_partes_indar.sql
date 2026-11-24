@@ -1,0 +1,3 @@
+-- v265/v266: pedidos de Indar importados del correo (precios con promoción) reciben sus números de parte
+-- reales del portal y se valida el total de cada parte (con IVA) contra el portal. Aplicado en producción 24-nov-2026.
+-- Ver definición vigente: select pg_get_functiondef('agente_partes_indar(text,text,jsonb,jsonb)'::regprocedure);
