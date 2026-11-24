@@ -1812,6 +1812,7 @@ async function verSolicitudesRes(){
     ${s.estado==='pendiente'?`<div class="acciones" style="margin-top:4px">
       <button class="btn sec sm" onclick="excelSolicitudRes(${s.id})">📥 Excel Indar</button>
       <button class="btn sm" onclick="excelSolicitudSel(${s.id})">📥 Excel solo palomeados</button>
+      <button class="btn sec sm" onclick="archivoTruperSol(${s.id})" title="Archivo para Truper en línea → Nuevo Pedido → Cargar Archivo (palomeados, o toda la lista si no hay ninguno)">🧡 Archivo Truper</button>
       ${nFalta?`<button class="btn sec sm" onclick="excelSolicitudRes(${s.id}, true)">📥 Excel solo lo que falta (${nFalta})</button>`:''}
       <button class="btn sm" onclick="atenderSolicitudRes(${s.id})">✅ Atendida</button></div>`:''}
   </div>`; };
@@ -1979,6 +1980,32 @@ async function aplicarPreciosSug(){
   if(typeof vInventario==='function') vInventario();
 }
 // v130: exportar SOLO los productos palomeados de una solicitud
+async function archivoTruperSol(id){ // v258: archivo .txt para Truper en línea (Cargar Archivo): 1a línea cliente, luego codigo,cantidad
+  const marc = [...document.querySelectorAll('.selres-'+id+':checked')];
+  let items;
+  if(marc.length) items = marc.map(function(el){ return { cod: String(el.dataset.cod||'').trim(), cant: Math.max(1, Math.round(+el.dataset.cant||1)) }; });
+  else {
+    const r = await sb.from('resurtido_solicitudes').select('items').eq('id', id).single();
+    if(r.error){ toast(errMsg(r.error), true); return; }
+    items = (r.data.items||[]).map(function(i){ return { cod: String(i.codigo||'').trim(), cant: Math.max(1, Math.round(+i.cant||1)) }; });
+  }
+  const claves = [...new Set(items.map(function(i){ return i.cod; }).filter(Boolean))];
+  const L = {};
+  for(let i=0;i<claves.length;i+=100){
+    const c = claves.slice(i,i+100);
+    const rs = await Promise.all([sb.from('lista_truper').select('codigo,clave').in('clave', c), sb.from('lista_truper').select('codigo,clave').in('codigo', c)]);
+    rs.forEach(function(r){ (r.data||[]).forEach(function(x){ L[String(x.clave).toUpperCase()] = String(x.codigo); L[String(x.codigo)] = String(x.codigo); }); });
+  }
+  const Q = {}, no = [];
+  items.forEach(function(i){ const c = L[i.cod.toUpperCase()] || L[i.cod]; if(c) Q[c] = (Q[c]||0) + i.cant; else no.push(i.cod); });
+  const lineas = Object.keys(Q).map(function(c){ return c+','+Q[c]; });
+  if(!lineas.length){ toast('Ningún producto de esta lista está en el catálogo de Truper', true); return; }
+  const txt = '425174\r\n' + lineas.join('\r\n') + '\r\n';
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([txt], {type:'text/plain'})); a.download = 'Pedido_Truper_solicitud_'+id+'.txt';
+  document.body.appendChild(a); a.click(); a.remove();
+  logEv('descarga', 'Archivo Truper de solicitud '+id+': '+lineas.length+' productos');
+  toast('✓ Archivo Truper con '+lineas.length+' producto(s)'+(no.length ? ' · '+no.length+' no son de Truper (no van): '+no.join(', ') : '')+'. Súbelo en Truper en línea → Nuevo Pedido → Cargar Archivo.');
+}
 async function excelSolicitudSel(id){
   const marcados = [...document.querySelectorAll('.selres-'+id+':checked')];
   if(!marcados.length){ toast('Palomea al menos un producto de la lista', true); return; }
