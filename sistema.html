@@ -1768,6 +1768,38 @@ function badgeCot(c){
   const m = {llego:['b-verde','✅ ya llegó'], camino:['b-azul','🚚 en camino'], falta:['b-rojo','❌ falta pedir'], nuevo:['b-ambar','🆕 nunca pedido']}[c.est];
   return `<span class="badge ${m[0]}" title="${esc(c.txt)}">${m[1]}</span>`;
 }
+// v259: propuestas de precio que llegan desde el conector de Claude (SQL 71). Las aprueba otro socio.
+async function propPrecioBadge(){
+  const b = $('btn-prop-precio'); if(!b) return;
+  const {count} = await sb.from('precio_propuestas').select('id',{count:'exact',head:true}).eq('estado','pendiente');
+  b.innerHTML = count ? '💲 Propuestas <span class="badge b-ambar">'+count+'</span>' : '💲 Propuestas';
+}
+async function verPropuestasPrecio(){
+  const {data, error} = await sb.from('precio_propuestas').select('*, productos(descripcion,costo,precio)').order('id',{ascending:false}).limit(40);
+  if(error){ toast(errMsg(error), true); return; }
+  const pend = (data||[]).filter(function(x){ return x.estado==='pendiente'; }), hist = (data||[]).filter(function(x){ return x.estado!=='pendiente'; }).slice(0,15);
+  const pct = function(m){ return m===null||isNaN(m) ? '' : Math.round(m*100)+'%'; };
+  const fila = function(x, acc){ const p = x.productos||{};
+    return '<tr><td><b>'+esc(x.codigo)+'</b><div class="small muted">'+esc((p.descripcion||'').slice(0,45))+'</div></td>'
+      +'<td class="num">'+fmt(p.costo)+'</td>'
+      +'<td class="num">'+fmt(x.precio_actual)+'<div class="small muted">'+pct(margenSV(+x.precio_actual,+p.costo))+'</div></td>'
+      +'<td class="num"><b>'+fmt(x.precio_propuesto)+'</b><div class="small muted">'+pct(margenSV(+x.precio_propuesto,+p.costo))+'</div></td>'
+      +'<td>'+esc(x.motivo)+'<div class="small muted">'+esc(x.nombre)+' · '+fechaHora(x.creado)+'</div></td>'
+      +'<td>'+(acc ? '<button class="btn sm" onclick="resolverPropuesta('+x.id+',true)">✓ Aprobar</button> <button class="btn sm sec" onclick="resolverPropuesta('+x.id+',false)">✕ Rechazar</button>'
+                   : '<span class="badge '+(x.estado==='aprobada'?'b-verde':'b-gris')+'">'+x.estado+'</span><div class="small muted">'+esc(x.resuelto_por||'')+'</div>')+'</td></tr>'; };
+  abrirModal('<h3>💲 Propuestas de precio</h3><p class="small muted" style="margin:0 0 8px">Precios que propone un socio desde Claude. No cambian nada hasta que otro socio los aprueba aquí (nadie aprueba lo suyo). % = margen sobre venta sin IVA.</p>'
+    + (pend.length ? '<div class="tbl-scroll"><table><thead><tr><th>Producto</th><th class="num">Costo</th><th class="num">Hoy</th><th class="num">Propuesto</th><th>Motivo</th><th></th></tr></thead><tbody>'+pend.map(function(x){ return fila(x,true); }).join('')+'</tbody></table></div>' : '<p>✓ No hay propuestas pendientes.</p>')
+    + (hist.length ? '<details style="margin-top:10px"><summary class="small">Ver resueltas ('+hist.length+')</summary><div class="tbl-scroll"><table><tbody>'+hist.map(function(x){ return fila(x,false); }).join('')+'</tbody></table></div></details>' : '')
+    + '<div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button></div>', true);
+}
+async function resolverPropuesta(id, ok){
+  let nota = '';
+  if(ok){ if(!confirm('¿Aprobar y cambiar el precio en el sistema?')) return; }
+  else { nota = prompt('¿Por qué se rechaza? (opcional)') || ''; }
+  const {error} = await sb.rpc('precio_propuesta_resolver', {p_id:id, p_aprobar:ok, p_nota:nota});
+  if(error){ toast(errMsg(error), true); return; }
+  toast(ok ? '✓ Precio actualizado' : 'Propuesta rechazada'); verPropuestasPrecio(); propPrecioBadge();
+}
 async function verSolicitudesRes(){
   const {data, error} = await sb.from('resurtido_solicitudes').select('*').order('creado',{ascending:false}).limit(30);
   if(error){ toast(errMsg(error), true); return; }
@@ -4052,6 +4084,7 @@ async function vInventario(){
     $('vtools').innerHTML = `<button class="btn" onclick="editarProducto(null)">+ Producto</button>
     <button class="btn sec" onclick="verResurtido()">🛒 Resurtido</button>
     <button class="btn sec" id="btn-sol-res" onclick="verSolicitudesRes()">📥 Solicitudes</button>
+    ${esAdmin()?`<button class="btn sec" id="btn-prop-precio" onclick="verPropuestasPrecio()">💲 Propuestas</button>`+(setTimeout(propPrecioBadge,60),''):''}
     <button class="btn sec" id="btn-eti-nuevas" onclick="elegirEtiquetas()">🏷️ Etiquetas</button>
     <button class="btn sec" id="btn-precios-sug" onclick="revisarPreciosSugeridos()">💲 Revisar precios</button>
     <button class="btn sec" onclick="famDisparejas()" title="Familias (mismo producto en otras medidas) con precios fuera de la regla">👪 Familias disparejas</button>
