@@ -4636,6 +4636,19 @@ async function guardarProducto(id){
     obj.granel = false;
   }
   if(!obj.descripcion){ toast('Falta la descripción', true); return; }
+  // v266: cambiar a mano STOCK, PRECIO o COSTO de un producto existente pide motivo y queda en Actividad (antes → después)
+  let _actCambios = [], _actMotivo = null;
+  if(id){
+    const prev = invData.find(p=>p.id===id) || {};
+    const cmp = [['stock','Stock',false],['precio','Precio',true],['costo','Costo',true]];
+    if(obj.granel) cmp.push(['abierto','Abierto (granel)',false],['precio_unidad','Precio por '+(obj.unidad_venta||'unidad'),true]);
+    _actCambios = cmp.filter(([k])=>obj[k]!==undefined && prev[k]!==undefined && Math.abs((+prev[k]||0)-(+obj[k]||0))>0.0001)
+      .map(([k,lbl,dinero])=>({campo:lbl, antes:dinero?fmt(+prev[k]||0):String(+prev[k]||0), despues:dinero?fmt(+obj[k]||0):String(+obj[k]||0)}));
+    if(_actCambios.length){
+      _actMotivo = (prompt('Cambiaste '+_actCambios.map(c=>c.campo.toLowerCase()+' ('+c.antes+' → '+c.despues+')').join(', ')+'.\n¿Por qué? (queda guardado en Actividad)','')||'').trim();
+      if(_actMotivo.length < 5){ toast('Escribe el motivo del cambio (mínimo 5 letras)', true); return; }
+    }
+  }
   if(!id){
     obj.codigo = $('pr-codigo').value.trim();
     if(!obj.codigo){ toast('Falta el código', true); return; }
@@ -4649,6 +4662,9 @@ async function guardarProducto(id){
   }
   if(error && /unidad|codigo_barras/i.test(error.message||'')){ const o2 = {...obj}; delete o2.unidad; delete o2.codigo_barras; error = await intenta(o2); }
   if(error){ toast(errMsg(error), true); return; }
+  if(id && _actCambios.length){ const pv = invData.find(p=>p.id===id)||{};
+    logEv('inventario', 'Cambió a mano '+_actCambios.map(c=>c.campo.toLowerCase()).join(', ')+' de '+(pv.codigo||'')+' '+(obj.descripcion||'').slice(0,40)+' — '+_actMotivo,
+      {ref_tipo:'producto', ref_id:id, datos:{cambios:_actCambios, motivo:_actMotivo}}); }
   cerrarModal(); toast('Producto guardado'); vInventario();
   if(id) setTimeout(()=>famRevisar([id]), 1200); // v232
 }
