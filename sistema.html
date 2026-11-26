@@ -9895,9 +9895,9 @@ function impVerFamilia(idx){
   window._famSel = f.lista.filter(p=>p.codigo!==i.c);
   abrirModal(`<h3>👪 Familia de ${esc(i.c)}</h3>
     <p class="small muted" style="margin:0 0 8px">Mismo producto en otras medidas o colores que ya tenemos. Precio regla = ${impRegla().join('/')}% sobre venta con el costo de reposición, redondeado hacia arriba al peso. El de este pedido se ajusta con su botón <b>Usar</b>.</p>
-    <div class="tbl-scroll"><table><thead><tr><th></th><th>Código</th><th>Descripción</th><th class="num">Costo</th><th class="num">Precio hoy</th><th class="num">Margen hoy</th><th class="num">Precio regla</th></tr></thead><tbody>
+    <div class="tbl-scroll"><table><thead><tr><th></th><th>Código</th><th>Descripción</th><th class="num">Costo</th><th class="num">Precio hoy</th><th class="num">Margen hoy</th><th class="num">Precio regla</th><th class="num">Margen regla</th></tr></thead><tbody>
     ${window._famSel.map((p,k)=>{ const r = precioAxionRegla(+p.costo), m = margenSV(+p.precio, +p.costo), fu = famFuera(p);
-      return `<tr${fu?' style="background:#fffbeb"':''}><td><input type="checkbox" id="fam-${k}"${fu?' checked':''}${esAdmin()?'':' disabled'}></td><td>${esc(p.codigo)}</td><td>${esc((p.descripcion||'').slice(0,50))}</td><td class="num">${fmt(p.costo)}</td><td class="num">${fmt(p.precio)}</td><td class="num">${m===null?'—':Math.round(m*100)+'%'}</td><td class="num"><b>${fmt(r)}</b>${fu?(r>+p.precio?' ▲':' ▼'):' ✓'}</td></tr>`; }).join('')}
+      return `<tr${fu?' style="background:#fffbeb"':''}><td><input type="checkbox" id="fam-${k}"${fu?' checked':''}${esAdmin()?'':' disabled'}></td><td>${esc(p.codigo)}</td><td>${esc((p.descripcion||'').slice(0,50))}</td><td class="num">${fmt(p.costo)}</td><td class="num">${fmt(p.precio)}</td><td class="num">${m===null?'—':Math.round(m*100)+'%'}</td><td class="num"><b>${fmt(r)}</b>${fu?(r>+p.precio?' ▲':' ▼'):' ✓'}</td><td class="num">${mPct(margenSV(r,+p.costo))}</td></tr>`; }).join('')}
     </tbody></table></div>
     <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button>${esAdmin()?`<button class="btn" onclick="famAplicar()">Aplicar regla a los marcados</button>`:''}</div>`, true);
 }
@@ -9918,9 +9918,9 @@ function famListaModal(lista, titulo, nota, despues){
   window._famSel = lista; window._famDespues = despues || null;
   abrirModal(`<h3>${titulo}</h3>
     <p class="small muted" style="margin:0 0 8px">${nota||''} Precio regla = ${impRegla().join('/')}% sobre venta con el costo de reposición, redondeado hacia arriba al peso.</p>
-    <div class="tbl-scroll" style="max-height:420px;overflow-y:auto"><table><thead><tr><th><input type="checkbox" onchange="window._famSel.forEach((p,k)=>{ const c=$('fam-'+k); if(c && !c.disabled) c.checked=this.checked; })"${esAdmin()?'':' disabled'}></th><th>Código</th><th>Descripción</th><th class="num">Costo</th><th class="num">Precio hoy</th><th class="num">Margen hoy</th><th class="num">Precio regla</th></tr></thead><tbody>
+    <div class="tbl-scroll" style="max-height:420px;overflow-y:auto"><table><thead><tr><th><input type="checkbox" onchange="window._famSel.forEach((p,k)=>{ const c=$('fam-'+k); if(c && !c.disabled) c.checked=this.checked; })"${esAdmin()?'':' disabled'}></th><th>Código</th><th>Descripción</th><th class="num">Costo</th><th class="num">Precio hoy</th><th class="num">Margen hoy</th><th class="num">Precio regla</th><th class="num">Margen regla</th></tr></thead><tbody>
     ${lista.map((p,k)=>{ const r = precioAxionRegla(+p.costo), m = margenSV(+p.precio, +p.costo), fu = famFuera(p);
-      return `<tr${fu?' style="background:#fffbeb"':''}><td><input type="checkbox" id="fam-${k}"${fu?' checked':''}${esAdmin()?'':' disabled'}></td><td>${esc(p.codigo)}</td><td>${esc((p.descripcion||'').slice(0,50))}</td><td class="num">${fmt(p.costo)}</td><td class="num">${fmt(p.precio)}</td><td class="num">${m===null?'—':Math.round(m*100)+'%'}</td><td class="num"><b>${fmt(r)}</b>${fu?(r>+p.precio?' ▲':' ▼'):' ✓'}</td></tr>`; }).join('')}
+      return `<tr${fu?' style="background:#fffbeb"':''}><td><input type="checkbox" id="fam-${k}"${fu?' checked':''}${esAdmin()?'':' disabled'}></td><td>${esc(p.codigo)}</td><td>${esc((p.descripcion||'').slice(0,50))}</td><td class="num">${fmt(p.costo)}</td><td class="num">${fmt(p.precio)}</td><td class="num">${m===null?'—':Math.round(m*100)+'%'}</td><td class="num"><b>${fmt(r)}</b>${fu?(r>+p.precio?' ▲':' ▼'):' ✓'}</td><td class="num">${mPct(margenSV(r,+p.costo))}</td></tr>`; }).join('')}
     </tbody></table></div>
     <div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button>${esAdmin()?`<button class="btn" onclick="famAplicar()">Aplicar regla a los marcados</button>`:''}</div>`, true);
 }
@@ -9938,12 +9938,16 @@ async function pedReglaPintar(pedidoId){ // panel dentro del pedido
   if(!filas.length){ $('ped-regla').innerHTML = `<p class="small" style="margin:0"><span class="badge b-verde">✓</span> Precios de este pedido y sus familias en regla (${impRegla().join('/')}%).</p>`; return; }
   $('ped-regla').innerHTML = `<div style="border:2px solid var(--ambar);background:#fffbeb;border-radius:10px;padding:10px 12px">
     <b>💲 Precios a revisar con la regla (${filas.length})</b> <span class="small muted">· productos de este pedido o de su familia fuera de regla</span>
-    <div class="tbl-scroll" style="margin-top:6px"><table><thead><tr><th>Producto</th><th class="num">Costo</th><th class="num">Precio hoy</th><th class="num">Regla</th><th>Familia</th></tr></thead><tbody>
-    ${filas.map((x,k)=>`<tr><td><b>${esc(x.p.codigo)}</b> ${esc((x.p.descripcion||'').slice(0,45))}</td><td class="num">${fmt(x.p.costo)}</td><td class="num">${fmt(x.p.precio)}</td>
-      <td class="num">${x.fu?`<b>${fmt(x.reg)}</b> ${x.reg>+x.p.precio?'▲':'▼'} <button class="btn sm sec" onclick="pedReglaUsar(${k})">Usar</button>`:'✓'}</td>
+    <div class="tbl-scroll" style="margin-top:6px"><table><thead><tr><th>Producto</th><th class="num">Costo</th><th class="num">Precio hoy</th><th class="num">Margen hoy</th><th class="num">Regla</th><th class="num">Margen regla</th><th>Familia</th></tr></thead><tbody>
+    ${filas.map((x,k)=>`<tr><td><b>${esc(x.p.codigo)}</b> ${esc((x.p.descripcion||'').slice(0,45))}</td><td class="num">${fmt(x.p.costo)}</td><td class="num">${fmt(x.p.precio)}</td><td class="num">${mPct(margenSV(+x.p.precio,+x.p.costo))}</td>
+      <td class="num">${x.fu?`<b>${fmt(x.reg)}</b> ${x.reg>+x.p.precio?'▲':'▼'} <button class="btn sm sec" onclick="pedReglaUsar(${k})">Usar</button>`:'✓'}</td><td class="num">${x.fu?'<b>'+mPct(margenSV(x.reg,+x.p.costo))+'</b>':'—'}</td>
       <td>${x.f && x.f.n>1 ? `<a class="link" style="cursor:pointer" onclick="pedReglaFamilia(${k})">${x.f.fuera?'⚠️ '+x.f.fuera+' de '+(x.f.n-1)+' fuera':'✓ pareja'} (${x.f.n})</a>` : '<span class="muted">—</span>'}</td></tr>`).join('')}
     </tbody></table></div>
     <button class="btn sm" style="margin-top:8px" onclick="pedReglaTodo()">👪 Ver y aplicar todo (productos + familias)</button></div>`;
+}
+function mPct(m){ // v260: margen sobre venta sin IVA en % para las tablas de la regla
+  if(m===null || m===undefined || isNaN(m)) return '—';
+  const v = Math.round(m*100); return '<span style="color:'+(v<25?'var(--rojo,#dc2626)':(v<30?'var(--ambar,#d97706)':'var(--verde,#16a34a)'))+'">'+v+'%</span>';
 }
 async function pedReglaUsar(k){
   const x = (window._pedRegla||[])[k]; if(!x || !esAdmin()) return;
