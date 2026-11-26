@@ -392,33 +392,80 @@ async function irA(id){
 }
 
 /* ===== Registro de actividad (solo Andres) ===== */
-function logEv(accion, detalle){
-  try{ sb.from('eventos').insert({correo:(typeof perfil!=='undefined'&&perfil&&perfil.correo)||'', accion:accion, detalle:String(detalle||'').slice(0,300)}).then(function(){},function(){}); }catch(e){}
+// v263: extra = { ref_tipo:'venta'|'pedido'|'producto'|'caja'|'cxp', ref_id, datos:{ cambios:[{campo,antes,despues}], motivo, ... } }
+function logEv(accion, detalle, extra){
+  try{ const row = {correo:(typeof perfil!=='undefined'&&perfil&&perfil.correo)||'', accion:accion, detalle:String(detalle||'').slice(0,300)};
+    if(extra){ if(extra.ref_tipo) row.ref_tipo = extra.ref_tipo; if(extra.ref_id!=null) row.ref_id = extra.ref_id; if(extra.datos) row.datos = extra.datos; }
+    sb.from('eventos').insert(row).then(function(r){ if(r && r.error && extra){ sb.from('eventos').insert({correo:row.correo, accion:row.accion, detalle:row.detalle}).then(function(){},function(){}); } },function(){}); }catch(e){}
+}
+// v263: Actividad sin códigos, solo cambios por default, y cada renglón se pica para ver a qué afectó,
+// qué cambió (antes → después), el motivo y un botón para ir a la venta / pedido / producto.
+const ACT_TXT = {sesion:'Entró al sistema', vista:'Abrió una pantalla', busqueda:'Buscó en el catálogo', busqueda_truper:'Buscó en la lista Truper',
+  descarga:'Descargó o compartió', venta:'Ventas', caja_mov:'Movimiento de caja', caja:'Caja', corte_caja:'Corte de caja', finanzas:'Finanzas',
+  precios:'Precios', precio:'Precio', costo:'Costo', costo_real:'Costo real', inventario:'Inventario', credito:'Crédito a cliente', akpago:'AK Pago (Elektra)',
+  cotizacion:'Cotización', pedido:'Pedido a proveedor', pedido_xml:'Pedido (XML)', pedido_truper:'Pedido Truper', factura:'Factura', factura_truper:'Factura Truper',
+  factura_enviada:'Factura enviada', recepcion:'Recepción de mercancía', recepcion_bloqueada:'Recepción bloqueada', evidencia:'Evidencia', importar:'Importó',
+  devolucion:'Devolución a proveedor', devolucion_upd:'Devolución a proveedor', gasto:'Gasto', nomina:'Nómina', apartado:'Apartado', apartado_entregado:'Apartado entregado',
+  apartado_cancelado:'Apartado cancelado', promo:'Promoción', lista_truper:'Lista Truper', alta_truper:'Alta de producto Truper', compra_local:'Compra local',
+  pago_factura_pedido:'Pago de factura', cxp:'Cuenta por pagar'};
+const ACT_CONSULTA = ['sesion','vista','busqueda','busqueda_truper','descarga'];
+const ACT_VISTA = {resumen:'Resumen', ventas:'Ventas', cotizaciones:'Cotizaciones', catalogo:'Catálogo', inventario:'Inventario', estrella:'Productos estrella', dormida:'Mercancía dormida',
+  clientes:'Clientes', pedidos:'Pedidos', apartados:'Apartados', devoluciones:'Devoluciones', caja:'Caja', finanzas:'Finanzas', usuarios:'Usuarios', importar:'Importar', actividad:'Actividad'};
+function actTexto(e){
+  if(e.accion==='vista' && ACT_VISTA[e.detalle]) return 'Abrió '+ACT_VISTA[e.detalle];
+  return e.detalle || ACT_TXT[e.accion] || e.accion;
+}
+function actRef(e){
+  if(e.ref_tipo) return {tipo:e.ref_tipo, id:e.ref_id};
+  const d = String(e.detalle||''); let m;
+  if((m = d.match(/venta id (\d+)/i))) return {tipo:'venta', id:+m[1]};
+  return null;
 }
 async function vActividad(){
-  const r = await sb.from('eventos').select('*').order('ts',{ascending:false}).limit(500);
+  const r = await sb.from('eventos').select('*').order('ts',{ascending:false}).limit(1000);
   if(r.error){ $('v-actividad').innerHTML = '<div class="card">No pude leer la actividad: '+esc(errMsg(r.error))+'</div>'; return; }
-  const evs = r.data||[];
+  const evs = r.data||[]; window._actEvs = evs;
   const usuarios = [...new Set(evs.map(function(e){ return e.correo||'(sin correo)'; }))];
   const fU = window._actU||'';
+  const todo = !!window._actTodo;
   const hoy0 = new Date(); hoy0.setHours(0,0,0,0);
-  const ic = {sesion:'🔓', vista:'👁', busqueda:'🔎', descarga:'📥'};
   const resumen = usuarios.map(function(u){
     const de = evs.filter(function(e){ return (e.correo||'(sin correo)')===u; });
     const ult = de.length ? new Date(de[0].ts) : null;
-    const nHoy = de.filter(function(e){ return new Date(e.ts)>=hoy0; }).length;
+    const nHoy = de.filter(function(e){ return new Date(e.ts)>=hoy0 && ACT_CONSULTA.indexOf(e.accion)<0; }).length;
     return '<tr style="cursor:pointer" onclick="window._actU=\''+u+'\';vActividad()"><td>'+esc(u)+'</td><td>'+(ult?ult.toLocaleString('es-MX'):'-')+'</td><td>'+nHoy+'</td><td>'+de.length+'</td></tr>';
   }).join('');
-  const filas = evs.filter(function(e){ return !fU || (e.correo||'(sin correo)')===fU; }).map(function(e){
-    const d = new Date(e.ts);
-    return '<tr><td class="small" style="white-space:nowrap">'+d.toLocaleDateString('es-MX')+' '+d.toLocaleTimeString('es-MX')+'</td><td>'+esc(e.correo)+'</td><td>'+(ic[e.accion]||'•')+' '+esc(e.accion)+'</td><td>'+esc(e.detalle)+'</td></tr>';
-  }).join('');
+  const lista = evs.filter(function(e){ return (!fU || (e.correo||'(sin correo)')===fU) && (todo || ACT_CONSULTA.indexOf(e.accion)<0); });
+  const filas = lista.map(function(e){
+    const d = new Date(e.ts), cambio = ACT_CONSULTA.indexOf(e.accion)<0;
+    return '<tr style="cursor:pointer" title="Ver detalle" onclick="actDetalle('+e.id+')"><td class="small" style="white-space:nowrap">'+d.toLocaleDateString('es-MX')+' '+d.toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'})+'</td><td>'+esc(e.correo)+'</td>'+
+      '<td class="small muted">'+esc(ACT_TXT[e.accion]||e.accion)+'</td><td'+(cambio?' style="font-weight:600"':'')+'>'+(cambio?'✏️ ':'👀 ')+esc(actTexto(e))+(e.datos&&e.datos.motivo?' <span class="badge b-gris">con motivo</span>':'')+'</td></tr>';
+  }).join('') || '<tr><td colspan="4" class="muted">'+(todo?'Sin actividad.':'Nadie cambió nada (toca "Todo" para ver también consultas).')+'</td></tr>';
   $('v-actividad').innerHTML =
     '<div class="card" style="margin-bottom:14px"><h3 style="margin-bottom:8px">Usuarios · última actividad</h3>'+
-    '<table><thead><tr><th>Usuario</th><th>Última actividad</th><th>Hoy</th><th>Total (últ. 500)</th></tr></thead><tbody>'+resumen+'</tbody></table>'+
+    '<table><thead><tr><th>Usuario</th><th>Última actividad</th><th>Cambios hoy</th><th>Total (últ. 1000)</th></tr></thead><tbody>'+resumen+'</tbody></table>'+
     '<p class="small muted" style="margin-top:6px">Toca un usuario para filtrar sus eventos.</p></div>'+
-    '<div class="card"><h3 style="margin-bottom:8px">Eventos'+(fU?(' de '+esc(fU)+' &nbsp;<button class="btn sm sec" onclick="window._actU=\'\';vActividad()">ver todos</button>'):'')+'</h3>'+
-    '<div style="overflow:auto;max-height:65vh"><table><thead><tr><th>Fecha y hora</th><th>Usuario</th><th>Acción</th><th>Detalle</th></tr></thead><tbody>'+filas+'</tbody></table></div></div>';
+    '<div class="card"><h3 style="margin-bottom:8px">Qué hicieron'+(fU?(' · '+esc(fU)+' &nbsp;<button class="btn sm sec" onclick="window._actU=\'\';vActividad()">ver todos</button>'):'')+
+    ' &nbsp;<button class="btn sm'+(todo?' sec':'')+'" onclick="window._actTodo=false;vActividad()">✏️ Solo cambios</button> <button class="btn sm'+(todo?'':' sec')+'" onclick="window._actTodo=true;vActividad()">👀 Todo (también consultas)</button></h3>'+
+    '<p class="small muted" style="margin:0 0 8px">Toca un renglón para ver el detalle: a qué afectó, qué cambió y por qué.</p>'+
+    '<div style="overflow:auto;max-height:65vh"><table><thead><tr><th>Cuándo</th><th>Quién</th><th>Sección</th><th>Qué hizo</th></tr></thead><tbody>'+filas+'</tbody></table></div></div>';
+}
+function actDetalle(id){
+  const e = (window._actEvs||[]).find(function(x){ return x.id===id; }); if(!e) return;
+  const dat = e.datos||{}, ref = actRef(e), d = new Date(e.ts);
+  let h = '<h3>'+esc(ACT_TXT[e.accion]||e.accion)+'</h3><p class="small muted" style="margin:0 0 10px">'+esc(e.correo)+' · '+d.toLocaleString('es-MX')+'</p>'+
+    '<p><b>'+esc(actTexto(e))+'</b></p>';
+  if(dat.cambios && dat.cambios.length) h += '<p class="small muted" style="margin:10px 0 4px">QUÉ CAMBIÓ</p><table><thead><tr><th>Dato</th><th>Antes</th><th>Después</th></tr></thead><tbody>'+
+    dat.cambios.map(function(c){ return '<tr><td><b>'+esc(c.campo)+'</b></td><td style="color:#b91c1c">'+esc(c.antes)+'</td><td style="color:#15803d">'+esc(c.despues)+'</td></tr>'; }).join('')+'</tbody></table>';
+  if(dat.motivo) h += '<p class="small muted" style="margin:10px 0 4px">POR QUÉ</p><p>'+esc(dat.motivo)+'</p>';
+  if(dat.como_era) h += '<p class="small muted" style="margin:10px 0 4px">CÓMO ERA (ya se borró)</p><p class="small">'+Object.keys(dat.como_era).filter(function(k){return dat.como_era[k]!=null&&dat.como_era[k]!=='';}).map(function(k){ return '<b>'+esc(k)+':</b> '+esc(dat.como_era[k]); }).join(' · ')+'</p>';
+  if(!e.ref_tipo && !e.datos && ACT_CONSULTA.indexOf(e.accion)<0) h += '<p class="small" style="background:#fffbeb;color:#92400e;padding:8px;border-radius:8px;margin-top:10px">Este registro es de antes del 25 nov 2026: guarda solo el texto, no el antes/después ni el motivo.</p>';
+  let ir = '';
+  if(ref && ref.tipo==='venta') ir = '<button class="btn" onclick="cerrarModal();verVenta('+ref.id+')">🧾 Ver la venta</button>';
+  else if(ref && ref.tipo==='pedido') ir = '<button class="btn" onclick="cerrarModal();verPedido('+ref.id+')">📦 Ver el pedido</button>';
+  else if(ref && ref.tipo==='producto') ir = '<button class="btn" onclick="cerrarModal();fichaProducto('+ref.id+')">🏷️ Ver el producto</button>';
+  else if(ref && ref.tipo==='caja') ir = '<button class="btn" onclick="cerrarModal();irA(\'caja\')">🗄️ Ir a Caja</button>';
+  abrirModal(h+'<div class="acciones"><button class="btn sec" onclick="cerrarModal()">Cerrar</button>'+ir+'</div>');
 }
 
 /* ===== Resumen de partes en lista de pedidos ===== */
@@ -723,6 +770,13 @@ function compartirFactura(medio, path, folio, total, ped){
     else location.href = 'mailto:?subject='+encodeURIComponent('Factura Indar '+folio)+'&body='+encodeURIComponent(msg);
   });
 }
+// v263: cada cuenta por pagar abre su factura ahí mismo (antes había que buscarla en Facturas)
+function cxpBtnFactura(c){
+  const f = c.facturas;
+  if(f && f.pdf_path) return '<button class="btn sm sec" title="Factura '+esc(f.folio||'')+'" onclick="event.stopPropagation();verPdfFactura(\''+esc(f.pdf_path)+'\')">📄 Factura</button>';
+  if(f) return '<span class="small muted" title="La factura '+esc(f.folio||'')+' está registrada pero sin PDF; súbelo en Finanzas → Facturas">🧾 '+esc(f.folio||'')+' sin PDF</span>';
+  return '<span class="small muted" title="Esta cuenta no tiene factura en el sistema (anticipo, intercompañía o falta cargarla)">sin factura</span>';
+}
 function cxpAgrupado(rows, hoy){
   if(!rows.length) return '<tr><td colspan="9" class="muted">Sin cuentas registradas.</td></tr>';
   const grupos = {};
@@ -739,7 +793,7 @@ function cxpAgrupado(rows, hoy){
       const b = c.estado==='pagada'?'b-verde':(dias<0?'b-rojo':(dias<=7?'b-ambar':'b-gris'));
       const chk = (esAdmin() && c.estado!=='pagada' && +c.saldo>0)
         ? '<input type="checkbox" class="cxp-sel" data-id="'+c.id+'" title="Seleccionar para pagar en lote" onclick="event.stopPropagation();togglePagoSel('+c.id+',this.checked)"'+((window._pagoSel&&window._pagoSel[c.id])?' checked':'')+'>' : '';
-      html += '<tr data-grp="'+gi+'" data-est="'+est+'" class="plegado'+(est==='pagada'?' oculto':'')+'"><td>'+chk+'</td><td><b>'+esc(nom)+'</b></td><td>'+esc(c.concepto)+'</td><td class="small muted">'+esc(c.referencia)+'</td><td><span class="badge '+b+'">'+fecha(c.fecha_vencimiento)+(c.estado!=='pagada' ? (dias<0?' · '+Math.abs(dias)+'d vencida':' · '+dias+'d') : '')+'</span></td><td class="num">'+fmt(c.monto)+'</td><td class="num"><b>'+fmt(c.saldo)+'</b></td><td><span class="badge '+(c.estado==='pagada'?'b-verde':c.estado==='parcial'?'b-ambar':'b-gris')+'">'+c.estado+'</span></td><td>'+(esAdmin() && c.estado!=='pagada' ? '<button class="btn sm" onclick="pagarCuenta('+c.id+')">Pagar</button>':'')+'</td></tr>';
+      html += '<tr data-grp="'+gi+'" data-est="'+est+'" class="plegado'+(est==='pagada'?' oculto':'')+'"><td>'+chk+'</td><td><b>'+esc(nom)+'</b></td><td>'+esc(c.concepto)+'</td><td class="small muted">'+esc(c.referencia)+'</td><td><span class="badge '+b+'">'+fecha(c.fecha_vencimiento)+(c.estado!=='pagada' ? (dias<0?' · '+Math.abs(dias)+'d vencida':' · '+dias+'d') : '')+'</span></td><td class="num">'+fmt(c.monto)+'</td><td class="num"><b>'+fmt(c.saldo)+'</b></td><td><span class="badge '+(c.estado==='pagada'?'b-verde':c.estado==='parcial'?'b-ambar':'b-gris')+'">'+c.estado+'</span></td><td style="white-space:nowrap">'+cxpBtnFactura(c)+(esAdmin() && c.estado!=='pagada' ? ' <button class="btn sm" onclick="pagarCuenta('+c.id+')">Pagar</button>':'')+'</td></tr>';
     });
   });
   return html;
@@ -1524,21 +1578,22 @@ async function verVenta(id){
 }
 async function cancelarVenta(id){
   if(!confirm('¿Cancelar esta venta? El stock se regresa al inventario.')) return;
-  let motivo = '';
-  if(!esAdmin()) motivo = prompt('Motivo de la cancelación (por si requiere autorización del admin):','') || '';
+  // v263: el motivo es obligatorio para todos (queda en Actividad)
+  const motivo = (prompt('¿Por qué se cancela la venta? (queda guardado en Actividad)','') || '').trim();
+  if(motivo.length < 5){ toast('Escribe el motivo de la cancelación (mínimo 5 letras)', true); return; }
   const {data, error} = await sb.rpc('cancelar_venta_seguro', {p_venta_id:id, p_motivo:motivo});
   if(error){ toast(errMsg(error),true); return; }
   if(data==='cancelada') toast('Venta cancelada, stock devuelto ✓');
   else if(data==='solicitada') toast('Ya pasaron más de 15 minutos: se mandó la solicitud a un administrador ⏳');
   else toast('Esa venta ya estaba cancelada');
-  logEv('venta', 'cancelación '+data+' · venta id '+id);
+  logEv('venta', (data==='cancelada'?'Canceló la venta #':data==='solicitada'?'Pidió cancelar la venta #':'Intentó cancelar la venta #')+id+' — '+motivo, {ref_tipo:'venta', ref_id:id, datos:{motivo:motivo, resultado:data}});
   vVentas();
 }
 async function rechazarCanc(id){
   if(!confirm('¿Rechazar la solicitud? La venta se queda como está.')) return;
   const {error} = await sb.rpc('rechazar_cancelacion', {p_venta_id:id});
   if(error){ toast(errMsg(error),true); return; }
-  toast('Solicitud rechazada'); logEv('venta','cancelación rechazada · venta id '+id); vVentas();
+  toast('Solicitud rechazada'); logEv('venta','Rechazó la cancelación de la venta #'+id, {ref_tipo:'venta', ref_id:id}); vVentas();
 }
 function cotNotaVenta(){ const cons = ($('nv-consumo') && $('nv-consumo').checked); return cons ? 'CONSUMO PROPIO' : (window._cotVenta ? 'Cotización C-'+window._cotVenta.folio : ''); } // v230
 async function nuevaVenta(){
@@ -2769,6 +2824,7 @@ function cambiarPagoVenta(V){
   const ini = {efectivo:0,tarjeta:0,transferencia:0,ak_pago:0};
   if(V.metodo==='mixto') (V.pagos||[]).forEach(p=>{ ini[p.metodo] = +p.monto; }); else if(ini.hasOwnProperty(V.metodo)) ini[V.metodo] = +V.total;
   window._nvTotal = +V.total;
+  window._vtaPagoAntes = V.metodo==='mixto' ? (V.pagos||[]).map(p=>p.metodo+' '+fmt(p.monto)).join(' + ') : V.metodo;   // v263: para Actividad
   abrirModal(`<h3>✏️ Forma de pago · venta #${V.folio}</h3>
     <p class="small muted" style="margin:0 0 10px">Total de la venta <b>${fmt(V.total)}</b>. Reparte cómo pagó el cliente; si fue una sola forma, deja las demás en 0. El corte de caja de ese día se recalcula solo.</p>
     <div id="nv-mixto"><div class="frow">
@@ -2786,7 +2842,7 @@ async function guardarCambioPago(id){
   if(Math.abs(suma-(window._nvTotal||0))>0.01){ toast('Los pagos suman '+fmt(suma)+' y la venta es '+fmt(window._nvTotal||0), true); return; }
   const r = await sb.rpc('venta_cambiar_pago', {p_venta_id:id, p_pagos:pagos});
   if(r.error){ toast(errMsg(r.error), true); return; }
-  logEv('venta', 'forma de pago corregida · venta id '+id+' → '+(pagos.length>1?mxTexto(pagos):pagos[0].metodo));
+  logEv('venta', 'Corrigió la forma de pago de la venta #'+id+' → '+(pagos.length>1?mxTexto(pagos):pagos[0].metodo), {ref_tipo:'venta', ref_id:id, datos:{cambios:[{campo:'Forma de pago', antes:(window._vtaPagoAntes||'—'), despues:(pagos.length>1?mxTexto(pagos):pagos[0].metodo)}]}});
   toast('Forma de pago actualizada ✓'); verVenta(id);
   if(typeof pintarVentas==='function' && document.querySelector('#vt-kpis')) vVentas();
 }
@@ -7165,6 +7221,7 @@ async function guardarCompraLocal(){
 async function editarMovCaja(id){
   const {data:m, error} = await sb.from('caja_movs').select('*').eq('id', id).single();
   if(error||!m){ toast('No encontré el movimiento', true); return; }
+  window._movOrig = m;   // v263: para guardar antes → después
   abrirModal(`<h3>✏️ Corregir movimiento #${m.id}</h3>
     <p class="small muted" style="margin:0 0 10px">Registrado por ${esc(m.nombre||'—')}. Si fue un duplicado, mejor bórralo con 🗑️.</p>
     <div class="frow">
@@ -7174,20 +7231,32 @@ async function editarMovCaja(id){
     </div>
     <div class="field"><label>¿De dónde salió?</label><select id="em-origen"><option value="cajon" ${m.origen!=='chica'&&m.origen!=='akpago'&&m.origen!=='apartado'?'selected':''}>🗄️ Del cajón (cuenta en el corte)</option><option value="chica" ${m.origen==='chica'?'selected':''}>🏠 De la caja fuerte (no toca el corte)</option><option value="akpago" ${m.origen==='akpago'?'selected':''}>📱 AK Pago (cobro de cliente o fondeo del monedero)</option><option value="apartado" ${m.origen==='apartado'?'selected':''}>📦 Pago de apartado (anticipo o saldo)</option></select></div>
     <div class="field"><label>Concepto</label><input id="em-con" value="${esc(m.concepto||'')}"></div>
+    <div class="field"><label>¿Por qué se corrige? *</label><input id="em-motivo" placeholder="Ej. se capturó doble / el monto real era otro"></div>
     <div class="acciones"><button class="btn sec" onclick="cerrarModal();vCaja()">Cancelar</button><button class="btn" onclick="guardarEditMovCaja(${m.id})">Guardar</button></div>`);
 }
 async function guardarEditMovCaja(id){
   const monto = +($('em-monto').value||0); if(!(monto>0)){ toast('Monto inválido', true); return; }
-  const {error} = await sb.from('caja_movs').update({tipo:$('em-tipo').value, monto, fecha:$('em-fecha').value, origen:$('em-origen').value, concepto:($('em-con').value||'').trim()}).eq('id', id);
+  const motivo = ($('em-motivo').value||'').trim();
+  if(motivo.length < 5){ toast('Escribe por qué se corrige (mínimo 5 letras)', true); return; }
+  const nuevo = {tipo:$('em-tipo').value, monto, fecha:$('em-fecha').value, origen:$('em-origen').value, concepto:($('em-con').value||'').trim()};
+  const {error} = await sb.from('caja_movs').update(nuevo).eq('id', id);
   if(error){ toast(errMsg(error), true); return; }
-  logEv('caja_mov', 'corregido #'+id+' → '+$('em-tipo').value+' '+fmt(monto)+' ('+$('em-origen').value+')');
+  const o = window._movOrig||{}, et = {tipo:'Tipo', monto:'Monto', fecha:'Fecha', origen:'De dónde salió', concepto:'Concepto'};
+  const cambios = Object.keys(et).filter(function(k){ return String(o[k]??'')!==String(nuevo[k]??'') && !(k==='monto' && +o[k]===+nuevo[k]); })
+    .map(function(k){ return {campo:et[k], antes:(k==='monto'?fmt(o[k]):String(o[k]??'—')), despues:(k==='monto'?fmt(nuevo[k]):String(nuevo[k]??'—'))}; });
+  logEv('caja_mov', 'Corrigió el movimiento de caja #'+id+' ('+(o.concepto||nuevo.concepto||nuevo.tipo)+'): '+(cambios.map(function(c){return c.campo.toLowerCase();}).join(', ')||'sin cambios'), {ref_tipo:'caja', ref_id:id, datos:{cambios:cambios, motivo:motivo, registro:o.nombre||null}});
   cerrarModal(); toast('Movimiento corregido ✓'); window._cajaFecha = $('em-fecha').value; vCaja();
 }
 async function borrarMovCaja(id){
   if(!confirm('¿Borrar este movimiento de caja? Úsalo solo para duplicados o capturas equivocadas. No se puede deshacer.')) return;
+  // v263: pide motivo y guarda cómo era el movimiento (ya no existe después de borrarlo)
+  const motivo = (prompt('¿Por qué se borra? (queda guardado en Actividad)','') || '').trim();
+  if(motivo.length < 5){ toast('Escribe por qué se borra (mínimo 5 letras)', true); return; }
+  const {data:m} = await sb.from('caja_movs').select('*').eq('id', id).single();
   const {error} = await sb.from('caja_movs').delete().eq('id', id);
   if(error){ toast(errMsg(error), true); return; }
-  logEv('caja_mov', 'borrado #'+id);
+  logEv('caja_mov', 'Borró el movimiento de caja #'+id+(m?' ('+m.tipo+' '+fmt(m.monto)+(m.concepto?' · '+m.concepto:'')+')':'')+' — '+motivo,
+    {ref_tipo:'caja', ref_id:id, datos:{motivo:motivo, como_era:m?{tipo:m.tipo, monto:fmt(m.monto), fecha:m.fecha, origen:m.origen, concepto:m.concepto, registro:m.nombre}:null}});
   toast('Movimiento borrado'); vCaja();
 }
 function movCaja(){
@@ -8109,7 +8178,7 @@ async function vFinanzas(){
   else if(gPer==='anio'){ gD = iso(new Date(hoy.getFullYear(),0,1)); gNom = 'este año'; }
   else if(gPer==='todo'){ gD = '2000-01-01'; gNom = 'todo el histórico'; }
   const [cxp, pagos, gastos, provs, compras, facts] = await Promise.all([
-    sb.from('cuentas_pagar').select('*, proveedores(nombre)').order('fecha_vencimiento'),
+    sb.from('cuentas_pagar').select('*, proveedores(nombre), facturas(folio,pdf_path,uuid)').order('fecha_vencimiento'),   // v263: la factura ligada
     sb.from('pagos_cxp').select('*').gte('fecha', mes),
     (gH ? sb.from('gastos').select('*').gte('fecha', gD).lt('fecha', gH).order('fecha',{ascending:false})
         : sb.from('gastos').select('*').gte('fecha', gD).order('fecha',{ascending:false})),
