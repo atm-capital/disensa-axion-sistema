@@ -9958,9 +9958,17 @@ function mPct(m){ // v260: margen sobre venta sin IVA en % para las tablas de la
 async function pedReglaUsar(k){
   const x = (window._pedRegla||[])[k]; if(!x || !esAdmin()) return;
   if(!confirm('¿Cambiar el precio de '+x.p.codigo+' de '+fmt(x.p.precio)+' a '+fmt(x.reg)+' (regla)?')) return;
-  const u = await sb.from('productos').update({precio:x.reg}).eq('id', x.p.id);
+  const u = await sb.from('productos').update({precio:x.reg, etiqueta_at:null}).eq('id', x.p.id);
   if(u.error){ toast(errMsg(u.error), true); return; }
-  x.p.precio = x.reg; logEv('precios', 'Regla desde pedido: '+x.p.codigo+' → '+x.reg); toast('✓ Precio actualizado'); pedReglaPintar(window._pedReglaId);
+  x.p.precio = x.reg; logEv('precios', 'Regla desde pedido: '+x.p.codigo+' → '+x.reg);
+  // v262: ofrecer subir también la familia (solo los que suben; los que bajarían no se tocan)
+  const fam = ((x.f && x.f.lista) || []).filter(function(p){ return p.id !== x.p.id && !p.granel && famFuera(p) && precioAxionRegla(+p.costo) > +p.precio; });
+  let nf = 0;
+  if(fam.length && confirm('✓ '+x.p.codigo+' quedó en '+fmt(x.reg)+'.\n\nSu familia tiene '+fam.length+' producto(s) que también suben a la regla:\n'+fam.slice(0,12).map(function(p){ return '• '+p.codigo+'  '+fmt(p.precio)+' → '+fmt(precioAxionRegla(+p.costo)); }).join('\n')+(fam.length>12?'\n…':'')+'\n\n¿Los subo también?')){
+    for(const p of fam){ const r = precioAxionRegla(+p.costo); const w = await sb.from('productos').update({precio:r, etiqueta_at:null}).eq('id', p.id); if(!w.error){ p.precio = r; nf++; } }
+    logEv('precios', 'Familia de '+x.p.codigo+' a la regla (solo los que suben): '+fam.map(function(p){ return p.codigo; }).join(', '));
+  }
+  toast('✓ Precio actualizado'+(nf ? ' + '+nf+' de su familia' : '')); pedReglaPintar(window._pedReglaId);
 }
 function pedReglaFamilia(k){ const x = (window._pedRegla||[])[k]; if(!x || !x.f) return;
   famListaModal(x.f.lista, '👪 Familia de '+esc(x.p.codigo), 'Mismo producto en otras medidas o colores.', ()=>{ if(window._pedReglaId) verPedido(window._pedReglaId); }); }
