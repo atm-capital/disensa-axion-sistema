@@ -184,6 +184,7 @@ tr.oculto,tr.plegado{display:none}
       <div id="v-inventario" class="view"></div>
       <div id="v-estrella" class="view"></div>
       <div id="v-dormida" class="view"></div>
+      <div id="v-bonos" class="view"></div>
       <div id="v-clientes" class="view"></div>
       <div id="v-pedidos" class="view"></div>
       <div id="v-apartados" class="view"></div>
@@ -363,6 +364,7 @@ const VISTAS = [
   {id:'devoluciones', icono:'↩️', titulo:'Devoluciones', roles:['admin','vendedor','consulta','contador']},
   {id:'caja',       icono:'💵', titulo:'Corte de caja', roles:['admin','vendedor','contador']},
   {id:'finanzas',   icono:'💰', titulo:'Finanzas',   roles:['admin','consulta','contador']},
+  {id:'bonos',      icono:'🎯', titulo:'Bonos del equipo', roles:['admin']}, // v269
   {id:'importar',   icono:'📥', titulo:'Importar',   roles:['admin']},
   {id:'usuarios',   icono:'🔑', titulo:'Usuarios',   roles:['admin']},
   {id:'actividad',  icono:'📈', titulo:'Actividad',  roles:['admin'], solo:'andres@aptelecom.mx'},
@@ -386,7 +388,7 @@ async function irA(id){
   $('sidebar').classList.remove('open');
   try{ localStorage.setItem('ax_vista', id); }catch(e){}
   logEv('vista', id);
-  try { await ({resumen:vResumen, ventas:vVentas, cotizaciones:vCotizaciones, catalogo:vCatalogo, inventario:vInventario, estrella:vEstrella, dormida:vDormida, clientes:vClientes,
+  try { await ({resumen:vResumen, ventas:vVentas, cotizaciones:vCotizaciones, catalogo:vCatalogo, inventario:vInventario, estrella:vEstrella, dormida:vDormida, bonos:vBonos, clientes:vClientes,
     pedidos:vPedidos, apartados:vApartados, devoluciones:vDevoluciones, caja:vCaja, finanzas:vFinanzas, usuarios:vUsuarios, importar:vImportar, actividad:vActividad})[id](); }
   catch(e){ toast(errMsg(e), true); }
 }
@@ -421,6 +423,156 @@ function actRef(e){
   if((m = d.match(/venta id (\d+)/i)) || (m = d.match(/venta #(\d+)/i))) return {tipo:'venta', id:+m[1]};
   if((m = d.match(/^pedido (\d+)\b/i))) return {tipo:'pedido', id:+m[1]};   // v267: "pedido 67: ..." (id interno)
   return null;
+}
+// ===== v269 (27-nov-2026): BONOS DEL EQUIPO — metas manuales por empleado y mes; el sistema calcula cuánto se paga.
+// Regla por meta (todo ajustable): cumplimiento = resultado ÷ objetivo (o, si "menos es mejor", 100% si queda en el objetivo o abajo y si no objetivo ÷ resultado);
+// abajo del mínimo (default 80%) no paga; arriba paga bono × cumplimiento con tope (default 100%). Mismo cálculo en SQL: bono_pago().
+function bonoCalc(m){
+  const obj = +m.objetivo, res = (m.resultado===null || m.resultado===undefined || m.resultado==='') ? null : +m.resultado;
+  const min = (m.minimo_pct===null||m.minimo_pct===undefined||m.minimo_pct==='') ? 80 : +m.minimo_pct;
+  const tope = (m.tope_pct===null||m.tope_pct===undefined||m.tope_pct==='') ? 100 : +m.tope_pct;
+  let c = null;
+  if(res !== null){
+    if(m.sentido === 'menor') c = res <= obj ? 100 : (obj > 0 ? obj/res*100 : 0);
+    else c = obj > 0 ? res/obj*100 : null;
+  }
+  const pago = (c === null || c < min) ? 0 : Math.round(+m.monto * Math.min(c, tope) / 100 * 100) / 100;
+  return {c: c===null ? null : Math.round(c*10)/10, pago};
+}
+function bonoMesTxt(p){ const [y,m] = p.split('-'); return ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'][+m-1]+' '+y; }
+async function vBonos(){
+  if(!esAdmin()){ $('v-bonos').innerHTML = '<div class="card">Solo administradores.</div>'; return; }
+  const hoy = new Date();
+  if(!window._bonoMes) window._bonoMes = hoy.getFullYear()+'-'+String(hoy.getMonth()+1).padStart(2,'0');
+  const mes = window._bonoMes, periodo = mes+'-01';
+  const [y, mm] = mes.split('-').map(Number);
+  const ini = new Date(y, mm-1, 1), fin = new Date(y, mm, 1);
+  const [em, me, ve, co] = await Promise.all([
+    sb.from('nomina_empleados').select('id,nombre,puesto,activo').order('id'),
+    sb.from('bono_metas').select('*').eq('periodo', periodo).order('orden').order('id'),
+    sb.from('ventas').select('total,vendedor_id,perfiles(nombre)').eq('cancelada', false).or('externa.is.null,externa.eq.false').gte('fecha', ini.toISOString()).lt('fecha', fin.toISOString()),
+    sb.from('cortes_caja').select('diferencia').gte('fecha', periodo).lt('fecha', fin.getFullYear()+'-'+String(fin.getMonth()+1).padStart(2,'0')+'-01'),
+  ]);
+  if(me.error){ $('v-bonos').innerHTML = '<div class="card">No pude leer las metas: '+esc(errMsg(me.error))+'<br><span class="small muted">¿Ya se corrió el SQL 75?</span></div>'; return; }
+  const metas = me.data || []; window._bonoMetas = metas;
+  const emps = (em.data || []).filter(e => e.activo || metas.some(m => m.empleado_id === e.id));
+  const ventas = ve.data || [];
+  const totVta = ventas.reduce((s,v) => s + +v.total, 0);
+  const porVend = {}; ventas.forEach(v => { const n = (v.perfiles && v.perfiles.nombre) || '(sin vendedor)'; porVend[n] = (porVend[n]||0) + +v.total; });
+  const difCortes = (co.data || []).reduce((s,c) => s + +(c.diferencia||0), 0);
+  let granTot = 0, granMax = 0;
+  const bloques = emps.map(e => {
+    const ms = metas.filter(m => m.empleado_id === e.id);
+    let tot = 0, max = 0;
+    const filas = ms.map(m => {
+      const r = bonoCalc(m); tot += r.pago; max += +m.monto;
+      const col = r.c === null ? 'var(--gris)' : (r.c < (m.minimo_pct ?? 80) ? '#b91c1c' : (r.c >= 100 ? '#15803d' : '#b45309'));
+      return `<tr>
+        <td><b>${esc(m.nombre)}</b>${m.notas ? `<br><span class="small muted">${esc(m.notas)}</span>` : ''}</td>
+        <td class="num">${(+m.objetivo).toLocaleString('es-MX')} <span class="small muted">${m.sentido==='menor' ? '(o menos)' : ''}</span></td>
+        <td class="num"><input type="number" step="any" value="${m.resultado ?? ''}" style="width:110px;text-align:right" onchange="bonoResultado(${m.id}, this.value)" placeholder="capturar"></td>
+        <td class="num small">${+(m.minimo_pct ?? 80)}% / ${+(m.tope_pct ?? 100)}%</td>
+        <td class="num">${fmt(m.monto)}</td>
+        <td class="num" style="color:${col};font-weight:700">${r.c === null ? '—' : r.c + '%'}</td>
+        <td class="num"><b>${fmt(r.pago)}</b></td>
+        <td style="white-space:nowrap"><button class="btn sec sm" onclick="bonoEditar(${m.id})">✏️</button> <button class="btn sec sm" onclick="bonoBorrar(${m.id})">🗑</button></td></tr>`;
+    }).join('');
+    granTot += tot; granMax += max;
+    return `<div class="card" style="margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+        <h3 style="margin:0">${esc(e.nombre)} <span class="small muted">${esc(e.puesto||'')}</span></h3>
+        <div><span class="small muted">A pagar</span> <b style="font-size:20px">${fmt(tot)}</b> <span class="small muted">de ${fmt(max)}</span>
+          <button class="btn sm" onclick="bonoEditar(null, ${e.id})">+ Meta</button></div></div>
+      ${ms.length ? `<div class="tbl-scroll"><table><thead><tr><th>Meta</th><th class="num">Objetivo</th><th class="num">Resultado</th><th class="num">Mín / tope</th><th class="num">Bono máx.</th><th class="num">Cumplió</th><th class="num">Paga</th><th></th></tr></thead><tbody>${filas}</tbody></table></div>`
+        : '<p class="small muted" style="margin:8px 0 0">Sin metas este mes. Dale “+ Meta” o copia las del mes anterior.</p>'}
+    </div>`;
+  }).join('');
+  $('v-bonos').innerHTML = `
+    <div class="card" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
+      <b>Mes</b> <input type="month" value="${mes}" onchange="window._bonoMes=this.value; vBonos()">
+      <button class="btn sec" onclick="bonoCopiarMes()">📋 Copiar metas del mes anterior</button>
+      <span style="margin-left:auto"><span class="small muted">Total a pagar ${bonoMesTxt(mes)}</span> <b style="font-size:22px">${fmt(granTot)}</b> <span class="small muted">de ${fmt(granMax)} posibles</span></span>
+    </div>
+    <div class="card" style="margin-bottom:12px;background:#f8fafc">
+      <p class="small muted" style="margin:0 0 4px">DATOS DEL SISTEMA EN ${bonoMesTxt(mes).toUpperCase()} (para capturar resultados)</p>
+      <p style="margin:0">Ventas de mostrador: <b>${fmt(totVta)}</b> en ${ventas.length} ventas${Object.keys(porVend).length ? ' · ' + Object.entries(porVend).sort((a,b)=>b[1]-a[1]).map(([n,t]) => esc(n)+': '+fmt(t)).join(' · ') : ''}<br>
+      Diferencia acumulada en cortes de caja: <b style="color:${Math.abs(difCortes) > 0.5 ? '#b91c1c' : '#15803d'}">${fmt(difCortes)}</b></p>
+      <p class="small muted" style="margin:6px 0 0">Regla: abajo del mínimo no paga; arriba paga el bono × % cumplido, con tope. “Menos es mejor” (p. ej. faltantes): si queda en el objetivo o abajo cuenta 100%. Todo se ajusta en cada meta.</p>
+    </div>
+    ${bloques || '<div class="card">No hay empleados activos en Nómina.</div>'}`;
+}
+async function bonoResultado(id, v){
+  const m = (window._bonoMetas||[]).find(x => x.id === id); if(!m) return;
+  const nuevo = v === '' ? null : +v;
+  const r = await sb.from('bono_metas').update({resultado: nuevo, actualizado: new Date().toISOString(), por: (perfil && perfil.correo) || ''}).eq('id', id);
+  if(r.error){ toast(errMsg(r.error), true); return; }
+  logEv('bono', 'Resultado de la meta “'+m.nombre+'” ('+m.periodo.slice(0,7)+'): '+(m.resultado ?? '—')+' → '+(nuevo ?? '—'), {ref_tipo:'bono', ref_id:id, datos:{cambios:[{campo:'resultado', antes:m.resultado, despues:nuevo}]}});
+  vBonos();
+}
+function bonoEditar(id, empleadoId){
+  const m = id ? (window._bonoMetas||[]).find(x => x.id === id) : {empleado_id: empleadoId, nombre:'', objetivo:'', resultado:null, sentido:'mayor', monto:'', minimo_pct:80, tope_pct:100, notas:''};
+  if(!m) return;
+  abrirModal(`<h3>${id ? '✏️ Editar meta' : '🎯 Nueva meta'} · ${bonoMesTxt(window._bonoMes)}</h3>
+    <label>Meta (qué se mide)</label><input id="bm-nombre" value="${esc(m.nombre||'')}" placeholder="Ej. Ventas de la tienda, Cortes sin diferencia, Faltantes de inventario">
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <div style="flex:1;min-width:120px"><label>Objetivo</label><input id="bm-obj" type="number" step="any" value="${m.objetivo ?? ''}"></div>
+      <div style="flex:1;min-width:120px"><label>Resultado (opcional)</label><input id="bm-res" type="number" step="any" value="${m.resultado ?? ''}"></div>
+      <div style="flex:1;min-width:140px"><label>¿Qué es mejor?</label><select id="bm-sent"><option value="mayor" ${m.sentido!=='menor'?'selected':''}>Más es mejor</option><option value="menor" ${m.sentido==='menor'?'selected':''}>Menos es mejor</option></select></div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <div style="flex:1;min-width:120px"><label>Bono máximo $</label><input id="bm-monto" type="number" step="any" value="${m.monto ?? ''}"></div>
+      <div style="flex:1;min-width:100px"><label>Mínimo %</label><input id="bm-min" type="number" step="any" value="${m.minimo_pct ?? 80}"></div>
+      <div style="flex:1;min-width:100px"><label>Tope %</label><input id="bm-tope" type="number" step="any" value="${m.tope_pct ?? 100}"></div>
+    </div>
+    <label>Notas</label><input id="bm-notas" value="${esc(m.notas||'')}" placeholder="Cómo se mide, de dónde sale el dato…">
+    <p class="small muted">Abajo del mínimo no paga; arriba paga el bono × % cumplido hasta el tope (tope 120% = puede ganar hasta 120% del bono).</p>
+    <div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn sec" onclick="cerrarModal()">Cancelar</button><button class="btn" onclick="bonoGuardar(${id||'null'}, ${m.empleado_id})">Guardar</button></div>`);
+}
+async function bonoGuardar(id, empleadoId){
+  const num = (k) => { const v = $(k).value.trim(); return v === '' ? null : +v; };
+  const row = {nombre: $('bm-nombre').value.trim(), objetivo: num('bm-obj'), resultado: num('bm-res'), sentido: $('bm-sent').value,
+               monto: num('bm-monto'), minimo_pct: num('bm-min') ?? 80, tope_pct: num('bm-tope') ?? 100, notas: $('bm-notas').value.trim(),
+               actualizado: new Date().toISOString(), por: (perfil && perfil.correo) || ''};
+  if(!row.nombre){ toast('Ponle nombre a la meta', true); return; }
+  if(row.objetivo === null || row.objetivo < 0){ toast('Falta el objetivo', true); return; }
+  if(row.monto === null || row.monto < 0){ toast('Falta el bono máximo', true); return; }
+  if(row.tope_pct < row.minimo_pct){ toast('El tope no puede ser menor que el mínimo', true); return; }
+  let r;
+  if(id){
+    const o = (window._bonoMetas||[]).find(x => x.id === id) || {};
+    const cambios = ['nombre','objetivo','resultado','sentido','monto','minimo_pct','tope_pct','notas'].filter(k => String(o[k] ?? '') !== String(row[k] ?? '')).map(k => ({campo:k, antes:o[k], despues:row[k]}));
+    r = await sb.from('bono_metas').update(row).eq('id', id);
+    if(!r.error) logEv('bono', 'Editó la meta “'+row.nombre+'” ('+window._bonoMes+')', {ref_tipo:'bono', ref_id:id, datos:{cambios}});
+  } else {
+    r = await sb.from('bono_metas').insert(Object.assign(row, {empleado_id: empleadoId, periodo: window._bonoMes+'-01', orden: (window._bonoMetas||[]).length})).select('id').single();
+    if(!r.error) logEv('bono', 'Nueva meta “'+row.nombre+'” ('+window._bonoMes+'): objetivo '+row.objetivo+', bono '+fmt(row.monto), {ref_tipo:'bono', ref_id:r.data.id});
+  }
+  if(r.error){ toast(errMsg(r.error), true); return; }
+  cerrarModal(); toast('Meta guardada'); vBonos();
+}
+async function bonoBorrar(id){
+  const m = (window._bonoMetas||[]).find(x => x.id === id); if(!m) return;
+  if(!confirm('¿Borrar la meta “'+m.nombre+'” de '+bonoMesTxt(window._bonoMes)+'?')) return;
+  const r = await sb.from('bono_metas').delete().eq('id', id);
+  if(r.error){ toast(errMsg(r.error), true); return; }
+  logEv('bono', 'Borró la meta “'+m.nombre+'” ('+window._bonoMes+')', {ref_tipo:'bono', ref_id:id, datos:{como_era:{nombre:m.nombre, objetivo:m.objetivo, resultado:m.resultado, monto:m.monto, minimo_pct:m.minimo_pct, tope_pct:m.tope_pct}}});
+  vBonos();
+}
+async function bonoCopiarMes(){
+  const [y, mm] = window._bonoMes.split('-').map(Number);
+  const ant = new Date(y, mm-2, 1), pAnt = ant.getFullYear()+'-'+String(ant.getMonth()+1).padStart(2,'0')+'-01';
+  const r = await sb.from('bono_metas').select('*').eq('periodo', pAnt).order('orden').order('id');
+  if(r.error){ toast(errMsg(r.error), true); return; }
+  if(!(r.data||[]).length){ toast('El mes anterior no tiene metas', true); return; }
+  const ya = window._bonoMetas || [];
+  const nuevas = r.data.filter(m => !ya.some(x => x.empleado_id === m.empleado_id && x.nombre === m.nombre))
+    .map(m => ({periodo: window._bonoMes+'-01', empleado_id: m.empleado_id, nombre: m.nombre, objetivo: m.objetivo, resultado: null, sentido: m.sentido,
+                monto: m.monto, minimo_pct: m.minimo_pct, tope_pct: m.tope_pct, notas: m.notas, orden: m.orden, por: (perfil && perfil.correo) || ''}));
+  if(!nuevas.length){ toast('Ya están todas las metas del mes anterior'); return; }
+  const ins = await sb.from('bono_metas').insert(nuevas);
+  if(ins.error){ toast(errMsg(ins.error), true); return; }
+  logEv('bono', 'Copió '+nuevas.length+' meta(s) de '+pAnt.slice(0,7)+' a '+window._bonoMes);
+  toast(nuevas.length+' meta(s) copiadas (sin resultado)'); vBonos();
 }
 async function vActividad(){
   const r = await sb.from('eventos').select('*').order('ts',{ascending:false}).limit(1000);
