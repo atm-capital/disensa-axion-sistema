@@ -2911,8 +2911,8 @@ async function vCotizaciones(){
     <div class="tbl-scroll"><table><thead><tr><th>Folio</th><th>Fecha</th><th>Cliente</th><th>Hizo</th><th class="num">Total</th><th>Estado</th><th></th></tr></thead>
     <tbody>${c.data.map(x=>`<tr>
       <td><b>C-${x.folio}</b></td><td>${fechaHora(x.fecha)}</td>
-      <td>${esc(x.clientes?.nombre || x.cliente_texto || 'Sin cliente')}</td>
-      <td>${esc(x.perfiles?.nombre||'')}</td>
+      <td>${esc(x.clientes?.nombre || x.cliente_texto || 'Sin cliente')}${x.solicito?`<br><span class="small muted">Solicitó: ${esc(x.solicito)}</span>`:''}</td>
+      <td>${esc(x.perfiles?.nombre||x.hecha_por||'')}</td><!-- v268: solicitó y hecha_por (bot) -->
       <td class="num"><b>${fmt(x.total)}</b></td>
       <td><select onchange="cambiarEstadoCot(${x.id}, this.value)" ${puedeVender()?'':'disabled'}>
         ${['borrador','enviada','aceptada','rechazada','vencida'].map(e=>`<option value="${e}" ${x.estado===e?'selected':''}>${({aceptada:'aceptada / vendida', vencida:'no vendida'})[e]||e}</option>`).join('')}</select></td>
