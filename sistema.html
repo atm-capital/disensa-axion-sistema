@@ -418,7 +418,8 @@ function actTexto(e){
 function actRef(e){
   if(e.ref_tipo) return {tipo:e.ref_tipo, id:e.ref_id};
   const d = String(e.detalle||''); let m;
-  if((m = d.match(/venta id (\d+)/i))) return {tipo:'venta', id:+m[1]};
+  if((m = d.match(/venta id (\d+)/i)) || (m = d.match(/venta #(\d+)/i))) return {tipo:'venta', id:+m[1]};
+  if((m = d.match(/^pedido (\d+)\b/i))) return {tipo:'pedido', id:+m[1]};   // v267: "pedido 67: ..." (id interno)
   return null;
 }
 async function vActividad(){
@@ -459,7 +460,10 @@ function actDetalle(id){
     dat.cambios.map(function(c){ return '<tr><td><b>'+esc(c.campo)+'</b></td><td style="color:#b91c1c">'+esc(c.antes)+'</td><td style="color:#15803d">'+esc(c.despues)+'</td></tr>'; }).join('')+'</tbody></table>';
   if(dat.motivo) h += '<p class="small muted" style="margin:10px 0 4px">POR QUÉ</p><p>'+esc(dat.motivo)+'</p>';
   if(dat.como_era) h += '<p class="small muted" style="margin:10px 0 4px">CÓMO ERA (ya se borró)</p><p class="small">'+Object.keys(dat.como_era).filter(function(k){return dat.como_era[k]!=null&&dat.como_era[k]!=='';}).map(function(k){ return '<b>'+esc(k)+':</b> '+esc(dat.como_era[k]); }).join(' · ')+'</p>';
-  if(!e.ref_tipo && !e.datos && ACT_CONSULTA.indexOf(e.accion)<0) h += '<p class="small" style="background:#fffbeb;color:#92400e;padding:8px;border-radius:8px;margin-top:10px">Este registro es de antes del 25 nov 2026: guarda solo el texto, no el antes/después ni el motivo.</p>';
+  // v267: el aviso dice la verdad según la fecha (antes solo decía "de antes del 25 nov" aunque fuera nuevo)
+  if(!e.ref_tipo && !e.datos && ACT_CONSULTA.indexOf(e.accion)<0) h += '<p class="small" style="background:#fffbeb;color:#92400e;padding:8px;border-radius:8px;margin-top:10px">'+
+    (new Date(e.ts) < new Date('2026-11-26T05:10:00Z') ? 'Este registro es de antes del 25 nov 2026: guarda solo el texto, no el antes/después ni el motivo.'
+      : 'Este tipo de movimiento guarda el texto de arriba; todavía no guarda antes/después ni motivo (eso solo lo piden cancelar venta, caja y cambios de stock/precio/costo).')+'</p>';
   let ir = '';
   if(ref && ref.tipo==='venta') ir = '<button class="btn" onclick="cerrarModal();verVenta('+ref.id+')">🧾 Ver la venta</button>';
   else if(ref && ref.tipo==='pedido') ir = '<button class="btn" onclick="cerrarModal();verPedido('+ref.id+')">📦 Ver el pedido</button>';
